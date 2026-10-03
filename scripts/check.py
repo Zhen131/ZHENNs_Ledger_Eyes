@@ -496,14 +496,26 @@ def check_sentiment(report, label, brief, switches, full_run):
     bpe_part = tokenization.get("bpe") if isinstance(tokenization.get("bpe"), dict) else {}
     sizes = [nltk_part.get("vocab_size"), bpe_part.get("vocab_size")]
     lengths = [nltk_part.get("avg_tokens_per_post"), bpe_part.get("avg_tokens_per_post")]
+    # The BPE vocabulary always keeps every single character seen in training and the special tokens,
+    # and adds merged pieces up to BPE_VOCAB_SIZE. So it holds at most BPE_VOCAB_SIZE pieces, except when
+    # the single characters and special tokens alone are more: then it holds exactly those, nothing merged.
+    limit = switches.get("BPE_VOCAB_SIZE")
+    parts = [bpe_part.get("n_special_tokens"), bpe_part.get("n_single_characters"), bpe_part.get("n_merged_pieces")]
+    bpe_ok = (isinstance(limit, int) and not isinstance(limit, bool) and is_count(sizes[1])
+              and all(is_count(part) for part in parts) and parts[0] > 0 and parts[1] > 0
+              and sum(parts) == sizes[1]
+              and sizes[1] <= max(limit, parts[0] + parts[1])
+              and (sizes[1] <= limit or parts[2] == 0))
     report.check(tokenization.get("used_by_models") is False
                  and all(is_count(size) and size > 0 for size in sizes)
                  and all(isinstance(length, (int, float)) and not isinstance(length, bool) and length > 0
                          for length in lengths)
-                 and is_count(sizes[1]) and isinstance(switches.get("BPE_VOCAB_SIZE"), int)
-                 and sizes[1] <= switches["BPE_VOCAB_SIZE"],
-                 f"{label}: tokenization comparison recorded (vocabulary sizes and tokens per post, not used by models)",
-                 f"vocabulary sizes {sizes}, tokens per post {lengths}")
+                 and bpe_ok,
+                 f"{label}: tokenization comparison recorded (vocabulary sizes and tokens per post, not used by models; "
+                 "BPE vocabulary at most BPE_VOCAB_SIZE, or exactly the single characters and special tokens "
+                 "when those alone are more)",
+                 f"vocabulary sizes {sizes}, tokens per post {lengths}, BPE_VOCAB_SIZE {limit!r}, "
+                 f"BPE special / single characters / merged {parts}")
 
     # Chapter 5: the split.
     split = sentiment.get("split") if isinstance(sentiment.get("split"), dict) else {}

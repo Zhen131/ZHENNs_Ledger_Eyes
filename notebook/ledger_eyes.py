@@ -37,7 +37,7 @@ N_CLASSES = 2  # default: 2 (bearish vs bullish); two-state, other: 3 (adds neut
 BTC_ONLY = False  # default: False (posts about all coins); two-state, other: True (only posts that mention bitcoin or btc)
 EMOJI_TO_WORDS = True  # default: True (emoji become English words); two-state, other: False (emoji are deleted with special characters)
 KEEP_NEGATIONS = True  # default: True (not, no, never, nor survive cleaning); two-state, other: False (plain NLTK stop word list)
-BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (most pieces the subword tokenizer of chapter 4 learns; the course example uses 30000)
+BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (target vocabulary of the subword tokenizer of chapter 4; single characters are always kept, so a value below their number gives a larger vocabulary; the course example uses 30000)
 VOCAB_SIZE = 1000  # default: 1000; or any positive integer (most words each vectorizer of chapter 6 keeps)
 EPOCHS = 5  # default: 5; or any positive integer (passes over the training set in chapter 7)
 BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step in chapter 7)
@@ -855,7 +855,7 @@ pd.DataFrame(brief["dataset"]["cleaning"]["examples"])
 # A model cannot read text directly; the text is first cut into tokens. This chapter compares two ways of cutting, as in the course:
 #
 # - **Word level with NLTK** (`word_tokenize`): every word and every punctuation mark becomes a token. The vocabulary is every distinct token ever seen, so it keeps growing with new posts, and a word never seen before is simply unknown.
-# - **Subword level with the Hugging Face `tokenizers` package (BPE, byte-pair encoding)**: training starts from single characters and keeps merging the most frequent pair of neighbouring pieces into a new piece, until there are `BPE_VOCAB_SIZE` pieces. Frequent words end up as one piece; rare words are spelled with several pieces, so almost no word is completely unknown. The price is longer token sequences.
+# - **Subword level with the Hugging Face `tokenizers` package (BPE, byte-pair encoding)**: training starts from single characters and keeps merging the most frequent pair of neighbouring pieces into a new piece, until the vocabulary holds `BPE_VOCAB_SIZE` pieces or no pair is left to merge; the single characters themselves always stay in the vocabulary. Frequent words end up as one piece; rare words are spelled with several pieces, so almost no word is completely unknown. The price is longer token sequences.
 #
 # We tokenize the original text (`text`), not `clean_text`, because emoji, negations and contractions such as "don't" are still there. **This chapter is for looking only: nothing in it feeds the models.** Chapters 6 and 7 count whole words of the cleaned text instead. Because nothing here reaches a model, the BPE tokenizer is trained on the original text of the whole working sample, test posts included; this leaks nothing into the evaluation.
 #
@@ -866,7 +866,7 @@ pd.DataFrame(brief["dataset"]["cleaning"]["examples"])
 # 模型不能直接读文字，要先把文字切成一个个「词元」（token）。本章照课堂的做法，比较两种切法：
 #
 # - **用 NLTK 按词切**（`word_tokenize`）：每个词、每个标点都是一个词元。词表就是见过的所有不同词元，所以帖子越多词表越大；没见过的词就是不认识。
-# - **用 Hugging Face 的 `tokenizers` 包按子词切（BPE，字节对编码）**：训练从单个字符开始，反复把最常挨在一起的两块合并成一块新的片段，直到片段数达到 `BPE_VOCAB_SIZE`。常见的词最后是一整块；少见的词由几块拼出来，所以几乎没有完全不认识的词。代价是切出来的序列更长。
+# - **用 Hugging Face 的 `tokenizers` 包按子词切（BPE，字节对编码）**：训练从单个字符开始，反复把最常挨在一起的两块合并成一块新的片段，直到词表里的片段数达到 `BPE_VOCAB_SIZE`，或者没有可合并的了；单个字符本身始终留在词表里。常见的词最后是一整块；少见的词由几块拼出来，所以几乎没有完全不认识的词。代价是切出来的序列更长。
 #
 # 我们切的是原文（`text`），不是 `clean_text`，因为原文里还有表情、否定词和「don't」这类缩写。**本章只用来看，这里的结果不喂给模型。** 第 6、7 章用的是清洗后文字的整词计数。正因为这里的东西不进模型，BPE 分词器是在整个工作样本的原文上学的（测试帖也在内），不会把测试帖泄漏进评估。
 
@@ -936,13 +936,13 @@ print(f"NLTK word level: {len(nltk_vocabulary):,} distinct tokens; "
 # %% [markdown]
 # ### Subword level with BPE
 #
-# As in the course, the BPE tokenizer first splits the text at whitespace and punctuation (`Whitespace` pre-tokenizer), then learns its pieces with a `BpeTrainer`. The special tokens are the course's: `[UNK]` stands for a character never seen in training; `[CLS]`, `[SEP]`, `[PAD]` and `[MASK]` are reserved for later models and are counted in the vocabulary size. On a small sample there may be fewer pairs to merge than `BPE_VOCAB_SIZE` allows, so the vocabulary can end up smaller.
+# As in the course, the BPE tokenizer first splits the text at whitespace and punctuation (`Whitespace` pre-tokenizer), then learns its pieces with a `BpeTrainer`. The special tokens are the course's: `[UNK]` stands for a character never seen in training; `[CLS]`, `[SEP]`, `[PAD]` and `[MASK]` are reserved for later models and are counted in the vocabulary size. The vocabulary always holds every single character seen in training (the alphabet) and the five special tokens; merged pieces are added on top until it reaches `BPE_VOCAB_SIZE`. So the vocabulary can end up **smaller** than `BPE_VOCAB_SIZE` when a small sample has fewer pairs to merge, and **larger** when `BPE_VOCAB_SIZE` is below the number of single characters plus special tokens; then nothing is merged at all. The cell prints how the vocabulary splits into these three parts.
 #
 # ***
 #
 # ### 用 BPE 按子词切
 #
-# 和课堂一样，BPE 分词器先在空白和标点处把文字断开（`Whitespace` 预分词器），再用 `BpeTrainer` 学片段。特殊词元照课堂的：`[UNK]` 代表训练时没见过的字符；`[CLS]`、`[SEP]`、`[PAD]`、`[MASK]` 留给以后的模型用，也算进词表大小。样本小时，可合并的组合可能不够 `BPE_VOCAB_SIZE` 个，词表会小一些。
+# 和课堂一样，BPE 分词器先在空白和标点处把文字断开（`Whitespace` 预分词器），再用 `BpeTrainer` 学片段。特殊词元照课堂的：`[UNK]` 代表训练时没见过的字符；`[CLS]`、`[SEP]`、`[PAD]`、`[MASK]` 留给以后的模型用，也算进词表大小。词表里始终有训练时见过的每一个单个字符（字母表）和这五个特殊词元，合并出来的片段加在上面，直到总数达到 `BPE_VOCAB_SIZE`。所以：样本小、可合并的组合不够时，词表会**小于** `BPE_VOCAB_SIZE`；`BPE_VOCAB_SIZE` 比「单个字符数 + 特殊词元数」还小时，词表会**大于**它，而且一个片段也不合并。这一格会打印词表由这三部分各占多少。
 
 # %%
 # Train a BPE tokenizer on the working sample's original text and cut every post into pieces.
@@ -951,14 +951,19 @@ from tokenizers.models import BPE  # byte-pair encoding model
 from tokenizers.pre_tokenizers import Whitespace  # splits at whitespace and punctuation first
 from tokenizers.trainers import BpeTrainer  # learns the BPE pieces
 
+BPE_SPECIAL_TOKENS = ["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"]  # the course's special tokens
+
 bpe_tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
 bpe_tokenizer.pre_tokenizer = Whitespace()
-bpe_trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
-                         vocab_size=BPE_VOCAB_SIZE, show_progress=False)
+bpe_trainer = BpeTrainer(special_tokens=BPE_SPECIAL_TOKENS, vocab_size=BPE_VOCAB_SIZE, show_progress=False)
 bpe_tokenizer.train_from_iterator(df["text"].tolist(), bpe_trainer)  # display only: never used by a model
 bpe_lengths = np.array([len(encoding.ids) for encoding in bpe_tokenizer.encode_batch(df["text"].tolist())])
-print(f"BPE subword level: {bpe_tokenizer.get_vocab_size():,} pieces in the vocabulary "
-      f"(at most {BPE_VOCAB_SIZE:,} requested); {bpe_lengths.mean():.2f} tokens per post on average")
+bpe_vocabulary = bpe_tokenizer.get_vocab()  # piece -> id
+bpe_single_characters = sum(1 for piece in bpe_vocabulary if len(piece) == 1)  # the alphabet, always kept
+bpe_merged_pieces = len(bpe_vocabulary) - bpe_single_characters - len(BPE_SPECIAL_TOKENS)  # learned by merging
+print(f"BPE subword level: {len(bpe_vocabulary):,} pieces in the vocabulary ({BPE_VOCAB_SIZE:,} requested) = "
+      f"{bpe_single_characters:,} single characters + {len(BPE_SPECIAL_TOKENS)} special tokens + "
+      f"{bpe_merged_pieces:,} merged pieces; {bpe_lengths.mean():.2f} tokens per post on average")
 
 # %% [markdown]
 # ### Side by side
@@ -1004,8 +1009,11 @@ brief["sentiment"] = {
             "avg_tokens_per_post": float(nltk_lengths.mean()) if len(nltk_lengths) else None,
         },
         "bpe": {
-            "vocab_size": int(bpe_tokenizer.get_vocab_size()),
+            "vocab_size": len(bpe_vocabulary),
             "vocab_size_requested": BPE_VOCAB_SIZE,
+            "n_special_tokens": len(BPE_SPECIAL_TOKENS),
+            "n_single_characters": bpe_single_characters,  # every character seen in training; always kept
+            "n_merged_pieces": bpe_merged_pieces,
             "trained_on": "original text of the whole working sample",
             "avg_tokens_per_post": float(bpe_lengths.mean()) if len(bpe_lengths) else None,
         },
