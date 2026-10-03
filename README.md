@@ -4,7 +4,7 @@ Ledger Eyes reads what the crypto crowd writes and turns it into one small, fixe
 
 The work is a single Jupyter notebook that runs from top to bottom on Google Colab. It uses the public StockTwits crypto dataset from Hugging Face and needs no keys or accounts.
 
-Chapters so far: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · Save the brief. The `sentiment`, `topics` and `why` sections of the brief are still `null`.
+Chapters so far: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · Save the brief. Chapters 4 to 8 tell bullish from bearish posts and fill the brief's `sentiment` section; the `topics` and `why` sections are still `null`.
 
 ## Repository layout
 
@@ -27,7 +27,7 @@ Chapters so far: 0 The question and the data · 1 Loading · 2 A first look · 3
 2. Optionally change the switches in the first code cell.
 3. Choose *Runtime → Run all*.
 
-The first code cell after the switches installs the packages Colab lacks (for example `emoji` and `contractions`); everything else is preinstalled on Colab. The data is read straight from Hugging Face (`hf://datasets/ElKulako/stocktwits-crypto/st-data-full.xlsx`), and the brief is saved to `data/brief.json` inside the Colab session.
+The first code cell after the switches installs the packages Colab lacks (for example `emoji` and `contractions`); everything else, including TensorFlow/Keras and Hugging Face `tokenizers`, is preinstalled on Colab, and a package that is already there is left as it is. The data is read straight from Hugging Face (`hf://datasets/ElKulako/stocktwits-crypto/st-data-full.xlsx`), and the brief is saved to `data/brief.json` inside the Colab session.
 
 The notebook has not yet been run on Colab itself; it has been run locally with the same code path, including reading the `hf://` address directly.
 
@@ -52,17 +52,18 @@ The scripts run under `bash` and set up their own environment from `scripts/env.
 
 ### The two checks
 
-**`scripts/check.sh quick`** (about 15 seconds once the environment is ready)
+**`scripts/check.sh quick`** (about 25 seconds once the environment is ready)
 
 1. `requirements.txt` matches the installed packages, and the notebook's install pins match `requirements.txt`.
 2. `notebook/ledger_eyes.ipynb` is exactly what `scripts/build_notebook.sh` produces from the source ("source file and .ipynb are consistent"), and it carries no outputs or execution counts (".ipynb carries no run results").
 3. The parameters cell is well formed and holds every switch listed below.
 4. Text scan (rules in [Text rules](#text-rules)).
 5. The notebook runs from top to bottom on the sample twice: once with the default switches and once with every two-state switch flipped to its other value. Both runs must save a brief, and each brief is checked: all top-level fields present, `dataset` filled, `scope` matching the switches, `post_id` unique, class counts adding up, equal class sizes in the working sample, `clean_texts` reproducing the step-by-step cleaning, and the cleaning examples following the switches (negations kept and emoji turned into words with the defaults; with both cleaning switches off, the examples must equal the plain course recipe).
+6. The `sentiment` section of both briefs is checked for structure only (the sample is too small for the scores to mean anything): the classes match `N_CLASSES` (three classes in the second run); the tokenization comparison is recorded; training, validation and test sets add up to the working sample (about 80/10/10, every class in every part); both vectorizers learned at most `VOCAB_SIZE` words from the training set only; the evaluation table has exactly one row per model (`count_network`, `tfidf_network`) and per baseline (`always_majority`, `uniform_random`) for all test posts and for the test posts that mention Bitcoin, with the right number of posts, class supports that add up and every score a number in [0, 1] or `null` (`null` for accuracy and macro-F1 when a subset is empty); one confusion matrix per model adding up to the number of test posts and agreeing with the accuracy; one model chosen with a validation score for every model; the scoring function's self-check passed (one column per class, bullish last, rows adding up to 1, the chosen model's evaluated test labels reproduced); the count of test texts also found in the training set; `beats_baselines` agreeing with the table. The switches `BPE_VOCAB_SIZE`, `VOCAB_SIZE`, `EPOCHS` and `BATCH_SIZE` must exist.
 
-**`scripts/check.sh full`** (a few minutes)
+**`scripts/check.sh full`** (about one minute once the environment is ready)
 
-Runs the same static checks, then the notebook once on the full dataset in `data/raw/st-data-full.xlsx` with the default switches, checks the brief as above and prints the key numbers (posts, posts per class, posts mentioning Bitcoin per class, working sample size, average words before and after cleaning).
+Runs the same static checks, then the notebook once on the full dataset in `data/raw/st-data-full.xlsx` with the default switches, checks the brief as above and prints the key numbers (posts, posts per class, posts mentioning Bitcoin per class, working sample size, average words before and after cleaning). On top of the structure checks of the quick check, it requires that the rows for the test posts that mention Bitcoin hold posts, and **the bar of chapter 8: every model's macro-F1 on all test posts must be higher than that of both baselines** (with whatever switches the full run uses). It then prints the sentiment numbers: tokenization, split, validation scores and the chosen model, the full evaluation table and the confusion matrices.
 
 Executed notebooks and briefs land in `data/checks/quick-default/`, `data/checks/quick-other/` and, for the full check, `data/runs/full.ipynb` and `data/brief.json`. If you pass `-p WORK_DIR <folder>` to the quick check, both of its runs use that one folder: each brief is checked right after its run, but the second run overwrites the first run's `executed.ipynb` and `brief.json`. `WORK_DIR` may also be a folder outside the repository.
 
@@ -96,6 +97,10 @@ All switches are in the notebook's first code cell (tag `parameters`), one plain
 | `BTC_ONLY` | `False` | `True` (two-state) | Working sample only from posts that mention Bitcoin. |
 | `EMOJI_TO_WORDS` | `True` | `False` (two-state) | Turn emoji into English words instead of deleting them. |
 | `KEEP_NEGATIONS` | `True` | `False` (two-state) | Keep not, no, never, nor (and the n't forms) out of the stop word list. |
+| `BPE_VOCAB_SIZE` | `5000` | any positive integer | Most pieces the subword (BPE) tokenizer of chapter 4 learns. Display only. |
+| `VOCAB_SIZE` | `1000` | any positive integer | Most words each vectorizer of chapter 6 keeps (as in the course). |
+| `EPOCHS` | `5` | any positive integer | Passes over the training set in chapter 7 (as in the course). |
+| `BATCH_SIZE` | `50` | any positive integer | Posts per training step in chapter 7 (as in the course). |
 
 ## Interface
 
@@ -112,10 +117,21 @@ These names are fixed; later chapters build on them.
 | `clean_text` | Column of `df` only: the text after chapter 3's cleaning. |
 | `clean_texts(texts)` | Cleans a column (or list) of raw texts with the current switches and returns a pandas Series (same index when given a Series). It runs the same step functions as chapter 3's step-by-step cells, in the same order; the notebook checks that both give identical results. |
 | `brief` | The result dictionary, saved to `{WORK_DIR}/brief.json` by the last cell. |
+| `CLASS_LABELS` | Labels in use, in order: `[0, 2]` with two classes, `[0, 1, 2]` with three. Every class table and every probability array follows this order. |
+| `train_df`, `val_df`, `test_df` | Training (80%), validation (10%) and test (10%) parts of `df`, split in chapter 5, stratified by label, with `RANDOM_SEED`. They keep all columns of `df`. |
+| `train_post_ids` | `frozenset` of the `post_id`s in `train_df`. A post whose id is not in it was never seen by the models during training. |
+| `count_vectorizer`, `tfidf_vectorizer` | Chapter 6's vectorizers, fitted on `train_df["clean_text"]` only (also in the dict `vectorizers`, keys `"count"` and `"tfidf"`). |
+| `models` | Chapter 7's networks: `{"count_network": {...}, "tfidf_network": {...}}`, each with `model` (the Keras model), `vectors` (`"count"` or `"tfidf"`) and `history`. |
+| `selected_model_name`, `selected_model`, `selected_vectorizer` | The model chosen by macro-F1 on the validation set, and the vectorizer it reads. |
+| `sentiment_proba(cleaned_texts)` | Class probabilities from the chosen model for any batch of **cleaned** texts (a list or pandas Series of strings; clean raw posts with `clean_texts` first; a missing value counts as an empty text). Returns a NumPy array of shape `(number of texts, number of classes in use)`; every row adds up to 1; an empty input gives shape `(0, number of classes)`. Column order is fixed and stored in `SENTIMENT_PROBA_LABELS`: two classes `[0, 2]` = [bearish, bullish]; three classes `[0, 1, 2]` = [bearish, neutral, bullish]. |
+| `SENTIMENT_PROBA_LABELS` | The label of each column returned by `sentiment_proba` (equal to `CLASS_LABELS`). |
+| `BULLISH_COLUMN` | Index of the "probability of bullish" column: always the last one (1 with two classes, 2 with three). |
 
 **Working sample.** Keep the classes in use (`N_CLASSES = 2` drops neutral), keep only Bitcoin posts when `BTC_ONLY`, then draw the same number of posts from every class with `RANDOM_SEED`: the smaller of `SAMPLE_PER_CLASS` and the size of the smallest remaining class. Chapter 2's statistics use `df_all`; chapter 3 cleans `df` only.
 
 **Cleaning.** Lower case → extra whitespace → HTML tags → emoji to words (only with `EMOJI_TO_WORDS`; skin-tone qualifiers dropped, underscores turned into spaces) → special characters (keep letters, digits, whitespace) → contractions (`contractions` package; it also expands apostrophe-free forms such as "dont" and "cant", so negative contractions come back as "not") → stop words (NLTK English list, minus the negation words when `KEEP_NEGATIONS`) → WordNet lemmatisation.
+
+**Sentiment models.** Chapter 4 only shows two tokenizers (NLTK words and a BPE tokenizer trained on the original text of the working sample); nothing from it reaches a model. Chapter 5 splits `df` 80/20 and then the 20% part half and half, both times stratified by label with `RANDOM_SEED`; every class needs at least 10 posts in the working sample, otherwise the notebook stops with a clear message. Chapter 6 fits a `CountVectorizer` and a `TfidfVectorizer` (`max_features=VOCAB_SIZE`, 32-bit floats) on the training set's `clean_text` and only transforms the validation and test sets; the matrices stay sparse instead of `.toarray()`. Chapter 7 trains one Keras network per vector type: a single `Dense` layer, with one sigmoid unit and binary cross-entropy for two classes (inside the network bearish → 0, bullish → 1) or three softmax units and sparse categorical cross-entropy for three classes (labels unchanged), Adam, `EPOCHS` and `BATCH_SIZE`, after `tf.keras.utils.set_random_seed(RANDOM_SEED)`. The validation set is watched during training and then used once to choose the model with the higher macro-F1 (a tie goes to `count_network`). Chapter 8 is the only place that scores the test set.
 
 **Cache.** Chapter 1 stores `df_all`'s three loaded columns as Parquet in `{WORK_DIR}/cache/posts-<fingerprint>.parquet`. The fingerprint of a local file is a SHA-256 hash of its bytes (any edit forces a fresh read); for a web address it is a hash of the address.
 
@@ -125,6 +141,19 @@ Top level, always present: `format_version` (a draft value for now), `generated_
 
 - `scope`: `source` (the `DATA_SOURCE` value), `granularity` (`"batch"`: one result for the whole dataset; `"daily"` is reserved for dated data), `coins` (`"all"` or `"btc_only"`, describing the working sample), `n_classes`.
 - `dataset`: `name`, `file`, `license`, `citation`, `label_meaning`, `sheets` (posts per sheet), `n_posts`, `n_unique_post_ids`, `n_empty_text` (texts that are empty or blank after reading; in the full file, the 59 formula cells), `class_counts`, `class_shares`, `length_words` (`mean`, `median`, `p90`, `p99`, `min`, `max`), `btc_mentions` (`rule`, `n_posts`, `share`, `by_class`, `share_within_class`), `duplicates` (`n_rows_repeating_an_earlier_text`, `n_distinct_texts_repeated`), `n_posts_with_links`, `sample` (`n_classes`, `btc_only`, `seed`, `per_class_requested`, `available_by_class`, `per_class`, `class_counts`, `n_posts`, `n_mentions_btc`), `cleaning` (`emoji_to_words`, `keep_negations`, `steps`, `avg_words_before`, `avg_words_after`, `n_empty_after`, `clean_texts_matches_steps`, `examples`). Class keys are the label values as strings (`"0"`, `"1"`, `"2"`).
+- `sentiment` (chapters 4 to 8):
+  - `tokenization`: `used_by_models` (`false`), `text`, `n_posts`, `nltk_word_tokenize` and `bpe` (`vocab_size`, `avg_tokens_per_post`; `bpe` also `vocab_size_requested`, `trained_on`), `examples` (`kind`, `post_id` of the posts shown).
+  - `classes`: the labels in use as strings, for example `["0", "2"]`.
+  - `split`: `seed`, `fractions`, `stratified_by`, and per part (`train`, `validation`, `test`) `n_posts`, `class_counts`, `class_shares`, `n_mentions_btc`.
+  - `vectorizers`: `vocab_size_requested`, `fitted_on` (`"train"`), `fitted_on_n_posts`, `text`, `storage`, `count` and `tfidf` (`vocab_size`).
+  - `models`: the model names, `["count_network", "tfidf_network"]`.
+  - `training`: `epochs`, `batch_size`, `optimizer`, `seed`, `output_layer`, `loss`, `target_of_label` (label → network target), `history` (per model, the loss and accuracy of every pass on the training and validation sets).
+  - `selection`: `by`, `validation_macro_f1` (per model), `selected`.
+  - `scoring`: `function` (`"sentiment_proba"`), `input`, `output`, `column_labels`, `bullish_column`, `model`, `train_ids` (`"train_post_ids"`), `n_train_ids`, `check` (`n_texts`, `n_columns`, `rows_sum_to_one`, `matches_evaluated_predictions`: the self-check on the test set).
+  - `test_texts_also_in_train`: test posts whose original text (`same_text`) or cleaned text (`same_clean_text`) also occurs in the training set. Counted only; nothing is removed.
+  - `evaluation`: `subsets` (`all_test`, `test_mentions_btc`), `baselines` (`always_majority`: the most frequent training label, the smallest label on a tie; `uniform_random`: scikit-learn's `DummyClassifier(strategy="uniform")` with `RANDOM_SEED`), `majority_label`, `rows`. One row per model and baseline and per subset: `model`, `kind` (`"model"` or `"baseline"`), `subset`, `n`, `accuracy`, `per_class` (per label: `precision`, `recall`, `f1`, `support`), `macro_f1`. A score that cannot be computed is `null` (scikit-learn's `zero_division=nan`); macro-F1 is the mean of the per-class F1 scores that can be computed, and `null` when none can.
+  - `beats_baselines`: per model, whether its macro-F1 on all test posts is higher than that of both baselines.
+  - `confusion_matrices`: per model, on all test posts: `labels`, `rows` (true label), `columns` (predicted label), `counts`, `n`.
 
 ## Editing the notebook
 
@@ -154,6 +183,7 @@ Source: [ElKulako/stocktwits-crypto](https://huggingface.co/datasets/ElKulako/st
 
 - **59 posts lose their text.** In `st-data-full.xlsx`, 59 posts begin with `=`, so the spreadsheet stores them as formulas whose stored value is an error such as `#NAME?` (for example row 365284 of `stocktwits_1`, originally "=the new btc"). pandas, on Colab as well as locally, reads these cells as empty, so they appear in `df_all` as empty strings with their labels intact and are counted in `n_empty_text`. That is 59 of 1,331,697 posts; the notebook keeps them as they are rather than reading the file a second way. Five of them mention Bitcoin, so the Bitcoin count is 5 lower than it would be with the original text.
 - The notebook has not been run on Colab itself yet.
+- Training is seeded, but TensorFlow does not promise bit-identical results across runs and machines, so model scores (and, when the two are close, the chosen model) may differ slightly. Counts and the two baseline rows do not depend on training.
 
 ## Data policy
 
