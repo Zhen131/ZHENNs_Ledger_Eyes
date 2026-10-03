@@ -1124,6 +1124,8 @@ count_vectorizer = CountVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  #
 X_train_count = count_vectorizer.fit_transform(train_df["clean_text"])  # learns the vocabulary: training set only
 X_val_count = count_vectorizer.transform(val_df["clean_text"])  # transform only
 X_test_count = count_vectorizer.transform(test_df["clean_text"])  # transform only
+for matrix in (X_train_count, X_val_count, X_test_count):
+    matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
 print(f"Word counts: {len(count_vectorizer.vocabulary_):,} words; training matrix {X_train_count.shape}")
 
 # %%
@@ -1134,6 +1136,8 @@ tfidf_vectorizer = TfidfVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  #
 X_train_tfidf = tfidf_vectorizer.fit_transform(train_df["clean_text"])  # learns vocabulary and weights: training set only
 X_val_tfidf = tfidf_vectorizer.transform(val_df["clean_text"])  # transform only
 X_test_tfidf = tfidf_vectorizer.transform(test_df["clean_text"])  # transform only
+for matrix in (X_train_tfidf, X_val_tfidf, X_test_tfidf):
+    matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
 print(f"TF-IDF: {len(tfidf_vectorizer.vocabulary_):,} words; training matrix {X_train_tfidf.shape}")
 
 # %% [markdown]
@@ -1169,8 +1173,8 @@ for name, parts in features.items():
         "vocabulary": len(vectorizers[name].vocabulary_),
         "training shape": parts["train"].shape,
         "non-zero share": safe_ratio(sum(matrix.nnz for matrix in parts.values()), cells),
-        "sparse MB": round(sum(sparse_megabytes(matrix) for matrix in parts.values()), 1),
-        "dense float32 MB": round(cells * 4 / 1e6, 1),
+        "sparse MB": round(sum(sparse_megabytes(matrix) for matrix in parts.values()), 2),
+        "dense float32 MB": round(cells * 4 / 1e6, 2),
     })
 brief["sentiment"]["vectorizers"] = {
     "vocab_size_requested": VOCAB_SIZE,
@@ -1181,6 +1185,217 @@ brief["sentiment"]["vectorizers"] = {
     **{name: {"vocab_size": len(vectorizer.vocabulary_)} for name, vectorizer in vectorizers.items()},
 }
 pd.DataFrame(vector_rows).set_index("vectors")
+
+# %% [markdown]
+# ## 7. Models: a one-layer network
+#
+# As in the course, the model is a neural network with a single dense layer, built with TensorFlow/Keras: every word of the vocabulary gets one weight per output, and the weighted sum goes through an activation function. We train one network on the word counts and one on the TF-IDF vectors.
+#
+# **Labels inside the network.** The data keeps its labels (0 bearish, 1 neutral, 2 bullish). The network learns positions instead:
+#
+# - **Two classes** (`N_CLASSES = 2`): bearish → 0, bullish → 1. The output layer has one unit with a sigmoid activation, which gives the probability of bullish; the loss is binary cross-entropy.
+# - **Three classes** (`N_CLASSES = 3`): the labels 0, 1, 2 stay as they are. The output layer has three units with a softmax activation, which gives one probability per class; the loss is sparse categorical cross-entropy.
+#
+# **Training settings** follow the course: `EPOCHS` = 5 passes over the training set, `BATCH_SIZE` = 50 posts per step, the Adam optimiser. The validation set is only watched during training (its loss and accuracy are printed after every pass); it does not change the weights. Before each network is built, `RANDOM_SEED` fixes the random numbers of Python, NumPy and TensorFlow, so the starting weights and the order of the batches repeat; small differences between runs and machines are still possible, because TensorFlow does not promise bit-identical training.
+#
+# ***
+#
+# ## 7. 模型：一层网络
+#
+# 和课堂一样，模型是只有一个全连接层的神经网络，用 TensorFlow/Keras 搭：词表里每个词对每个输出有一个权重，加权求和后过一个激活函数。词数统计和 TF-IDF 两种向量各训一个网络。
+#
+# **网络内部的标签。** 数据里的标签含义不变（0 看空、1 中性、2 看多），网络学的是位置号：
+#
+# - **两类**（`N_CLASSES = 2`）：看空 → 0，看多 → 1。输出层一个单元、sigmoid 激活，输出的是「看多的概率」；损失函数是二元交叉熵。
+# - **三类**（`N_CLASSES = 3`）：标签 0、1、2 原样不变。输出层三个单元、softmax 激活，每一类给一个概率；损失函数是稀疏分类交叉熵。
+#
+# **训练设置**照课堂：`EPOCHS` = 5 轮（把训练集过 5 遍），`BATCH_SIZE` = 每步 50 条，优化器 Adam。验证集在训练时只是盯着看（每过一遍打印它的损失和准确率），不改权重。每搭一个网络之前，先用 `RANDOM_SEED` 固定 Python、NumPy 和 TensorFlow 的随机数，所以初始权重和分批顺序都能重复；但 TensorFlow 不保证训练结果逐位相同，不同次运行、不同机器之间仍可能有细小差别。
+
+# %%
+# Helpers: label encoding, the one-layer network and class probabilities.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # hide TensorFlow's start-up information messages
+import tensorflow as tf  # neural networks (Keras)
+
+MODEL_TARGET = {label: position for position, label in enumerate(CLASS_LABELS)}  # two classes: {0: 0, 2: 1}
+
+
+def to_targets(labels):
+    """Turn label values into what the network learns: positions in CLASS_LABELS."""
+    targets = np.array([MODEL_TARGET[label] for label in labels])
+    return targets.astype("float32") if N_CLASSES == 2 else targets.astype("int64")
+
+
+def build_network(n_features):
+    """One dense layer: 1 sigmoid unit for two classes, one softmax unit per class for three."""
+    two_classes = N_CLASSES == 2
+    model = tf.keras.Sequential([
+        tf.keras.Input(shape=(n_features,)),  # one input per vocabulary word
+        tf.keras.layers.Dense(1 if two_classes else N_CLASSES, activation="sigmoid" if two_classes else "softmax"),
+    ])
+    model.compile(optimizer="adam",
+                  loss="binary_crossentropy" if two_classes else "sparse_categorical_crossentropy",
+                  metrics=["accuracy"])
+    return model
+
+
+def predict_proba(model, matrix):
+    """Class probabilities, one column per label in CLASS_LABELS (bearish first, bullish last)."""
+    if matrix.shape[0] == 0:
+        return np.empty((0, len(CLASS_LABELS)), dtype=np.float32)
+    if not matrix.has_sorted_indices:
+        matrix = matrix.sorted_indices()  # TensorFlow needs the non-zero cells of every row in column order
+    output = model.predict(matrix, batch_size=1024, verbose=0)
+    if output.shape[1] == 1:  # two classes: the single output is the probability of bullish
+        output = np.hstack([1.0 - output, output])
+    return output
+
+
+def predict_labels(model, matrix):
+    """Predicted label values: the class with the highest probability (a tie goes to the earlier column)."""
+    return np.asarray(CLASS_LABELS)[predict_proba(model, matrix).argmax(axis=1)]
+
+# %% [markdown]
+# ### Network on word counts
+#
+# ***
+#
+# ### 用词数统计训练的网络
+
+# %%
+# Train the network on the word-count vectors.
+tf.keras.utils.set_random_seed(RANDOM_SEED)  # fixes Python, NumPy and TensorFlow random numbers
+model_count = build_network(X_train_count.shape[1])
+history_count = model_count.fit(X_train_count, to_targets(train_df["label"]), epochs=EPOCHS, batch_size=BATCH_SIZE,
+                                validation_data=(X_val_count, to_targets(val_df["label"])), verbose=2)
+
+# %% [markdown]
+# ### Network on TF-IDF vectors
+#
+# ***
+#
+# ### 用 TF-IDF 训练的网络
+
+# %%
+# Train the network on the TF-IDF vectors.
+tf.keras.utils.set_random_seed(RANDOM_SEED)  # same seed, so both networks start alike
+model_tfidf = build_network(X_train_tfidf.shape[1])
+history_tfidf = model_tfidf.fit(X_train_tfidf, to_targets(train_df["label"]), epochs=EPOCHS, batch_size=BATCH_SIZE,
+                                validation_data=(X_val_tfidf, to_targets(val_df["label"])), verbose=2)
+
+# %% [markdown]
+# ### Choosing one model with the validation set
+#
+# Later chapters need one model to score posts. We choose it by **macro-F1 on the validation set** (chapter 8 explains the measure); the test set plays no part in the choice. If both scores are equal, the word-count network is chosen. Both validation scores and the choice go into the brief.
+#
+# ***
+#
+# ### 用验证集选一个模型
+#
+# 后面的章节要用一个模型给帖子打分。按**验证集上的 macro-F1** 来选（这个指标第 8 章解释）；测试集不参与选择。两个分数一样时选词数统计的网络。两个验证分数和选择结果都写进简报。
+
+# %%
+# Score both networks on the validation set and choose the better one.
+from sklearn.metrics import precision_recall_fscore_support  # per-class scores
+
+
+def class_scores(true_labels, predicted_labels):
+    """Per-class precision, recall, F1 and support for CLASS_LABELS; NaN where a score cannot be computed."""
+    return precision_recall_fscore_support(true_labels, predicted_labels, labels=CLASS_LABELS, zero_division=np.nan)
+
+
+def macro_f1(true_labels, predicted_labels):
+    """Mean of the per-class F1 scores, leaving out classes whose F1 cannot be computed; NaN when none can."""
+    f1 = class_scores(true_labels, predicted_labels)[2]
+    return float(np.nanmean(f1)) if np.isfinite(f1).any() else float("nan")
+
+
+models = {  # model name -> fitted network and the vectors it reads
+    "count_network": {"model": model_count, "vectors": "count", "history": history_count},
+    "tfidf_network": {"model": model_tfidf, "vectors": "tfidf", "history": history_tfidf},
+}
+validation_macro_f1 = {
+    name: macro_f1(val_df["label"].to_numpy(), predict_labels(entry["model"], features[entry["vectors"]]["validation"]))
+    for name, entry in models.items()
+}
+selected_model_name = max(validation_macro_f1, key=lambda name: np.nan_to_num(validation_macro_f1[name], nan=-1.0))
+selected_model = models[selected_model_name]["model"]
+selected_vectorizer = vectorizers[models[selected_model_name]["vectors"]]
+
+brief["sentiment"]["models"] = list(models)
+brief["sentiment"]["training"] = {
+    "epochs": EPOCHS,
+    "batch_size": BATCH_SIZE,
+    "optimizer": "adam",
+    "seed": RANDOM_SEED,
+    "output_layer": "1 unit, sigmoid" if N_CLASSES == 2 else f"{N_CLASSES} units, softmax",
+    "loss": "binary_crossentropy" if N_CLASSES == 2 else "sparse_categorical_crossentropy",
+    "target_of_label": {str(label): position for label, position in MODEL_TARGET.items()},
+    "history": {name: {key: [float(value) for value in values] for key, values in entry["history"].history.items()}
+                for name, entry in models.items()},
+}
+brief["sentiment"]["selection"] = {
+    "by": "macro-F1 on the validation set",
+    "validation_macro_f1": validation_macro_f1,
+    "selected": selected_model_name,
+}
+print("Validation macro-F1:", {name: round(score, 4) for name, score in validation_macro_f1.items()})
+print("Chosen for later chapters:", selected_model_name)
+
+# %% [markdown]
+# ### The scoring function for later chapters
+#
+# `sentiment_proba(cleaned_texts)` gives the chosen model's class probabilities for any batch of cleaned texts, not only posts of the working sample. Clean raw posts with `clean_texts` first. It returns a NumPy array with one row per text and one column per class in use; the column order is fixed and is stored in `SENTIMENT_PROBA_LABELS`:
+#
+# - two classes: columns [bearish, bullish] (labels 0, 2);
+# - three classes: columns [bearish, neutral, bullish] (labels 0, 1, 2).
+#
+# The probability of bullish is always the last column, `BULLISH_COLUMN`. Every row adds up to 1.
+#
+# `train_post_ids` is the set of `post_id`s of the training set. A post whose id is not in it was never seen by the models during training.
+#
+# ***
+#
+# ### 给后面章节用的打分函数
+#
+# `sentiment_proba(cleaned_texts)` 用选中的模型，给任意一批清洗后的文字算出每一类的概率，不限于工作样本里的帖子。原始帖子先用 `clean_texts` 洗。它返回一个 NumPy 数组，每条文字一行、每个用到的类别一列；列的顺序固定，记在 `SENTIMENT_PROBA_LABELS` 里：
+#
+# - 两类：[看空、看多]（标签 0、2）；
+# - 三类：[看空、中性、看多]（标签 0、1、2）。
+#
+# 「看多的概率」永远是最后一列，即 `BULLISH_COLUMN`。每一行加起来等于 1。
+#
+# `train_post_ids` 是训练集帖子的 `post_id` 集合。编号不在里面的帖子，模型训练时从没见过。
+
+# %%
+# The scoring function and the ids of the training posts.
+SENTIMENT_PROBA_LABELS = list(CLASS_LABELS)  # label of each column returned by sentiment_proba
+BULLISH_COLUMN = len(SENTIMENT_PROBA_LABELS) - 1  # the probability of bullish is the last column
+
+
+def sentiment_proba(cleaned_texts, model=selected_model, vectorizer=selected_vectorizer):
+    """Class probabilities from the chosen model; shape (number of texts, number of classes in use).
+
+    Columns follow SENTIMENT_PROBA_LABELS: [bearish, bullish] for two classes, [bearish, neutral, bullish]
+    for three. Input: cleaned texts (for example the output of clean_texts); a missing value counts as "".
+    """
+    texts = ["" if not isinstance(text, str) and pd.isna(text) else str(text) for text in cleaned_texts]
+    return predict_proba(model, vectorizer.transform(texts))
+
+
+train_post_ids = frozenset(train_df["post_id"])  # posts the models learned from
+brief["sentiment"]["scoring"] = {
+    "function": "sentiment_proba",
+    "input": "cleaned texts, for example the output of clean_texts",
+    "output": "array of shape (number of texts, number of classes in use); every row adds up to 1",
+    "column_labels": [str(label) for label in SENTIMENT_PROBA_LABELS],
+    "bullish_column": BULLISH_COLUMN,
+    "model": selected_model_name,
+    "train_ids": "train_post_ids",
+    "n_train_ids": len(train_post_ids),
+}
+demo_texts = ["btc to the moon 🚀🚀", "not bullish at all, selling everything"]
+pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
+             columns=[LABEL_NAMES[label] for label in SENTIMENT_PROBA_LABELS])
 
 # %% [markdown]
 # ## Save the brief
