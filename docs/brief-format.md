@@ -72,7 +72,7 @@ Chapters 0 to 3: the data source, a first look at every post, the working sample
 | `dataset.sheets.<sheet>` | integer | — | no | Number of posts in that sheet. |
 | `dataset.n_posts` | integer | yes | no | Every post of the data source. |
 | `dataset.n_unique_post_ids` | integer | yes | no | Distinct `post_id` values; equal to `n_posts`. |
-| `dataset.n_empty_text` | integer | yes | no | Posts whose text is empty or blank after reading (in the full file: 59 cells stored as formulas). |
+| `dataset.n_empty_text` | integer | yes | no | Posts whose text is empty or blank after reading (cells stored as formulas read as empty; see the README's known limitations). |
 | `dataset.class_counts` | object | yes | no | Posts per label, over every post. |
 | `dataset.class_counts.0` | integer | yes | no | Bearish posts. |
 | `dataset.class_counts.1` | integer | yes | no | Neutral posts. |
