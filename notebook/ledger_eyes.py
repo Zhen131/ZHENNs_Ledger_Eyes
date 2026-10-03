@@ -43,7 +43,7 @@ EPOCHS = 5  # default: 5; or any positive integer (passes over the training set 
 BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step in chapter 7)
 TOPIC_SCOPE = "btc"  # default: "btc" (every post that mentions bitcoin or btc); two-state, other: "all" (posts about all coins)
 TOPIC_MAX_POSTS = 100000  # default: 100000; or any positive integer (most posts in the topic table of chapter 9; above it, a random draw with RANDOM_SEED)
-N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer only when the table has fewer distinct posts)
+N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer only when the table has fewer distinct post vectors)
 
 # %% [markdown]
 # ## Setup
