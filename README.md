@@ -64,7 +64,7 @@ The scripts run under `bash` and set up their own environment from `scripts/env.
 
 Runs the same static checks, then the notebook once on the full dataset in `data/raw/st-data-full.xlsx` with the default switches, checks the brief as above and prints the key numbers (posts, posts per class, posts mentioning Bitcoin per class, working sample size, average words before and after cleaning).
 
-Executed notebooks and briefs land in `data/checks/quick-default/`, `data/checks/quick-other/` and, for the full check, `data/runs/full.ipynb` and `data/brief.json`.
+Executed notebooks and briefs land in `data/checks/quick-default/`, `data/checks/quick-other/` and, for the full check, `data/runs/full.ipynb` and `data/brief.json`. If you pass `-p WORK_DIR <folder>` to the quick check, both of its runs use that one folder: each brief is checked right after its run, but the second run overwrites the first run's `executed.ipynb` and `brief.json`. `WORK_DIR` may also be a folder outside the repository.
 
 ### Changing switches without editing the notebook
 
@@ -106,7 +106,7 @@ These names are fixed; later chapters build on them.
 | `df_all` | Every post of the data source. Created in chapter 1 and kept unchanged until the end of the notebook; no later cell may drop or overwrite it. |
 | `df` | The working sample drawn in chapter 2 (see below). |
 | `post_id` | Stable id of a post: `<sheet name>:<row number in the sheet>`, for example `stocktwits_1:2` for the first post of the first sheet (row 1 holds the column names). Unique in `df_all`, derived from the position in the file and never from random numbers, so the same data source gives the same ids on every run. `df` and every later table carry it. Ids are only comparable between runs on the same data source. |
-| `text` | The original post text (an empty cell becomes an empty string). |
+| `text` | The original post text. A cell that pandas reads as empty becomes an empty string; in the full file these are 59 formula cells (see [Known limitations](#known-limitations)). |
 | `label` | 0 = bearish, 1 = neutral, 2 = bullish. The meaning never changes, also not in the working sample. |
 | `mentions_btc` | `True` when the text contains `bitcoin` or `btc` as a whole word, ignoring case (regular expression `\b(?:bitcoin\|btc)\b`). "bitcoin's" counts; "bitcoins", "gbtc" and "btc_usd" do not. |
 | `clean_text` | Column of `df` only: the text after chapter 3's cleaning. |
@@ -121,10 +121,10 @@ These names are fixed; later chapters build on them.
 
 ### The brief
 
-Top level, always present: `format_version` (a draft value for now), `generated_at` (UTC, ISO 8601), `scope`, `dataset`, `sentiment`, `topics`, `why`. Sections no chapter fills are `null`. Numbers that cannot be computed (for example a share with a zero denominator) are `null`, never 0 or NaN; the save fails rather than write NaN.
+Top level, always present: `format_version` (a draft value for now), `generated_at` (UTC, ISO 8601), `scope`, `dataset`, `sentiment`, `topics`, `why`. Sections no chapter fills are `null`. Values that cannot be computed (for example a share with a zero denominator) are `null`, never 0 or NaN: None, NaN and infinity are converted to `null` before saving, and the JSON writer also refuses NaN as a safety net.
 
 - `scope`: `source` (the `DATA_SOURCE` value), `granularity` (`"batch"`: one result for the whole dataset; `"daily"` is reserved for dated data), `coins` (`"all"` or `"btc_only"`, describing the working sample), `n_classes`.
-- `dataset`: `name`, `file`, `license`, `citation`, `label_meaning`, `sheets` (posts per sheet), `n_posts`, `n_unique_post_ids`, `n_empty_text`, `class_counts`, `class_shares`, `length_words` (`mean`, `median`, `p90`, `p99`, `min`, `max`), `btc_mentions` (`rule`, `n_posts`, `share`, `by_class`, `share_within_class`), `duplicates` (`n_rows_repeating_an_earlier_text`, `n_distinct_texts_repeated`), `n_posts_with_links`, `sample` (`n_classes`, `btc_only`, `seed`, `per_class_requested`, `available_by_class`, `per_class`, `class_counts`, `n_posts`, `n_mentions_btc`), `cleaning` (`emoji_to_words`, `keep_negations`, `steps`, `avg_words_before`, `avg_words_after`, `n_empty_after`, `clean_texts_matches_steps`, `examples`). Class keys are the label values as strings (`"0"`, `"1"`, `"2"`).
+- `dataset`: `name`, `file`, `license`, `citation`, `label_meaning`, `sheets` (posts per sheet), `n_posts`, `n_unique_post_ids`, `n_empty_text` (texts that are empty or blank after reading; in the full file, the 59 formula cells), `class_counts`, `class_shares`, `length_words` (`mean`, `median`, `p90`, `p99`, `min`, `max`), `btc_mentions` (`rule`, `n_posts`, `share`, `by_class`, `share_within_class`), `duplicates` (`n_rows_repeating_an_earlier_text`, `n_distinct_texts_repeated`), `n_posts_with_links`, `sample` (`n_classes`, `btc_only`, `seed`, `per_class_requested`, `available_by_class`, `per_class`, `class_counts`, `n_posts`, `n_mentions_btc`), `cleaning` (`emoji_to_words`, `keep_negations`, `steps`, `avg_words_before`, `avg_words_after`, `n_empty_after`, `clean_texts_matches_steps`, `examples`). Class keys are the label values as strings (`"0"`, `"1"`, `"2"`).
 
 ## Editing the notebook
 
@@ -138,7 +138,7 @@ Writing rules for the notebook: one cell does one thing; every code cell, or sho
 
 The quick check scans every text file in the repository outside `data/` and `.venv/` and rejects:
 
-- private numbering: two digits followed by a capital A–D (optionally `-R`), `W` followed by one or two digits, `Q` followed by two digits, and week numbers written in Chinese;
+- private numbering, in the forms the private log uses: file-name prefixes (two digits, an optional capital letter, then `_W` and a week number), review codes (two digits, a capital A–D, then `-R`), `W` followed by two digits, `Q` followed by two digits, and week numbers written in Chinese. A bare "two digits and a letter" is deliberately not flagged, because it collides with normal notation such as 50D (50 days) or 10B (10 billion);
 - names of chat assistants and their vendors, the two-letter capitalised abbreviation for artificial intelligence, and co-author trailers;
 - local home paths and user names.
 
@@ -146,9 +146,14 @@ Chinese text is allowed only in the notebook's explanation cells, after the `***
 
 ## The sample
 
-`samples/stocktwits-crypto-sample.xlsx` holds 600 posts taken unchanged from the public dataset, in the same layout as the original file (sheets `stocktwits_1` and `stocktwits_2`, columns `text` and `label`), so the notebook reads it with the same code. `scripts/make_sample.py` drew it with seed 42 from `st-data-full.xlsx`: for each class (bearish, neutral, bullish) 80 posts that mention Bitcoin, 20 other posts with emoji, 20 other posts with a negation and 80 other posts, 200 per class. Rows keep their original sheet and order. Posts that are empty, start with `=` or contain characters a spreadsheet cannot store were skipped.
+`samples/stocktwits-crypto-sample.xlsx` holds 600 posts taken unchanged from the public dataset, in the same layout as the original file (sheets `stocktwits_1` and `stocktwits_2`, columns `text` and `label`), so the notebook reads it with the same code. `scripts/make_sample.py` drew it with seed 42 from `st-data-full.xlsx`: for each class (bearish, neutral, bullish) 80 posts that mention Bitcoin, 20 other posts with emoji, 20 other posts with a negation and 80 other posts, 200 per class. Rows keep their original sheet and order. Posts that read as empty (the formula cells described below), start with `=` or contain characters a spreadsheet cannot store were skipped, so the sample contains no formula cells.
 
 Source: [ElKulako/stocktwits-crypto](https://huggingface.co/datasets/ElKulako/stocktwits-crypto) on Hugging Face, released under the MIT License. For academic use the dataset author asks to cite <https://ieeexplore.ieee.org/document/10223689>.
+
+## Known limitations
+
+- **59 posts lose their text.** In `st-data-full.xlsx`, 59 posts begin with `=`, so the spreadsheet stores them as formulas whose stored value is an error such as `#NAME?` (for example row 365284 of `stocktwits_1`, originally "=the new btc"). pandas, on Colab as well as locally, reads these cells as empty, so they appear in `df_all` as empty strings with their labels intact and are counted in `n_empty_text`. That is 59 of 1,331,697 posts; the notebook keeps them as they are rather than reading the file a second way. Five of them mention Bitcoin, so the Bitcoin count is 5 lower than it would be with the original text.
+- The notebook has not been run on Colab itself yet.
 
 ## Data policy
 
