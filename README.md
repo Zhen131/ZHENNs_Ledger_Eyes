@@ -138,7 +138,7 @@ Writing rules for the notebook: one cell does one thing; every code cell, or sho
 
 The quick check scans every text file in the repository outside `data/` and `.venv/` and rejects:
 
-- private numbering, in the forms the private log uses: file-name prefixes (two digits, an optional capital letter, then `_W` and a week number), review codes (two digits, a capital A–D, then `-R`), `W` followed by two digits, `Q` followed by two digits, and week numbers written in Chinese. A bare "two digits and a letter" is deliberately not flagged, because it collides with normal notation such as 50D (50 days) or 10B (10 billion);
+- private numbering, in the forms the private log uses: file-name prefixes (two digits, optionally one of the capital letters A–D or Q, optionally a round suffix `-R` or `-` plus a number, then `_W` and a week number), review codes (two digits, a capital A–D, then `-R`), `W` followed by two digits, `Q` followed by two digits, and week numbers written in Chinese. A bare "two digits and a letter" is deliberately not flagged, because it collides with normal notation such as 50D (50 days) or 10B (10 billion). Before scanning, the check tests these rules on built-in examples (`NUMBERING_MUST_MATCH` and `NUMBERING_MUST_NOT_MATCH` in `scripts/check.py`): every log code form must be caught and notation such as 50D, 30D, 7D, 10B or W2 must not be; if either fails, the check fails;
 - names of chat assistants and their vendors, the two-letter capitalised abbreviation for artificial intelligence, and co-author trailers;
 - local home paths and user names.
 

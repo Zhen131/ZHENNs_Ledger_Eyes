@@ -43,15 +43,18 @@ REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
 # Private numbering is caught in the forms the log uses: file-name prefixes (two digits,
-# an optional letter, "_W" and a week), review codes (two digits, a letter A-D, "-R"),
-# week codes and question codes. A bare "two digits and a letter" is not flagged on
-# purpose, because it collides with normal notation such as 50D (50 days) or 10B (10 billion).
-FORBIDDEN_PATTERNS = [
-    (r"\b[0-9]{2}[A-DQ]?(?:-R)?_W[0-9]{1,2}\b", "private log file prefix (two digits, optional letter, _W and a week)"),
+# optionally a letter A-D or Q, optionally a round suffix "-R" or "-<number>", then "_W"
+# and a week), review codes (two digits, a letter A-D, "-R"), week codes and question codes.
+# A bare "two digits and a letter" is not flagged on purpose, because it collides with
+# normal notation such as 50D (50 days) or 10B (10 billion).
+NUMBERING_PATTERNS = [
+    (r"\b[0-9]{2}[A-DQ]?(?:-(?:R|[0-9]+))?_W[0-9]{1,2}\b", "private log file prefix (two digits, optional letter and round, _W and a week)"),
     (r"\b[0-9]{2}[A-D]-R\b", "private review code (two digits, a letter A-D and -R)"),
     (r"\bW[0-9]{2}\b", "private week code (W and two digits)"),
     (r"\bQ[0-9]{2}\b", "private question code (Q and two digits)"),
     ("\u7b2c\\s*[0-9]+\\s*\u5468", "private week number written in Chinese"),
+]
+FORBIDDEN_PATTERNS = NUMBERING_PATTERNS + [
     (r"(?i)\bc[l]aude\b", "assistant name"),
     (r"(?i)\banthrop[i]c\b", "assistant vendor name"),
     (r"(?i)\bchat[g]pt\b", "assistant name"),
@@ -62,6 +65,39 @@ FORBIDDEN_PATTERNS = [
     (r"(?i)co-authored-[b]y", "co-author trailer"),
     (r"/User[s]/|zhuzhen[0-9]", "local home path or user name"),
 ]
+# Self-test of the numbering patterns. Codes that must be caught are written in pieces
+# (joined at run time) so that this file does not trip its own scan.
+NUMBERING_MUST_MATCH = [
+    ("31B", "_W20"),         # contract file prefix
+    ("31B-", "R_W20"),       # review file prefix
+    ("31C", "_W20"),         # report file prefix
+    ("31D", "_W20"),         # acceptance file prefix
+    ("09D-3", "_W15"),       # acceptance file prefix with a round number
+    ("01D-1", "_W11"),       # same, single-digit week
+    ("06", "_W19"),          # file or folder prefix without a letter
+    ("31B-", "R"),           # review code on its own
+    ("see W", "20 log"),     # week code
+    ("Q", "01 list"),        # question code
+    ("\u7b2c 20 \u5468",),  # week number written in Chinese
+]
+NUMBERING_MUST_NOT_MATCH = [
+    "50D moving average", "30D change", "7D volume", "200D", "10B market cap", "a 3D chart",
+    "W2 form", "Q4 2021", "MA50", "batch size 32", "RSI_14", "top_W",
+]
+
+
+def check_numbering_rules(report):
+    """The numbering patterns must catch the log's code forms and must not catch normal notation."""
+    def caught(text):
+        return any(re.search(pattern, text) for pattern, _ in NUMBERING_PATTERNS)
+    missed = ["".join(parts) for parts in NUMBERING_MUST_MATCH if not caught("".join(parts))]
+    wrongly = [text for text in NUMBERING_MUST_NOT_MATCH if caught(text)]
+    detail = "; ".join(([f"not caught: {missed}"] if missed else []) + ([f"wrongly caught: {wrongly}"] if wrongly else []))
+    report.check(not missed and not wrongly,
+                 f"numbering scan self-test ({len(NUMBERING_MUST_MATCH)} codes must be caught, "
+                 f"{len(NUMBERING_MUST_NOT_MATCH)} normal notations must not)", detail)
+
+
 CJK = re.compile("[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]")
 SKIP_DIRS = {".git", ".venv", "data", "__pycache__", ".ipynb_checkpoints"}
 BINARY_SUFFIXES = {".xlsx", ".parquet", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip"}
@@ -508,6 +544,7 @@ def main():
     check_requirements(report)
     check_notebook_files(report)
     defaults, others = read_switches(report)
+    check_numbering_rules(report)
     check_text(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
