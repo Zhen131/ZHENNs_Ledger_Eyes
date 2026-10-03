@@ -3,9 +3,10 @@
     scripts/check.sh quick [-p NAME VALUE ...]
     scripts/check.sh full  [-p NAME VALUE ...]
 
-quick: static checks, then the notebook runs twice on the bundled sample
-       (default switches, then every two-state switch flipped), and both
-       saved briefs are checked.
+quick: static checks, then the notebook runs three times on the bundled
+       sample (default switches, every two-state switch flipped, default
+       switches again); the first two saved briefs are checked, and the
+       topics sections of the two default runs must be identical.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief.
 
@@ -44,6 +45,9 @@ SENTIMENT_MODELS = ["count_network", "tfidf_network"]  # the two networks of cha
 SENTIMENT_BASELINES = ["always_majority", "uniform_random"]
 SENTIMENT_SUBSETS = ["all_test", "test_mentions_btc"]
 SPLIT_PARTS = ["train", "validation", "test"]
+TOPIC_SWITCHES = ["TOPIC_SCOPE", "TOPIC_MAX_POSTS", "N_TOPICS"]
+TOPIC_CLASSES = ["0", "1", "2"]  # the topic table keeps all three classes, whatever N_CLASSES says
+SELECTION_WORDS = {"bitcoin", "btc"}  # with TOPIC_SCOPE "btc" every topic post has one; never part of a topic name
 
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
@@ -699,6 +703,169 @@ def print_sentiment(brief):
     print(f"  beats both baselines:          {sentiment.get('beats_baselines')}")
 
 
+# ---------------------------------------------------------------- topic chapter (9)
+
+def check_topic_switches(report, defaults):
+    absent = [name for name in TOPIC_SWITCHES if name not in defaults]
+    report.check(not absent, "switches of the topic chapter are present", ", ".join(absent))
+
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def check_topics(report, label, brief, switches, full_run):
+    """The topic table follows its switches; every topic has a name, posts, a share and quotes; sizes add up."""
+    topics = brief.get("topics")
+    if not report.check(isinstance(topics, dict) and bool(topics), f"{label}: topics section has content"):
+        return
+    dataset = as_dict(brief.get("dataset"))
+    btc = as_dict(dataset.get("btc_mentions"))
+    scope, cap, wanted = switches.get("TOPIC_SCOPE"), switches.get("TOPIC_MAX_POSTS"), switches.get("N_TOPICS")
+    if scope == "btc":  # every post that mentions bitcoin or btc, as counted in chapter 2
+        available, natural = btc.get("n_posts"), as_dict(btc.get("by_class"))
+    else:  # every post of the data source
+        available, natural = dataset.get("n_posts"), as_dict(dataset.get("class_counts"))
+
+    # The topic post table: scope, cap, all three classes, stable ids.
+    n_posts = topics.get("n_posts")
+    counts = as_dict(topics.get("class_counts"))
+    table_ok = (topics.get("post_table") == "topic_posts" and topics.get("topic_column") == "topic"
+                and topics.get("scope") == scope and topics.get("max_posts") == cap
+                and is_count(available) and is_count(cap) and is_count(n_posts)
+                and topics.get("n_available") == available
+                and n_posts == min(available, cap) and topics.get("sampled") == (available > cap)
+                and sorted(counts) == TOPIC_CLASSES and all(is_count(count) for count in counts.values())
+                and sum(counts.values()) == n_posts
+                and topics.get("n_unique_post_ids") == n_posts
+                and is_count(topics.get("n_mentions_btc")) and topics["n_mentions_btc"] <= n_posts
+                and (scope != "btc" or topics["n_mentions_btc"] == n_posts))
+    report.check(table_ok, f"{label}: topic post table follows TOPIC_SCOPE and TOPIC_MAX_POSTS "
+                 "(posts in scope up to the cap, classes 0, 1 and 2 adding up, unique post_id)",
+                 f"scope {topics.get('scope')!r} (switch {scope!r}), cap {topics.get('max_posts')!r} (switch {cap!r}), "
+                 f"{n_posts} of {topics.get('n_available')} posts (expected of {available}), "
+                 f"sampled {topics.get('sampled')}, classes {counts}, unique ids {topics.get('n_unique_post_ids')}, "
+                 f"mention bitcoin {topics.get('n_mentions_btc')}")
+    if table_ok and not topics.get("sampled"):
+        report.check(counts == natural,
+                     f"{label}: without a draw the topic post table keeps every post in scope with its natural "
+                     "class counts (not filtered by N_CLASSES or BTC_ONLY)", f"{counts} vs {natural}")
+    if scope == "btc" and is_count(cap) and is_count(btc.get("n_posts")) and cap >= btc["n_posts"]:
+        report.check(n_posts == btc["n_posts"],
+                     f"{label}: the topic post table holds exactly the posts that chapter 2 counted as mentioning "
+                     "bitcoin or btc", f"{n_posts} vs {btc.get('n_posts')}")
+    if full_run and table_ok and not topics.get("sampled"):
+        report.check(all(counts[label_value] > 0 for label_value in TOPIC_CLASSES),
+                     f"{label}: the topic post table has posts of all three classes", f"{counts}")
+
+    cleaning = as_dict(topics.get("cleaning"))
+    report.check(cleaning.get("function") == "clean_texts" and cleaning.get("same_as_working_sample") is True
+                 and is_count(cleaning.get("n_also_in_working_sample"))
+                 and is_count(cleaning.get("n_empty_after")) and is_count(n_posts)
+                 and cleaning["n_empty_after"] <= n_posts,
+                 f"{label}: topic posts cleaned with clean_texts (posts also in the working sample get the same "
+                 "clean_text)", f"{cleaning}")
+
+    vectorizer = as_dict(topics.get("vectorizer"))
+    blocked = vectorizer.get("blocked_words")
+    vocab = vectorizer.get("vocab_size")
+    report.check(vectorizer.get("kind") == "tfidf" and vectorizer.get("fitted_on") == "topic_posts"
+                 and vectorizer.get("fitted_on_n_posts") == n_posts and is_count(vocab)
+                 and is_count(vectorizer.get("vocab_size_requested")) and vocab <= vectorizer["vocab_size_requested"]
+                 and isinstance(blocked, list) and (scope != "btc" or SELECTION_WORDS <= set(blocked))
+                 and is_count(vectorizer.get("n_posts_without_words")) and is_count(n_posts)
+                 and vectorizer["n_posts_without_words"] <= n_posts,
+                 f"{label}: topic vectorizer of its own learned on the topic table "
+                 "(with TOPIC_SCOPE btc, bitcoin and btc left out)",
+                 f"fitted on {vectorizer.get('fitted_on')!r} ({vectorizer.get('fitted_on_n_posts')} posts), "
+                 f"vocabulary {vocab} of {vectorizer.get('vocab_size_requested')}, "
+                 f"posts without words {vectorizer.get('n_posts_without_words')}")
+
+    # The topics: as many as asked for (fewer only with fewer distinct post vectors), numbered 0 to n-1.
+    items = topics.get("topics") if isinstance(topics.get("topics"), list) else []
+    items = [item for item in items if isinstance(item, dict)]
+    n_topics, distinct = topics.get("n_topics"), topics.get("n_distinct_vectors")
+    count_ok = (topics.get("method") == "kmeans" and topics.get("n_topics_requested") == wanted
+                and is_count(wanted) and is_count(distinct) and is_count(n_posts) and distinct <= n_posts
+                and (n_posts == 0 or distinct >= 1) and n_topics == min(wanted, distinct)
+                and len(items) == n_topics and isinstance(topics.get("topics"), list)
+                and len(items) == len(topics["topics"])
+                and [item.get("topic") for item in items] == list(range(n_topics)))
+    report.check(count_ok, f"{label}: N_TOPICS topics numbered from 0 (fewer only when the table has fewer distinct "
+                 "post vectors)", f"method {topics.get('method')!r}, {n_topics} topics, asked for "
+                 f"{topics.get('n_topics_requested')} (switch {wanted!r}), {distinct} distinct vectors")
+
+    name_words, quotes_per_topic = topics.get("name_words"), topics.get("quotes_per_topic")
+    problems = []
+    for item in items:
+        topic, size = item.get("topic"), item.get("n_posts")
+        words, quotes, without = item.get("top_words"), item.get("quotes"), item.get("n_posts_without_words")
+        if not is_count(size) or size == 0:
+            problems.append(f"topic {topic}: {size!r} posts")
+            continue
+        if not (isinstance(item.get("share"), float) and is_count(n_posts) and n_posts > 0
+                and abs(item["share"] - size / n_posts) <= 1e-9):
+            problems.append(f"topic {topic}: share {item.get('share')!r} is not {size} / {n_posts}")
+        if not (isinstance(words, list) and all(isinstance(word, str) and word for word in words)
+                and is_count(name_words) and len(words) <= name_words and item.get("name") == " / ".join(words)):
+            problems.append(f"topic {topic}: name {item.get('name')!r} / words {words!r}")
+        elif not words and not (vocab == 0 or without == size):
+            problems.append(f"topic {topic}: no name although its posts have words")
+        elif scope == "btc" and SELECTION_WORDS & set(words):
+            problems.append(f"topic {topic}: name {item.get('name')!r} contains bitcoin or btc")
+        if not (isinstance(quotes, list) and is_count(quotes_per_topic) and 1 <= len(quotes) <= min(quotes_per_topic, size)
+                and all(isinstance(quote, dict) and isinstance(quote.get("post_id"), str)
+                        and quote.get("label") in (0, 1, 2) and isinstance(quote.get("text"), str) for quote in quotes)
+                and len({quote["post_id"] for quote in quotes}) == len(quotes)
+                and len({quote["text"] for quote in quotes}) == len(quotes)):
+            problems.append(f"topic {topic}: quotes {quotes!r}")
+        if not (is_count(without) and without <= size):
+            problems.append(f"topic {topic}: posts without words {without!r}")
+    report.check(not problems and count_ok,
+                 f"{label}: every topic has a name (a few words), posts, a share and quotes (different posts)",
+                 "; ".join(problems[:5]))
+
+    sizes = [item.get("n_posts") for item in items]
+    shares = [item.get("share") for item in items]
+    sums_ok = (all(is_count(size) for size in sizes) and is_count(n_posts) and sum(sizes) == n_posts
+               and topics.get("n_posts_with_topic") == n_posts
+               and (n_posts == 0 or (all(isinstance(share, float) for share in shares)
+                                     and abs(sum(shares) - 1) <= 1e-6)))
+    report.check(sums_ok, f"{label}: every topic post has a topic; topic sizes add up to the table and shares to 1",
+                 f"sizes {sizes} (sum {sum(size for size in sizes if is_count(size))}) for {n_posts} posts, "
+                 f"posts with a topic {topics.get('n_posts_with_topic')}, shares sum "
+                 f"{sum(share for share in shares if isinstance(share, float))}")
+
+
+def print_topics(brief):
+    """Print the topic post table and the full topic table (full run)."""
+    topics = as_dict(brief.get("topics"))
+    if not topics:
+        return
+    btc = as_dict(as_dict(brief.get("dataset")).get("btc_mentions"))
+    print("\nTopics (full run)")
+    print(f"  topic post table:              {topics.get('n_posts')} posts (scope {topics.get('scope')!r}, "
+          f"{topics.get('n_available')} in scope, cap {topics.get('max_posts')}, drawn: {topics.get('sampled')})")
+    print(f"  posts per class:               {topics.get('class_counts')}   (0 bearish, 1 neutral, 2 bullish)")
+    print(f"  chapter 2, mention bitcoin:    {btc.get('n_posts')}")
+    print(f"  cleaning:                      {topics.get('cleaning')}")
+    vectorizer = as_dict(topics.get("vectorizer"))
+    print(f"  vectorizer:                    vocabulary {vectorizer.get('vocab_size')} of "
+          f"{vectorizer.get('vocab_size_requested')}, posts without words {vectorizer.get('n_posts_without_words')}")
+    print(f"  blocked words:                 {vectorizer.get('blocked_words')}")
+    print(f"  method:                        {topics.get('method')} {topics.get('method_settings')}, "
+          f"{topics.get('n_topics')} topics (asked for {topics.get('n_topics_requested')}, "
+          f"{topics.get('n_distinct_vectors')} distinct vectors)")
+    items = [item for item in topics.get("topics") or [] if isinstance(item, dict)]
+    print(f"  topic table ({len(items)} topics, largest first; share of the topic post table):")
+    for item in sorted(items, key=lambda item: (-(item.get("n_posts") or 0), item.get("topic") or 0)):
+        share = item.get("share")
+        share_text = f"{share:.4f}" if isinstance(share, float) else "-"
+        print(f"    topic {item.get('topic')}: {item.get('n_posts')} posts, share {share_text} | {item.get('name')}")
+        for quote in item.get("quotes") or []:
+            print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -719,9 +886,33 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
+REPEAT_LABEL = "default switches again"  # third quick run: same switches as the first, for the topics comparison
+
+
+def compare_topics(report, first, again):
+    """Two runs with the same switches must give identical topics sections."""
+    first_topics = first.get("topics") if isinstance(first, dict) else None
+    again_topics = again.get("topics") if isinstance(again, dict) else None
+    detail = ""
+    if isinstance(first_topics, dict) and isinstance(again_topics, dict) and first_topics != again_topics:
+        keys = sorted(key for key in set(first_topics) | set(again_topics)
+                      if first_topics.get(key) != again_topics.get(key))
+        detail = f"differing fields: {keys}"
+        if "topics" in keys and isinstance(first_topics.get("topics"), list) and isinstance(again_topics.get("topics"), list):
+            changed = [index for index, (left, right) in enumerate(zip(first_topics["topics"], again_topics["topics"]))
+                       if left != right]
+            detail += f"; differing topics: {changed}"
+    elif first_topics is None or again_topics is None:
+        detail = "a brief or its topics section is missing"
+    report.check(isinstance(first_topics, dict) and bool(first_topics) and first_topics == again_topics,
+                 "default switches run twice: the two briefs have identical topics sections", detail)
+
+
 def quick(report, defaults, others, overrides):
     runs = [("default switches", {}, "quick-default"),
-            ("other switches", dict(others), "quick-other")]
+            ("other switches", dict(others), "quick-other"),
+            (REPEAT_LABEL, {}, "quick-default-again")]
+    briefs = {}
     for label, flipped, folder in runs:
         parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
         switches = {**defaults, **parameters}
@@ -730,9 +921,12 @@ def quick(report, defaults, others, overrides):
         brief_path.unlink(missing_ok=True)  # a stale brief must never pass
         ok, _, _ = run_notebook(report, label, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         brief = read_brief(report, label, brief_path) if ok else None
-        if brief is not None:
+        briefs[label] = brief
+        if brief is not None and label != REPEAT_LABEL:
             check_brief(report, label, brief, switches)
             check_sentiment(report, label, brief, switches, full_run=False)
+            check_topics(report, label, brief, switches, full_run=False)
+    compare_topics(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
 
 
 def full(report, defaults, overrides):
@@ -755,6 +949,7 @@ def full(report, defaults, overrides):
         return
     check_brief(report, "full run", brief, switches)
     check_sentiment(report, "full run", brief, switches, full_run=True)
+    check_topics(report, "full run", brief, switches, full_run=True)
     dataset = brief.get("dataset") or {}
     sample, cleaning = dataset.get("sample") or {}, dataset.get("cleaning") or {}
     btc = dataset.get("btc_mentions") or {}
@@ -771,6 +966,7 @@ def full(report, defaults, overrides):
     print(f"  empty after cleaning:          {cleaning.get('n_empty_after')}")
     print(f"  run time:                      {seconds:.1f} s")
     print_sentiment(brief)
+    print_topics(brief)
 
 
 def main():
@@ -787,6 +983,7 @@ def main():
     check_notebook_files(report)
     defaults, others = read_switches(report)
     check_sentiment_switches(report, defaults)
+    check_topic_switches(report, defaults)
     check_numbering_rules(report)
     check_text(report)
     unknown = [name for name in overrides if name not in defaults]
