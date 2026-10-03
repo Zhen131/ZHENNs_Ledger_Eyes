@@ -1,0 +1,37 @@
+# Shared environment for the helper scripts. Source it, do not run it.
+# Keeps every download and cache under data/ and switches off anything
+# that would send data anywhere other than the package index, Hugging Face
+# or the NLTK data server.
+
+if [ -z "${BASH_SOURCE[0]:-}" ]; then
+    echo "scripts/env.sh must be sourced from bash" >&2
+    return 1
+fi
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export REPO_DIR
+export EYES_PYTHON="${EYES_PYTHON:-$REPO_DIR/.venv/bin/python}"
+
+mkdir -p "$REPO_DIR/data/hf_home" "$REPO_DIR/data/nltk_data" "$REPO_DIR/data/pip-cache" "$REPO_DIR/data/mpl-config"
+
+# Hugging Face: cache under data/, never send a stored token, no telemetry,
+# plain HTTPS downloads instead of the optional Xet client.
+export HF_HOME="$REPO_DIR/data/hf_home"
+export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+export HF_HUB_DISABLE_TELEMETRY=1
+export HF_HUB_DISABLE_XET=1
+export DO_NOT_TRACK=1
+
+# NLTK resources go to data/nltk_data.
+export NLTK_DATA="$REPO_DIR/data/nltk_data"
+
+# pip: cache under data/, no self version check.
+export PIP_CACHE_DIR="$REPO_DIR/data/pip-cache"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Matplotlib font cache under data/.
+export MPLCONFIGDIR="$REPO_DIR/data/mpl-config"
+
+# IPython profile and Jupyter runtime files under data/.
+mkdir -p "$REPO_DIR/data/ipython" "$REPO_DIR/data/jupyter-runtime"
+export IPYTHONDIR="$REPO_DIR/data/ipython"
+export JUPYTER_RUNTIME_DIR="$REPO_DIR/data/jupyter-runtime"

@@ -1,0 +1,23 @@
+# Python 3.12. Every version is pinned; the notebook's install cell uses the same pins.
+# Install: .venv/bin/pip install -r requirements.txt
+
+# Used by the notebook
+pandas==2.2.3
+numpy==2.2.6
+scikit-learn==1.6.1
+nltk==3.9.4
+openpyxl==3.1.5
+pyarrow==25.0.1
+huggingface_hub==0.36.2
+fsspec==2026.9.0
+matplotlib==3.10.9
+beautifulsoup4==4.15.0
+tqdm==4.70.1
+emoji==2.16.0
+contractions==0.1.73
+
+# Used by the checks and the notebook build
+jupytext==1.19.5
+papermill==2.7.0
+ipykernel==7.4.0
+nbformat==5.11.1
