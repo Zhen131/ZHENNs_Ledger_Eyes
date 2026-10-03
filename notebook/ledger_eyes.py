@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · Save the brief.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · Save the brief.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 保存简报。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 保存简报。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -44,6 +44,9 @@ BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step
 TOPIC_SCOPE = "btc"  # default: "btc" (every post that mentions bitcoin or btc); two-state, other: "all" (posts about all coins)
 TOPIC_MAX_POSTS = 100000  # default: 100000; or any positive integer (most posts in the topic table of chapter 9; above it, a random draw with RANDOM_SEED)
 N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer only when the table has fewer distinct post vectors)
+BULLISH_THRESHOLD = 0.7  # default: 0.7; or any number from 0 to 1, not below BEARISH_THRESHOLD (chapter 10: a probability of bullish at or above it counts as bullish)
+BEARISH_THRESHOLD = 0.3  # default: 0.3; or any number from 0 to 1, not above BULLISH_THRESHOLD (chapter 10: at or below it counts as bearish; in between is unsure)
+MIN_TOPIC_POSTS = 200  # default: 200; or any positive integer (chapter 10 marks a topic with fewer posts than this as too small)
 
 # %% [markdown]
 # ## Setup
@@ -134,6 +137,13 @@ if TOPIC_SCOPE not in ("btc", "all"):
 for name, value in [("TOPIC_MAX_POSTS", TOPIC_MAX_POSTS), ("N_TOPICS", N_TOPICS)]:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
+for name, value in [("BULLISH_THRESHOLD", BULLISH_THRESHOLD), ("BEARISH_THRESHOLD", BEARISH_THRESHOLD)]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+        raise ValueError(f"{name} must be a number from 0 to 1, got {value!r}")
+if BEARISH_THRESHOLD > BULLISH_THRESHOLD:
+    raise ValueError(f"BEARISH_THRESHOLD ({BEARISH_THRESHOLD!r}) must not be above BULLISH_THRESHOLD ({BULLISH_THRESHOLD!r})")
+if isinstance(MIN_TOPIC_POSTS, bool) or not isinstance(MIN_TOPIC_POSTS, int) or MIN_TOPIC_POSTS < 1:
+    raise ValueError(f"MIN_TOPIC_POSTS must be a positive integer, got {MIN_TOPIC_POSTS!r}")
 print("Switches look fine.")
 
 # %% [markdown]
@@ -1938,6 +1948,256 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
     print(f"Topic {topic}: {item['name']}  ({item['n_posts']:,} posts, {item['share']:.1%})")
     for quote in item["quotes"]:
         print(f"    [{LABEL_NAMES[quote['label']]}, {quote['post_id']}] {quote['text']}")
+
+# %% [markdown]
+# ## 10. Why: which topics lean bullish, which lean bearish?
+#
+# Chapters 4 to 8 tell bullish from bearish posts; chapter 9 sorts posts into topics. This chapter crosses the two: is each topic more bullish or more bearish than the posts as a whole? The answer is one table, from the most bullish topic to the most bearish one.
+#
+# **Bullish share.** In a group of posts: the bullish posts divided by the bullish plus the bearish posts. Neutral posts are left out of both. Every topic gets two bullish shares:
+#
+# - **by label**: from the labels that come with the dataset, over every post of the topic in `topic_posts`. The topic post table keeps the natural class shares (unlike the working sample, which has as many posts in every class), so this is the real share. Next to it: the number of bearish, neutral and bullish posts, and the difference from the whole topic post table in **percentage points** (positive = more bullish than all topic posts together, negative = more bearish).
+# - **by model**: from the model chosen in chapter 7, through `sentiment_proba`. It scores every post of the topic table, neutral ones included, and gives each a probability of bullish. A probability of at least `BULLISH_THRESHOLD` (0.7) counts as bullish, one of at most `BEARISH_THRESHOLD` (0.3) as bearish, and anything in between as **unsure**: the model is not confident enough, and the post is not forced to either side. Unsure posts are left out of the model's bullish share; their share of all the topic's posts is reported next to it. When the two thresholds are equal, a probability exactly equal to them counts as bullish.
+#
+# The row **all** does the same for the whole topic post table and is the baseline.
+#
+# **Too few posts.** A topic with fewer than `MIN_TOPIC_POSTS` posts is marked: its shares rest on so few posts that chance alone can move them a lot. Why 200 by default: about half of the Bitcoin posts are neutral, so a topic of 200 posts has about 100 bullish or bearish posts, and with 100 posts a bullish share near one half can be off by about 10 percentage points by chance (two standard errors: 2 × √(0.5 × 0.5 / 100) = 0.1). A smaller topic's lean says little. This is a rule of thumb for the default, not a statistical test.
+#
+# A share whose denominator is 0 (for example a topic in which the model calls no post bullish or bearish) cannot be computed: it is "—" in the table and `null` in the brief, and so is every difference computed from it.
+#
+# ***
+#
+# ## 10. 为什么：哪些话题偏多，哪些偏空？
+#
+# 第 4～8 章分辨看多和看空，第 9 章把帖子分成话题。这一章把两者交叉起来：每个话题比全体帖子更偏多还是更偏空？答案是一张表，从最偏多的话题排到最偏空的话题。
+#
+# **看多比例。** 一堆帖子里，看多的条数除以「看多 + 看空」的条数，中性不算进去。每个话题算两种看多比例：
+#
+# - **按标签**：用数据集自带的标签，算这个话题在 `topic_posts` 里的全部帖子。话题用的帖子表保持自然的类别占比（不像工作样本那样每类一样多），所以这是真实的比例。旁边列出看空、中性、看多各几条，以及它和整张话题帖子表之差，单位是**百分点**（正数 = 比全体话题帖子更偏多，负数 = 更偏空）。
+# - **按模型**：用第 7 章选中的模型，通过 `sentiment_proba` 打分。话题表里每条帖子都打分，中性帖也打，每条得到一个「看多的概率」。概率不低于 `BULLISH_THRESHOLD`（0.7）算看多，不高于 `BEARISH_THRESHOLD`（0.3）算看空，夹在中间的算**说不清**：模型把握不够，不硬判到哪一边。说不清的帖子不进模型的看多比例；它们占这个话题全部帖子的比例另外列出。两个门槛相等时，正好等于门槛的帖子算看多。
+#
+# **all** 那一行对整张话题帖子表做同样的计算，作为基准。
+#
+# **帖子太少。** 帖子数少于 `MIN_TOPIC_POSTS` 的话题会被标出来：它的比例建立在很少几条帖子上，光靠偶然就能变很多。默认为什么是 200：提到比特币的帖子大约一半是中性，所以 200 条帖子的话题大约有 100 条看多或看空；只有 100 条时，一个接近一半的看多比例，光靠偶然就可能差 10 个百分点左右（两个标准误：2 × √(0.5 × 0.5 / 100) = 0.1）。再小的话题，偏多偏空就说明不了什么。这只是给默认值的经验算法，不是统计检验。
+#
+# 分母为 0 的比例（例如模型在某个话题里一条看多、看空都没判出来）算不出来：表里显示「—」，简报里写 `null`，由它算出的差值也一样。
+
+# %% [markdown]
+# ### Three things to keep in mind
+#
+# **Scoring neutral posts is using the model beyond what it learned.** With the default `N_CLASSES = 2` the models learned only bullish and bearish posts and never saw a neutral one. Scoring neutral posts uses the model outside what it was trained for: many of them land between the two thresholds and become unsure, but some are pushed to one side. The by-label share leaves neutral posts out by definition; the by-model share leaves out only what the model itself is unsure about. With `N_CLASSES = 3` the model has a neutral class; its probability of bullish is then taken as bullish ÷ (bullish + bearish), which asks the same question as with two classes (bullish or bearish?), so that a high neutral probability does not drag a post towards bearish. When both are 0, the value is 0.5.
+#
+# **Test posts are scored here, and that is fine.** The topic post table contains posts of chapter 5's test set (those that mention Bitcoin). Chapter 8 has finished evaluating; here those posts are only scored and counted. Nothing in this chapter trains, tunes or chooses a model, a threshold or anything else, and nothing flows back into earlier chapters, so the rule "the test set is used only in the evaluation chapter" keeps its purpose: no decision is made after looking at the test results.
+#
+# **A fair comparison of model and labels.** The topic post table also contains posts of the training set, whose labels the model has learned; on them, agreeing with the labels is partly repeating the answers. So the two shares are compared only on posts the model never saw: posts whose `post_id` is not in `train_post_ids` (validation and test posts, and posts that never entered the working sample) and whose label is bullish or bearish. On these posts both bullish shares are computed as above, and the difference is reported in percentage points as **model minus label** (positive = the model is more bullish than the labels). A post whose text is identical to a training post but whose id is different counts as unseen; how many such posts are in the comparison is recorded in the brief.
+#
+# ***
+#
+# ### 三点说明
+#
+# **给中性帖打分，是把模型拿来用在它没学过的地方。** 默认 `N_CLASSES = 2` 时，模型只学过看多和看空，从没见过中性帖。给中性帖打分超出了它训练时学的范围：很多中性帖会落在两个门槛之间、归为说不清，但也有一些会被推到某一边。按标签的看多比例按定义就不算中性帖；按模型的看多比例只去掉模型自己说不清的那些。`N_CLASSES = 3` 时模型有中性这一类，这时「看多的概率」取 看多 ÷（看多 + 看空），问的和两类时是同一个问题（看多还是看空？），中性概率高的帖子就不会因此被拉向看空。两者都是 0 时，取 0.5。
+#
+# **这里给测试帖打分，没有问题。** 话题用的帖子表里有第 5 章测试集的帖子（提到比特币的那些）。第 8 章已经评估完；这里只是给它们打分、计数。本章不训练、不调参，也不选任何模型、门槛或别的东西，结果也不回流到前面的章节，所以「测试集只在评估章用」这条规矩的本意没有被破坏：没有任何决定是看了测试结果之后才做的。
+#
+# **模型和标签的公平比较。** 话题帖子表里也有训练集的帖子，模型学过它们的标签；在这些帖子上和标签一致，一部分是在背答案。所以两种比例只在模型没见过的帖子上比：`post_id` 不在 `train_post_ids` 里（验证集、测试集，以及根本没进工作样本的帖子），而且标签是看多或看空。在这批帖子上照上面的算法分别算两种看多比例，差值用百分点报，方向是**按模型的减去按标签的**（正数 = 模型比标签更偏多）。文字和某条训练帖一模一样、但编号不同的帖子，算没见过；这样的帖子有多少条进了比较，记在简报里。
+
+# %% [markdown]
+# ### Scoring the topic posts
+#
+# `sentiment_proba` scores the `clean_text` of every post in `topic_posts`, and the probability of bullish is turned into a call: bullish, bearish or unsure. The calls go into a table of their own, `why_posts` (`post_id`, `label`, `topic`, `bullish_proba`, `model_call`, `seen_in_training`, `in_fair_comparison`), so that `topic_posts` stays as chapter 9 left it. The cell prints how long the scoring took and how many posts got each call.
+#
+# ***
+#
+# ### 给话题帖子打分
+#
+# `sentiment_proba` 给 `topic_posts` 里每条帖子的 `clean_text` 打分，「看多的概率」再换成一个判断：看多、看空或说不清。判断放进一张单独的表 `why_posts`（`post_id`、`label`、`topic`、`bullish_proba`、`model_call`、`seen_in_training`、`in_fair_comparison`），`topic_posts` 保持第 9 章留下的样子。这一格打印打分花了多久，以及三种判断各几条。
+
+# %%
+# Score every topic post with the chosen model and turn its probability of bullish into a call.
+MODEL_CALLS = ["bullish", "bearish", "unsure"]  # the model's calls, in this order everywhere
+
+
+def bullish_probability(proba):
+    """Probability of bullish from sentiment_proba's output.
+
+    Two classes: the bullish column. Three classes: bullish / (bullish + bearish), 0.5 when both are 0.
+    """
+    bullish = proba[:, BULLISH_COLUMN].astype("float64")
+    if len(SENTIMENT_PROBA_LABELS) == 2:
+        return bullish
+    bearish = proba[:, SENTIMENT_PROBA_LABELS.index(0)].astype("float64")
+    both = bullish + bearish
+    return np.divide(bullish, both, out=np.full(len(both), 0.5), where=both > 0)
+
+
+def model_call(probability):
+    """'bullish' at or above BULLISH_THRESHOLD, otherwise 'bearish' at or below BEARISH_THRESHOLD, otherwise 'unsure'."""
+    probability = np.asarray(probability, dtype="float64")
+    return np.where(probability >= BULLISH_THRESHOLD, "bullish",
+                    np.where(probability <= BEARISH_THRESHOLD, "bearish", "unsure"))
+
+
+scoring_started = time.perf_counter()
+topic_proba = sentiment_proba(topic_posts["clean_text"])  # every topic post, neutral ones included
+scoring_seconds = time.perf_counter() - scoring_started
+
+why_posts = topic_posts[["post_id", "label", "topic"]].copy()  # a table of its own; topic_posts stays unchanged
+why_posts["bullish_proba"] = bullish_probability(topic_proba)
+why_posts["model_call"] = model_call(why_posts["bullish_proba"])
+why_posts["seen_in_training"] = why_posts["post_id"].isin(train_post_ids)  # the models learned these labels
+why_posts["in_fair_comparison"] = ~why_posts["seen_in_training"] & why_posts["label"].isin([0, 2])
+print(f"Scored {len(why_posts):,} topic posts with {selected_model_name} in {scoring_seconds:.1f} s; "
+      f"{int(why_posts['seen_in_training'].sum()):,} of them are training posts")
+why_posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0).rename("posts").rename_axis("model call")
+
+# %% [markdown]
+# ### The topic × bullish table
+#
+# First the row "all" (every topic post), then one row per topic, from the most bullish to the most bearish by label; topics whose by-label share cannot be computed come last, and equal shares keep the topic order. Columns:
+#
+# - **posts**, **too few**: the topic's posts, and whether they are fewer than `MIN_TOPIC_POSTS`;
+# - **bearish**, **neutral**, **bullish**: posts per label;
+# - **label share**, **vs all (pp)**: the bullish share by label, and its difference from the row "all" in percentage points;
+# - **model bullish**, **model bearish**, **unsure**, **model share**, **unsure share**: the model's calls, its bullish share, and the unsure posts as a share of all the topic's posts;
+# - **fair posts**, **fair label**, **fair model**, **model − label (pp)**: the fair comparison on unseen bullish or bearish posts.
+#
+# Everything goes into the brief's `why` section, together with the model, the thresholds and the number of posts in the fair comparison whose text equals a training post.
+#
+# ***
+#
+# ### 「话题 × 多空」表
+#
+# 第一行是 all（全部话题帖子），然后每个话题一行，按「按标签」的看多比例从最偏多排到最偏空；按标签的比例算不出来的话题排在最后，比例相同的按话题编号排。各列：
+#
+# - **posts**、**too few**：这个话题的帖子数，以及是否少于 `MIN_TOPIC_POSTS`；
+# - **bearish**、**neutral**、**bullish**：按标签各几条；
+# - **label share**、**vs all (pp)**：按标签的看多比例，以及它和 all 那一行之差（百分点）；
+# - **model bullish**、**model bearish**、**unsure**、**model share**、**unsure share**：模型判看多、判看空、说不清各几条，按模型的看多比例，以及说不清占这个话题全部帖子的比例；
+# - **fair posts**、**fair label**、**fair model**、**model − label (pp)**：在模型没见过、标签为看多或看空的帖子上的公平比较。
+#
+# 这些都写进简报的 `why` 节，连同用的模型、两个门槛，以及参加公平比较的帖子里文字和某条训练帖相同的有几条。
+
+# %%
+# Bullish shares by label and by model for every topic and for the whole topic table; record them in the brief.
+def bullish_share(bullish, bearish):
+    """Bullish / (bullish + bearish); None when there is neither."""
+    return safe_ratio(int(bullish), int(bullish) + int(bearish))
+
+
+def percentage_points(share, baseline):
+    """(share - baseline) in percentage points; None when either share is missing."""
+    return None if share is None or baseline is None else 100 * (share - baseline)
+
+
+def why_row(posts):
+    """Label counts and bullish share, model calls and bullish share, and the fair comparison for rows of why_posts."""
+    label_counts = posts["label"].value_counts().reindex(list(LABEL_NAMES), fill_value=0)  # labels 0, 1, 2
+    calls = posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0)
+    fair = posts[posts["in_fair_comparison"]]  # unseen posts labelled bearish or bullish
+    fair_labels = fair["label"].value_counts().reindex([0, 2], fill_value=0)
+    fair_calls = fair["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0)
+    fair_label_share = bullish_share(fair_labels[2], fair_labels[0])
+    fair_model_share = bullish_share(fair_calls["bullish"], fair_calls["bearish"])
+    return {
+        "n_posts": int(len(posts)),
+        "label_counts": {str(label): int(count) for label, count in label_counts.items()},
+        "label_bullish_share": bullish_share(label_counts[2], label_counts[0]),
+        "model_counts": {call: int(count) for call, count in calls.items()},
+        "model_bullish_share": bullish_share(calls["bullish"], calls["bearish"]),
+        "model_unsure_share": safe_ratio(int(calls["unsure"]), len(posts)),
+        "fair": {
+            "n_posts": int(len(fair)),
+            "label_counts": {str(label): int(count) for label, count in fair_labels.items()},
+            "label_bullish_share": fair_label_share,
+            "model_counts": {call: int(count) for call, count in fair_calls.items()},
+            "model_bullish_share": fair_model_share,
+            "model_minus_label_pp": percentage_points(fair_model_share, fair_label_share),
+        },
+    }
+
+
+why_overall = why_row(why_posts)  # the whole topic post table: the baseline
+topic_names = {item["topic"]: item["name"] for item in brief["topics"]["topics"]}
+why_topics = []
+for topic in range(n_topics):
+    row = why_row(why_posts[why_posts["topic"] == topic])
+    why_topics.append({
+        "topic": topic,
+        "name": topic_names[topic],
+        "too_few_posts": row["n_posts"] < MIN_TOPIC_POSTS,
+        **row,
+        "label_vs_overall_pp": percentage_points(row["label_bullish_share"], why_overall["label_bullish_share"]),
+    })
+# Most bullish first by label; a share that cannot be computed goes last; ties keep the topic order.
+why_topics.sort(key=lambda row: (row["label_bullish_share"] is None, -(row["label_bullish_share"] or 0.0), row["topic"]))
+
+# The fair comparison, counted a second way from the ids, and its posts whose text equals a training post.
+labelled_ids = set(topic_posts.loc[topic_posts["label"].isin([0, 2]), "post_id"])
+fair_posts = topic_posts[why_posts["in_fair_comparison"].to_numpy()]
+brief["why"] = {
+    "post_table": "topic_posts",
+    "topic_column": "topic",
+    "model": selected_model_name,
+    "scoring": {
+        "function": "sentiment_proba",
+        "text": "clean_text",
+        "bullish_probability": ("the bullish column" if len(SENTIMENT_PROBA_LABELS) == 2
+                                else "bullish / (bullish + bearish); 0.5 when both are 0"),
+        "n_scored": int(topic_proba.shape[0]),
+        "seconds": scoring_seconds,
+    },
+    "thresholds": {"bullish_at_or_above": BULLISH_THRESHOLD, "bearish_at_or_below": BEARISH_THRESHOLD},
+    "min_topic_posts": MIN_TOPIC_POSTS,
+    "bullish_share": "bullish / (bullish + bearish); neutral posts (by label) and unsure posts (by model) are left out",
+    "differences": "percentage points; label_vs_overall_pp is the topic minus all topic posts, "
+                   "model_minus_label_pp is the model minus the labels",
+    "fair_comparison": {
+        "posts": "post_id not in train_post_ids and label bearish or bullish",
+        "train_ids": "train_post_ids",
+        "n_topic_posts_in_training_set": int(why_posts["seen_in_training"].sum()),
+        "n_unseen_bullish_or_bearish": len(labelled_ids - train_post_ids),
+        "n_same_text_as_a_training_post": int(fair_posts["text"].isin(set(train_df["text"])).sum()),
+        "n_same_clean_text_as_a_training_post": int(fair_posts["clean_text"].isin(set(train_df["clean_text"])).sum()),
+    },
+    "order": "topics by label_bullish_share from highest to lowest; null last; ties by topic number",
+    "overall": why_overall,
+    "topics": why_topics,
+}
+
+
+def shown_share(value):
+    """A share with three decimals, or a dash when it cannot be computed."""
+    return "—" if value is None else round(value, 3)
+
+
+def shown_points(value):
+    """Percentage points with one decimal and a sign, or a dash when they cannot be computed."""
+    return "—" if value is None else f"{value:+.1f}"
+
+
+def table_row(row, topic, name, too_few, versus_all):
+    """One line of the topic × bullish table."""
+    return {
+        "topic": topic, "name": name, "posts": row["n_posts"], "too few": too_few,
+        "bearish": row["label_counts"]["0"], "neutral": row["label_counts"]["1"], "bullish": row["label_counts"]["2"],
+        "label share": shown_share(row["label_bullish_share"]), "vs all (pp)": versus_all,
+        "model bullish": row["model_counts"]["bullish"], "model bearish": row["model_counts"]["bearish"],
+        "unsure": row["model_counts"]["unsure"], "model share": shown_share(row["model_bullish_share"]),
+        "unsure share": shown_share(row["model_unsure_share"]),
+        "fair posts": row["fair"]["n_posts"], "fair label": shown_share(row["fair"]["label_bullish_share"]),
+        "fair model": shown_share(row["fair"]["model_bullish_share"]),
+        "model − label (pp)": shown_points(row["fair"]["model_minus_label_pp"]),
+    }
+
+
+why_table = pd.DataFrame(
+    [table_row(why_overall, "all", "all topic posts", "", "")]
+    + [table_row(row, row["topic"], row["name"], "yes" if row["too_few_posts"] else "no",
+                 shown_points(row["label_vs_overall_pp"])) for row in why_topics]
+).set_index("topic")
+print(f"Model: {selected_model_name}; bullish at or above {BULLISH_THRESHOLD}, bearish at or below {BEARISH_THRESHOLD}; "
+      f"too few below {MIN_TOPIC_POSTS} posts; fair comparison: {why_overall['fair']['n_posts']:,} posts")
+why_table
 
 # %% [markdown]
 # ## Save the brief
