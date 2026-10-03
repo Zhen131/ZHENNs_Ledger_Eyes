@@ -1,0 +1,13 @@
+# Datasets, caches, executed notebooks and every other run output
+data/
+
+# Local Python environment
+.venv/
+
+# Python and Jupyter leftovers
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
