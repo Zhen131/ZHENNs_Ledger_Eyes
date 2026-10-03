@@ -51,13 +51,13 @@ MIN_TOPIC_POSTS = 200  # default: 200; or any positive integer (chapter 10 marks
 # %% [markdown]
 # ## Setup
 #
-# The first cell below installs the packages that Google Colab does not ship with (for example `emoji` and `contractions`); packages that are already there are left alone. All installs happen in this one cell, before anything is imported, so Colab never asks for a restart halfway through. The cell after it prints the versions of the key packages, which helps when results differ between machines.
+# The first cell below installs the packages that Google Colab does not ship with (for example `emoji` and `contractions`); packages that are already there are left alone. All installs happen in this one cell, before anything is imported, so Colab never asks for a restart halfway through. The same cell also switches off the usage statistics and version checks of Gradio, the package behind the panel in the last chapter, before anything can import it. The cell after it prints the versions of the key packages, which helps when results differ between machines.
 #
 # ***
 #
 # ## 准备
 #
-# 下面第一格安装 Google Colab 没有自带的包（例如 `emoji`、`contractions`），已经有的包不动。所有安装都集中在这一格、排在一切 import 之前，这样 Colab 不会在半路要求重启。再下一格打印关键包的版本，不同机器跑出的结果不一样时方便对照。
+# 下面第一格安装 Google Colab 没有自带的包（例如 `emoji`、`contractions`），已经有的包不动。所有安装都集中在这一格、排在一切 import 之前，这样 Colab 不会在半路要求重启。这一格还会在任何代码 import Gradio 之前，关掉它的使用统计和版本查询；Gradio 是最后一章那块面板用的包。再下一格打印关键包的版本，不同机器跑出的结果不一样时方便对照。
 
 # %%
 # Install missing packages before anything else is imported.
@@ -69,6 +69,9 @@ import sys  # standard library: the Python that runs this notebook
 # Never send a Hugging Face token that may be stored on this machine, and switch off Hugging Face telemetry.
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+# Gradio (the panel of the last chapter) sends usage statistics and version checks unless this is "False".
+# Set before anything imports gradio, and not left to an existing setting.
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
 # Import name -> pinned pip requirement. Only the missing ones are installed.
 REQUIRED_PACKAGES = {
@@ -88,6 +91,8 @@ REQUIRED_PACKAGES = {
     "tokenizers": "tokenizers==0.22.2",
     "tensorflow": "tensorflow==2.20.0",
     "keras": "keras==3.15.1",
+    "jsonschema": "jsonschema==4.26.0",
+    "gradio": "gradio==6.17.3",
 }
 missing = [requirement for module, requirement in REQUIRED_PACKAGES.items() if importlib.util.find_spec(module) is None]
 if missing:
@@ -103,7 +108,7 @@ from importlib.metadata import version  # standard library: version of an instal
 print(f"python {sys.version.split()[0]}")  # Python version
 for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "openpyxl", "pyarrow", "huggingface_hub",
                      "fsspec", "matplotlib", "beautifulsoup4", "tqdm", "emoji", "contractions",
-                     "tokenizers", "tensorflow", "keras"]:
+                     "tokenizers", "tensorflow", "keras", "jsonschema", "gradio"]:
     print(f"{distribution} {version(distribution)}")  # one line per package
 
 # %% [markdown]

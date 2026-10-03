@@ -28,6 +28,11 @@ export NLTK_DATA="$REPO_DIR/data/nltk_data"
 export PIP_CACHE_DIR="$REPO_DIR/data/pip-cache"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Gradio (the notebook's panel): no usage statistics and no version checks; temporary files under data/.
+export GRADIO_ANALYTICS_ENABLED=False
+mkdir -p "$REPO_DIR/data/gradio-tmp"
+export GRADIO_TEMP_DIR="$REPO_DIR/data/gradio-tmp"
+
 # Matplotlib font cache under data/.
 export MPLCONFIGDIR="$REPO_DIR/data/mpl-config"
 

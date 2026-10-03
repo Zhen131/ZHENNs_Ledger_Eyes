@@ -18,6 +18,9 @@ contractions==0.1.73
 tokenizers==0.22.2
 tensorflow==2.20.0
 keras==3.15.1
+# Chapter 11: checking the brief against its rules, and the panel
+jsonschema==4.26.0
+gradio==6.17.3
 # Imported by chapter 9; both come with scikit-learn, so the install cell does not list them
 scipy==1.18.1
 threadpoolctl==3.7.0
