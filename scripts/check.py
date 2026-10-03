@@ -42,9 +42,14 @@ REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS
 
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
+# Private numbering is caught in the forms the log uses: file-name prefixes (two digits,
+# an optional letter, "_W" and a week), review codes (two digits, a letter A-D, "-R"),
+# week codes and question codes. A bare "two digits and a letter" is not flagged on
+# purpose, because it collides with normal notation such as 50D (50 days) or 10B (10 billion).
 FORBIDDEN_PATTERNS = [
-    (r"\b[0-9]{2}[A-D](?:-R)?\b", "private batch code (two digits and a letter A-D)"),
-    (r"\bW[0-9]{1,2}\b", "private week code (W and a number)"),
+    (r"\b[0-9]{2}[A-DQ]?(?:-R)?_W[0-9]{1,2}\b", "private log file prefix (two digits, optional letter, _W and a week)"),
+    (r"\b[0-9]{2}[A-D]-R\b", "private review code (two digits, a letter A-D and -R)"),
+    (r"\bW[0-9]{2}\b", "private week code (W and two digits)"),
     (r"\bQ[0-9]{2}\b", "private question code (Q and two digits)"),
     ("\u7b2c\\s*[0-9]+\\s*\u5468", "private week number written in Chinese"),
     (r"(?i)\bc[l]aude\b", "assistant name"),
@@ -281,20 +286,29 @@ def run_notebook(report, label, parameters, output):
     return not error, seconds, load_lines
 
 
+def shown(path):
+    """Path for messages: relative to the repository when inside it, absolute otherwise."""
+    path = Path(path).resolve()
+    try:
+        return str(path.relative_to(REPO_DIR))
+    except ValueError:
+        return str(path)
+
+
 def reject_constant(name):
     raise ValueError(f"non-standard JSON constant {name}")
 
 
 def read_brief(report, label, path):
     if not path.exists():
-        report.check(False, f"{label}: brief saved", f"{path.relative_to(REPO_DIR)} not found")
+        report.check(False, f"{label}: brief saved", f"{shown(path)} not found")
         return None
     try:
         brief = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
     except ValueError as exc:
         report.check(False, f"{label}: brief is valid JSON without NaN or infinity", str(exc))
         return None
-    report.check(True, f"{label}: brief saved as valid JSON without NaN or infinity", str(path.relative_to(REPO_DIR)))
+    report.check(True, f"{label}: brief saved as valid JSON without NaN or infinity", shown(path))
     return brief
 
 
