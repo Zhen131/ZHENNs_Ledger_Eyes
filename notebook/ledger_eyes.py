@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · Save the brief.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · Save the brief.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 保存简报。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 保存简报。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -41,6 +41,9 @@ BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (target vocabula
 VOCAB_SIZE = 1000  # default: 1000; or any positive integer (most words each vectorizer of chapter 6 keeps)
 EPOCHS = 5  # default: 5; or any positive integer (passes over the training set in chapter 7)
 BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step in chapter 7)
+TOPIC_SCOPE = "btc"  # default: "btc" (every post that mentions bitcoin or btc); two-state, other: "all" (posts about all coins)
+TOPIC_MAX_POSTS = 100000  # default: 100000; or any positive integer (most posts in the topic table of chapter 9; above it, a random draw with RANDOM_SEED)
+N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer only when the table has fewer distinct posts)
 
 # %% [markdown]
 # ## Setup
@@ -124,6 +127,11 @@ for name, value in [("BTC_ONLY", BTC_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WORDS), 
         raise ValueError(f"{name} must be True or False, got {value!r}")
 for name, value in [("BPE_VOCAB_SIZE", BPE_VOCAB_SIZE), ("VOCAB_SIZE", VOCAB_SIZE), ("EPOCHS", EPOCHS),
                     ("BATCH_SIZE", BATCH_SIZE)]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+if TOPIC_SCOPE not in ("btc", "all"):
+    raise ValueError(f'TOPIC_SCOPE must be "btc" or "all", got {TOPIC_SCOPE!r}')
+for name, value in [("TOPIC_MAX_POSTS", TOPIC_MAX_POSTS), ("N_TOPICS", N_TOPICS)]:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
 print("Switches look fine.")
@@ -1631,6 +1639,301 @@ scoring_check = {
 }
 brief["sentiment"]["scoring"]["check"] = scoring_check
 scoring_check
+
+# %% [markdown]
+# ## 9. Topics: what are the posts about?
+#
+# Chapters 4 to 8 asked *bullish or bearish?* This chapter asks *about what?* It sorts posts into a few groups by meaning, called **topics**, names every topic after its most typical words, and reports how many posts each topic holds, together with a few of its posts in their original words. The data has no topic labels, so nothing here is checked against labels and nothing gets a score: whether the topics make sense is for a person to judge by reading the table at the end of the chapter.
+#
+# **Which posts.** Topics use a table of their own, `topic_posts`, taken from the full table `df_all` and not from the working sample. The working sample has the same number of posts in every class, which changes the class shares; topics, and the chapter that will compare bullish and bearish posts per topic, need the natural shares. With the default `TOPIC_SCOPE = "btc"` the table holds every post that mentions Bitcoin, in all three classes, neutral included; with `TOPIC_SCOPE = "all"` it holds posts about all coins. When more posts qualify than `TOPIC_MAX_POSTS`, a plain random draw with `RANDOM_SEED` keeps that many, which leaves the class shares as they are up to chance. The switches `N_CLASSES` and `BTC_ONLY` only describe the working sample and do not touch this table.
+#
+# **How.** The posts are cleaned with `clean_texts`, the same function as in chapter 3. A TF-IDF vectorizer of their own (not one of chapter 6's) turns them into vectors, and **KMeans** splits the vectors into `N_TOPICS` groups. Same input, same switches: same topics on every run.
+#
+# ***
+#
+# ## 9. 话题：帖子都在聊什么？
+#
+# 第 4～8 章问的是「看多还是看空」，这一章问「在聊什么」：把帖子按意思分成几堆，每一堆叫一个**话题**；每个话题用它最有代表性的几个词起名，报它有多少条帖子，再附几条原话。数据里没有话题标签，所以这里没有拿标签来核对的东西，也不打分；话题分得好不好，要由人读本章最后那张表来判断。
+#
+# **用哪些帖子。** 话题有自己的一张表 `topic_posts`，从全量表 `df_all` 里取，不从工作样本取。工作样本每一类抽得一样多，类别占比被改过；话题，以及后面要按话题比较看多看空的那一章，要的是自然的占比。默认 `TOPIC_SCOPE = "btc"`：表里是提到比特币的全部帖子，三类都要，含中性；改成 `"all"` 就是全部币种的帖子。符合条件的帖子多于 `TOPIC_MAX_POSTS` 时，用 `RANDOM_SEED` 简单随机抽到这么多条，类别占比除了随机波动之外保持原样。`N_CLASSES` 和 `BTC_ONLY` 两个开关只管工作样本，不影响这张表。
+#
+# **怎么分。** 帖子用 `clean_texts` 清洗，和第 3 章是同一个函数。再用一个话题专用的 TF-IDF 向量化器（不是第 6 章那两个）把它们变成向量，最后用 **KMeans** 把向量分成 `N_TOPICS` 堆。输入和开关不变，每次分出来的话题都一样。
+
+# %% [markdown]
+# ### The posts for topics
+#
+# Take the posts in scope from `df_all`, keep at most `TOPIC_MAX_POSTS` of them (a random draw with `RANDOM_SEED`, put back into file order), and keep the columns `post_id`, `text`, `label` and `mentions_btc`. With the default switches the table holds exactly the posts that chapter 2 counted as mentioning Bitcoin. The table below gives the posts per class and their shares.
+#
+# ***
+#
+# ### 话题用的帖子
+#
+# 从 `df_all` 里取出范围内的帖子，最多留 `TOPIC_MAX_POSTS` 条（用 `RANDOM_SEED` 随机抽，抽完按文件里的顺序排回去），保留 `post_id`、`text`、`label`、`mentions_btc` 四列。默认开关下，这张表正好是第 2 章数出来的提到比特币的那些帖子。下表是每一类的条数和占比。
+
+# %%
+# Build the topic table from the full table: the posts in scope, at most TOPIC_MAX_POSTS of them.
+topic_pool = df_all[df_all["mentions_btc"]] if TOPIC_SCOPE == "btc" else df_all  # all three classes, natural shares
+n_topic_available = len(topic_pool)
+if n_topic_available > TOPIC_MAX_POSTS:
+    topic_pool = topic_pool.sample(n=TOPIC_MAX_POSTS, random_state=RANDOM_SEED).sort_index()  # random draw, file order
+topic_posts = topic_pool[["post_id", "text", "label", "mentions_btc"]].reset_index(drop=True).copy()  # df_all is unchanged
+
+topic_class_counts = topic_posts["label"].value_counts().reindex(list(LABEL_NAMES), fill_value=0)  # labels 0, 1, 2
+brief["topics"] = {
+    "post_table": "topic_posts",  # name of the table in the notebook
+    "topic_column": "topic",  # its column with the topic of every post
+    "scope": TOPIC_SCOPE,
+    "max_posts": TOPIC_MAX_POSTS,
+    "seed": RANDOM_SEED,
+    "n_available": int(n_topic_available),  # posts in scope before any draw
+    "sampled": bool(n_topic_available > TOPIC_MAX_POSTS),
+    "n_posts": int(len(topic_posts)),
+    "n_unique_post_ids": int(topic_posts["post_id"].nunique()),
+    "class_counts": {str(label): int(count) for label, count in topic_class_counts.items()},
+    "class_shares": {str(label): safe_ratio(int(count), len(topic_posts)) for label, count in topic_class_counts.items()},
+    "n_mentions_btc": int(topic_posts["mentions_btc"].sum()),
+}
+print(f"Topic table: {len(topic_posts):,} of {n_topic_available:,} posts in scope ({TOPIC_SCOPE!r})")
+pd.DataFrame({
+    "meaning": [LABEL_NAMES[label] for label in topic_class_counts.index],
+    "posts": topic_class_counts.values,
+    "share": [brief["topics"]["class_shares"][str(label)] for label in topic_class_counts.index],
+}, index=topic_class_counts.index.rename("label"))
+
+# %% [markdown]
+# ### Cleaning the topic posts
+#
+# The topic posts go through `clean_texts`, the same function and the same switches as the working sample in chapter 3; the result is the column `clean_text`. As a check, every post that is also in the working sample must come out exactly as its `clean_text` there.
+#
+# ***
+#
+# ### 清洗话题用的帖子
+#
+# 话题用的帖子交给 `clean_texts` 清洗，和第 3 章洗工作样本是同一个函数、同一组开关，结果放在 `clean_text` 列。顺便核对：同时也在工作样本里的帖子，洗出来必须和工作样本里的 `clean_text` 一字不差。
+
+# %%
+# Clean the topic posts with clean_texts and compare with the working sample where the posts overlap.
+topic_posts["clean_text"] = clean_texts(topic_posts["text"]).to_numpy()
+overlap = topic_posts[["post_id", "clean_text"]].merge(df[["post_id", "clean_text"]], on="post_id",
+                                                       suffixes=("", "_working_sample"))  # posts in both tables
+same_as_working_sample = bool((overlap["clean_text"] == overlap["clean_text_working_sample"]).all())
+if not same_as_working_sample:
+    raise AssertionError("clean_texts gives the topic posts a different clean_text than the working sample")
+brief["topics"]["cleaning"] = {
+    "function": "clean_texts",
+    "n_empty_after": int((count_words(topic_posts["clean_text"]) == 0).sum()),  # posts with no word left
+    "n_also_in_working_sample": int(len(overlap)),
+    "same_as_working_sample": same_as_working_sample,
+}
+print(brief["topics"]["cleaning"])
+topic_posts[["text", "clean_text"]].head(3)
+
+# %% [markdown]
+# ### TF-IDF vectors for topics
+#
+# A TF-IDF vectorizer of its own learns its vocabulary and word weights from the whole topic table and keeps the `TOPIC_VOCAB_SIZE` most frequent words (1000, as in the course). It is separate from the two vectorizers of chapter 6, which learned from the training set only. Learning from every topic post is fine here: topics have no labels and no test set, so nothing can leak.
+#
+# A few words would turn up in the name of every topic without saying anything about it, so this vectorizer leaves them out (the `clean_text` column keeps them):
+#
+# - with `TOPIC_SCOPE = "btc"`, "bitcoin" and "btc": every post in the table contains one of them;
+# - the negation words that chapter 3 keeps (not, no, nor, never and the "n't" forms): they occur in a large share of posts and carry no subject;
+# - "face": it only says that an emoji showed a face ("face with tears of joy" is cleaned to "face tear joy").
+#
+# A post left without any word of the vocabulary gets a vector of zeros; KMeans still puts it into the topic whose centre is closest.
+#
+# ***
+#
+# ### 话题用的 TF-IDF 向量
+#
+# 一个话题专用的 TF-IDF 向量化器，在整张话题表上学词表和每个词的权重，只留最常见的 `TOPIC_VOCAB_SIZE` 个词（1000，和课堂一样）。它和第 6 章那两个只在训练集上学的向量化器是分开的。在全部话题帖子上学没有问题：话题没有标签，也没有测试集，不存在泄漏。
+#
+# 有几个词会挤进每个话题的名字，却说明不了这个话题在聊什么，所以这个向量化器不收它们（`clean_text` 列里照样留着）：
+#
+# - `TOPIC_SCOPE = "btc"` 时的「bitcoin」「btc」：表里每条帖子都至少有其中一个；
+# - 第 3 章留下来的否定词（not、no、nor、never 以及「n't」那些形式）：出现在很大一部分帖子里，又不指向任何话题；
+# - 「face」：它只说明某个表情是一张脸（「face with tears of joy」洗完是「face tear joy」）。
+#
+# 一个词表里的词都没有的帖子，向量全是 0；KMeans 照样把它归到中心离它最近的那个话题。
+
+# %%
+# Learn the topic vectorizer on the whole topic table, leaving out words that would sit in every topic name.
+from scipy.sparse import csr_matrix  # sparse matrices
+from sklearn.feature_extraction.text import TfidfVectorizer  # TF-IDF weights
+
+TOPIC_VOCAB_SIZE = 1000  # most frequent words the topic vectorizer keeps (as in the course)
+TOPIC_BLOCKED_WORDS = sorted(set(NEGATION_WORDS) | {"face"}
+                             | ({"bitcoin", "btc"} if TOPIC_SCOPE == "btc" else set()))  # left out of topic vectors
+
+topic_vectorizer = TfidfVectorizer(max_features=TOPIC_VOCAB_SIZE, stop_words=TOPIC_BLOCKED_WORDS)
+try:
+    X_topics = topic_vectorizer.fit_transform(topic_posts["clean_text"])  # learns on every topic post
+    topic_words = topic_vectorizer.get_feature_names_out()  # the word of each column
+except ValueError as error:  # a tiny table can be left without a single word; then every vector is empty
+    if "empty vocabulary" not in str(error):
+        raise
+    topic_vectorizer = None
+    X_topics = csr_matrix((len(topic_posts), 0))
+    topic_words = np.array([], dtype=object)
+X_topics.sort_indices()
+posts_without_words = X_topics.getnnz(axis=1) == 0  # all-zero vectors
+brief["topics"]["vectorizer"] = {
+    "kind": "tfidf",
+    "fitted_on": "topic_posts",
+    "fitted_on_n_posts": int(X_topics.shape[0]),
+    "text": "clean_text",
+    "vocab_size_requested": TOPIC_VOCAB_SIZE,
+    "vocab_size": int(X_topics.shape[1]),
+    "blocked_words": TOPIC_BLOCKED_WORDS,
+    "n_posts_without_words": int(posts_without_words.sum()),
+}
+print(f"Topic vectors: {X_topics.shape[0]:,} posts × {X_topics.shape[1]:,} words; "
+      f"{int(posts_without_words.sum()):,} posts have no word of the vocabulary")
+
+# %% [markdown]
+# ### Grouping the posts with KMeans
+#
+# **KMeans** starts with `N_TOPICS` centres and repeats two moves until nothing changes any more: put every post into the group of the centre closest to it, then move every centre to the average position of its group. The result depends on where the centres start, so KMeans starts ten times (`n_init=10`) from different places drawn with `RANDOM_SEED` and keeps the tightest grouping. The column `topic` of `topic_posts` then holds the topic number of every post (0 to `N_TOPICS` − 1, KMeans' own numbering).
+#
+# **Why 8 topics by default.** Few enough that a person can read every topic and its posts in one table, and enough to separate several subjects; with only eight groups in a large table, even a small topic is likely to keep enough posts for the next chapter to compare bullish and bearish posts inside it. Change `N_TOPICS` to try other numbers. A table with fewer distinct post vectors than `N_TOPICS` (only possible with a tiny table) gets as many topics as it has distinct vectors.
+#
+# **Same result on every run.** KMeans adds up numbers in several threads at once, and the order in which the threads finish can change the last digits of the sums, and in rare cases a topic. The fit therefore runs in a single thread. On some machines the maths library behind numpy reports floating-point warnings inside matrix products even though every number is finite; the cell silences numpy's floating-point warnings while it computes and then checks that every centre is a finite number.
+#
+# ***
+#
+# ### 用 KMeans 分堆
+#
+# **KMeans** 先放 `N_TOPICS` 个中心，然后反复做两件事，直到不再变化：把每条帖子归到离它最近的那个中心，再把每个中心挪到它那一堆帖子的平均位置。结果和中心一开始放在哪有关，所以 KMeans 用 `RANDOM_SEED` 换十个不同的起点各跑一遍（`n_init=10`），留下分得最紧的那一次。之后 `topic_posts` 的 `topic` 列就是每条帖子的话题编号（0 到 `N_TOPICS` − 1，沿用 KMeans 自己的编号）。
+#
+# **默认为什么是 8 个话题。** 少到一个人能在一张表里把每个话题和它的原话读完，又多到能分开好几件事；一张大表只分八堆，小的话题多半也留得下足够的帖子，下一章还能在话题里面比较看多和看空。想试别的个数就改 `N_TOPICS`。帖子表里不同的向量比 `N_TOPICS` 还少时（只有表很小时才会这样），话题数就等于不同向量的个数。
+#
+# **每次结果都一样。** KMeans 会用几个线程同时做加法，哪个线程先做完会影响加出来的最后几位小数，极少数情况下还会改变某个话题。所以这一步只用一个线程。有些机器上，numpy 背后的数学库在做矩阵乘法时会报浮点数警告，其实每个数都是有限的；这一格计算时让 numpy 不报这类警告，算完再检查每个中心都是有限的数。
+
+# %%
+# Split the topic vectors into N_TOPICS groups with KMeans, in a single thread so that every run gives the same topics.
+from sklearn.cluster import KMeans  # k-means clustering
+from threadpoolctl import threadpool_limits  # limits the number of threads
+
+TOPIC_N_INIT = 10  # KMeans starts this many times and keeps the tightest grouping
+QUIET_FLOATS = {"divide": "ignore", "over": "ignore", "invalid": "ignore"}  # numpy floating-point warnings off
+
+
+def count_distinct_rows(matrix):
+    """Number of different rows in a sparse CSR matrix with sorted indices."""
+    return len({(matrix.indices[start:end].tobytes(), matrix.data[start:end].tobytes())
+                for start, end in zip(matrix.indptr[:-1], matrix.indptr[1:])})
+
+
+n_distinct_vectors = count_distinct_rows(X_topics)
+n_topics = min(N_TOPICS, n_distinct_vectors)  # fewer topics only when there are fewer distinct vectors
+if n_topics and X_topics.shape[1]:
+    with threadpool_limits(limits=1), np.errstate(**QUIET_FLOATS):
+        topic_model = KMeans(n_clusters=n_topics, n_init=TOPIC_N_INIT, random_state=RANDOM_SEED).fit(X_topics)
+    topic_posts["topic"] = topic_model.labels_.astype("int64")
+    topic_centres = topic_model.cluster_centers_  # one row per topic, one column per word
+else:  # no word at all, or no post: at most one topic, holding every post
+    topic_model = None
+    topic_posts["topic"] = np.zeros(len(topic_posts), dtype="int64")
+    topic_centres = np.zeros((n_topics, X_topics.shape[1]))
+if not np.isfinite(topic_centres).all():
+    raise ValueError("A topic centre holds a value that is not a finite number")
+print(f"{n_topics} topics (asked for {N_TOPICS}; {n_distinct_vectors:,} distinct post vectors)")
+topic_posts["topic"].value_counts().sort_index().rename("posts")
+
+# %% [markdown]
+# ### The topic table
+#
+# For every topic:
+#
+# - **name**: the `TOPIC_NAME_WORDS` words (5) with the largest values in the topic's centre, put together by the program; a person can give the topics better names after reading them;
+# - **posts** and **share**: how many posts of the topic table it holds, and what part of the table that is;
+# - **quotes**: the original text of the `TOPIC_QUOTES` posts (3) closest to the centre, skipping a text that is already shown, with their `post_id` and label.
+#
+# Everything goes into the brief's `topics` section. The table is sorted by size, largest topic first.
+#
+# ***
+#
+# ### 话题表
+#
+# 每个话题给出：
+#
+# - **名字**：中心里数值最大的 `TOPIC_NAME_WORDS` 个词（5 个），由程序拼出来；人读过之后可以起更好的名字；
+# - **帖子数**和**占比**：它有话题表里的多少条帖子，占整张表多少；
+# - **原话**：离中心最近的 `TOPIC_QUOTES` 条帖子（3 条）的原文，已经出现过的文字跳过，附上 `post_id` 和标签。
+#
+# 这些都写进简报的 `topics` 节。下表按大小排，最大的话题在最前面。
+
+# %%
+# Name every topic, count its posts and pick the posts closest to its centre; record everything in the brief.
+TOPIC_NAME_WORDS = 5  # words in a topic name
+TOPIC_QUOTES = 3  # original posts shown per topic
+
+topic_of_post = topic_posts["topic"].to_numpy()
+with np.errstate(**QUIET_FLOATS):
+    squared_lengths = np.asarray(X_topics.multiply(X_topics).sum(axis=1)).ravel()  # |x|^2 of every post vector
+topics = []
+for topic in range(n_topics):
+    members = np.flatnonzero(topic_of_post == topic)  # rows of topic_posts in this topic, file order
+    centre = topic_centres[topic]
+    strongest = np.argsort(-centre, kind="stable")[:TOPIC_NAME_WORDS]  # ties keep vocabulary order
+    top_words = [str(topic_words[column]) for column in strongest if centre[column] > 0]
+    with np.errstate(**QUIET_FLOATS):
+        distances = squared_lengths[members] - 2 * (X_topics[members] @ centre) + centre @ centre  # |x - c|^2
+    if not np.isfinite(distances).all():
+        raise ValueError(f"Topic {topic}: a distance to the centre is not a finite number")
+    quotes, seen_texts = [], set()
+    for row in members[np.lexsort((members, distances))]:  # closest first; ties in file order
+        text = topic_posts.at[row, "text"]
+        if text in seen_texts:
+            continue
+        seen_texts.add(text)
+        quotes.append({"post_id": topic_posts.at[row, "post_id"], "label": int(topic_posts.at[row, "label"]),
+                       "text": text})
+        if len(quotes) == TOPIC_QUOTES:
+            break
+    topics.append({
+        "topic": topic,
+        "name": " / ".join(top_words),
+        "top_words": top_words,
+        "n_posts": int(len(members)),
+        "share": safe_ratio(int(len(members)), len(topic_posts)),
+        "n_posts_without_words": int(posts_without_words[members].sum()),
+        "quotes": quotes,
+    })
+
+brief["topics"].update({
+    "method": "kmeans",
+    "method_settings": {"n_init": TOPIC_N_INIT, "random_state": RANDOM_SEED, "threads": 1},
+    "n_topics_requested": N_TOPICS,
+    "n_distinct_vectors": int(n_distinct_vectors),
+    "n_topics": int(n_topics),
+    "name_words": TOPIC_NAME_WORDS,
+    "quotes_per_topic": TOPIC_QUOTES,
+    "n_posts_with_topic": int(topic_posts["topic"].notna().sum()),
+    "topics": topics,
+})
+topic_table = pd.DataFrame([{"topic": item["topic"], "name": item["name"], "posts": item["n_posts"],
+                             "share": item["share"]} for item in topics],
+                           columns=["topic", "name", "posts", "share"]).set_index("topic")
+topic_table.sort_values("posts", ascending=False, kind="stable")
+
+# %% [markdown]
+# ### A few posts from every topic
+#
+# The quotes, topic by topic in the same order as the table above. They are the posts' original words, before cleaning.
+#
+# ***
+#
+# ### 每个话题的几条原话
+#
+# 原话按话题列出，顺序和上表一样。这些是帖子的原文，没有经过清洗。
+
+# %%
+# Print the quotes of every topic, largest topic first.
+for topic in topic_table.sort_values("posts", ascending=False, kind="stable").index:
+    item = topics[topic]
+    print(f"Topic {topic}: {item['name']}  ({item['n_posts']:,} posts, {item['share']:.1%})")
+    for quote in item["quotes"]:
+        print(f"    [{LABEL_NAMES[quote['label']]}, {quote['post_id']}] {quote['text']}")
 
 # %% [markdown]
 # ## Save the brief
