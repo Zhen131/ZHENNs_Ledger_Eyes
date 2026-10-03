@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · Save the brief.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · Save the brief.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 保存简报。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 保存简报。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -37,6 +37,10 @@ N_CLASSES = 2  # default: 2 (bearish vs bullish); two-state, other: 3 (adds neut
 BTC_ONLY = False  # default: False (posts about all coins); two-state, other: True (only posts that mention bitcoin or btc)
 EMOJI_TO_WORDS = True  # default: True (emoji become English words); two-state, other: False (emoji are deleted with special characters)
 KEEP_NEGATIONS = True  # default: True (not, no, never, nor survive cleaning); two-state, other: False (plain NLTK stop word list)
+BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (most pieces the subword tokenizer of chapter 4 learns; the course example uses 30000)
+VOCAB_SIZE = 1000  # default: 1000; or any positive integer (most words each vectorizer of chapter 6 keeps)
+EPOCHS = 5  # default: 5; or any positive integer (passes over the training set in chapter 7)
+BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step in chapter 7)
 
 # %% [markdown]
 # ## Setup
@@ -118,6 +122,10 @@ if not isinstance(RANDOM_SEED, int):
 for name, value in [("BTC_ONLY", BTC_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WORDS), ("KEEP_NEGATIONS", KEEP_NEGATIONS)]:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be True or False, got {value!r}")
+for name, value in [("BPE_VOCAB_SIZE", BPE_VOCAB_SIZE), ("VOCAB_SIZE", VOCAB_SIZE), ("EPOCHS", EPOCHS),
+                    ("BATCH_SIZE", BATCH_SIZE)]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
 print("Switches look fine.")
 
 # %% [markdown]
@@ -840,6 +848,171 @@ brief["dataset"]["cleaning"]["examples"] = [
     {"raw": raw, "clean": clean} for raw, clean in zip(CLEANING_EXAMPLES, example_results)
 ]
 pd.DataFrame(brief["dataset"]["cleaning"]["examples"])
+
+# %% [markdown]
+# ## 4. Tokenization: whole words or pieces of words?
+#
+# A model cannot read text directly; the text is first cut into tokens. This chapter compares two ways of cutting, as in the course:
+#
+# - **Word level with NLTK** (`word_tokenize`): every word and every punctuation mark becomes a token. The vocabulary is every distinct token ever seen, so it keeps growing with new posts, and a word never seen before is simply unknown.
+# - **Subword level with the Hugging Face `tokenizers` package (BPE, byte-pair encoding)**: training starts from single characters and keeps merging the most frequent pair of neighbouring pieces into a new piece, until there are `BPE_VOCAB_SIZE` pieces. Frequent words end up as one piece; rare words are spelled with several pieces, so almost no word is completely unknown. The price is longer token sequences.
+#
+# We tokenize the original text (`text`), not `clean_text`, because emoji, negations and contractions such as "don't" are still there. **This chapter is for looking only: nothing in it feeds the models.** Chapters 6 and 7 count whole words of the cleaned text instead. Because nothing here reaches a model, the BPE tokenizer is trained on the original text of the whole working sample, test posts included; this leaks nothing into the evaluation.
+#
+# ***
+#
+# ## 4. 分词：按整词切，还是按词的片段切？
+#
+# 模型不能直接读文字，要先把文字切成一个个「词元」（token）。本章照课堂的做法，比较两种切法：
+#
+# - **用 NLTK 按词切**（`word_tokenize`）：每个词、每个标点都是一个词元。词表就是见过的所有不同词元，所以帖子越多词表越大；没见过的词就是不认识。
+# - **用 Hugging Face 的 `tokenizers` 包按子词切（BPE，字节对编码）**：训练从单个字符开始，反复把最常挨在一起的两块合并成一块新的片段，直到片段数达到 `BPE_VOCAB_SIZE`。常见的词最后是一整块；少见的词由几块拼出来，所以几乎没有完全不认识的词。代价是切出来的序列更长。
+#
+# 我们切的是原文（`text`），不是 `clean_text`，因为原文里还有表情、否定词和「don't」这类缩写。**本章只用来看，这里的结果不喂给模型。** 第 6、7 章用的是清洗后文字的整词计数。正因为这里的东西不进模型，BPE 分词器是在整个工作样本的原文上学的（测试帖也在内），不会把测试帖泄漏进评估。
+
+# %% [markdown]
+# ### Posts to look at
+#
+# We pick a few short posts from the working sample: some with emoji, some with a negation (not, no, never, nor or an "n't" form) and some with a contraction (an apostrophe between two letters, as in "don't", "i'm" or "it's"). They are taken in the order of the working sample, which is already shuffled with `RANDOM_SEED`. A kind that does not occur in a small sample is skipped with a note.
+#
+# ***
+#
+# ### 挑几条帖子来看
+#
+# 从工作样本里挑几条短帖：有的带表情，有的带否定（not、no、never、nor 或「n't」形式），有的带缩写（两个字母中间夹一个撇号，如「don't」「i'm」「it's」）。按工作样本的顺序取，而工作样本已经用 `RANDOM_SEED` 打乱过。样本小、某一种一条都没有时，跳过并说明。
+
+# %%
+# Pick a few short posts with emoji, with a negation and with a contraction.
+import numpy as np  # arrays
+
+NEGATION_IN_TEXT = re.compile(r"\b(?:not|no|never|nor)\b|n['’]t\b", flags=re.IGNORECASE)  # also inside "don't"
+CONTRACTION_IN_TEXT = re.compile(r"[a-z]['’][a-z]", flags=re.IGNORECASE)  # "don't", "i'm", "it's"
+EXAMPLES_PER_KIND = 2  # posts shown for each kind
+SHORT_POST_WORDS = 25  # only posts up to this many words, so that the output stays readable
+
+kind_tests = {
+    "emoji": lambda text: emoji.emoji_count(text) > 0,
+    "negation": lambda text: bool(NEGATION_IN_TEXT.search(text)),
+    "contraction": lambda text: bool(CONTRACTION_IN_TEXT.search(text)),
+}
+short_posts = df[count_words(df["text"]).between(1, SHORT_POST_WORDS)]  # working-sample order is kept
+token_examples, picked_ids = [], set()
+for kind, has_kind in kind_tests.items():
+    found = 0
+    for post_id, text in zip(short_posts["post_id"], short_posts["text"]):
+        if found == EXAMPLES_PER_KIND:
+            break
+        if post_id not in picked_ids and has_kind(text):
+            token_examples.append({"kind": kind, "post_id": post_id, "text": text})
+            picked_ids.add(post_id)
+            found += 1
+    if found == 0:
+        print(f"No short post with {kind} in the working sample; this kind is skipped.")
+pd.DataFrame(token_examples, columns=["kind", "post_id", "text"])
+
+# %% [markdown]
+# ### Word level with NLTK
+#
+# `word_tokenize` cuts every post of the working sample into words and punctuation marks. We report the vocabulary size (number of distinct tokens) and the average number of tokens per post.
+#
+# ***
+#
+# ### 用 NLTK 按词切
+#
+# `word_tokenize` 把工作样本里每条帖子切成词和标点。报两个数：词表大小（不同词元的个数）和每帖平均词元数。
+
+# %%
+# Cut every post of the working sample into words with NLTK.
+nltk_lengths = []  # tokens per post
+nltk_vocabulary = set()  # every distinct token
+for text in tqdm(df["text"], desc="NLTK word_tokenize"):
+    tokens = word_tokenize(text)
+    nltk_lengths.append(len(tokens))
+    nltk_vocabulary.update(tokens)
+nltk_lengths = np.array(nltk_lengths)
+print(f"NLTK word level: {len(nltk_vocabulary):,} distinct tokens; "
+      f"{nltk_lengths.mean():.2f} tokens per post on average")
+
+# %% [markdown]
+# ### Subword level with BPE
+#
+# As in the course, the BPE tokenizer first splits the text at whitespace and punctuation (`Whitespace` pre-tokenizer), then learns its pieces with a `BpeTrainer`. The special tokens are the course's: `[UNK]` stands for a character never seen in training; `[CLS]`, `[SEP]`, `[PAD]` and `[MASK]` are reserved for later models and are counted in the vocabulary size. On a small sample there may be fewer pairs to merge than `BPE_VOCAB_SIZE` allows, so the vocabulary can end up smaller.
+#
+# ***
+#
+# ### 用 BPE 按子词切
+#
+# 和课堂一样，BPE 分词器先在空白和标点处把文字断开（`Whitespace` 预分词器），再用 `BpeTrainer` 学片段。特殊词元照课堂的：`[UNK]` 代表训练时没见过的字符；`[CLS]`、`[SEP]`、`[PAD]`、`[MASK]` 留给以后的模型用，也算进词表大小。样本小时，可合并的组合可能不够 `BPE_VOCAB_SIZE` 个，词表会小一些。
+
+# %%
+# Train a BPE tokenizer on the working sample's original text and cut every post into pieces.
+from tokenizers import Tokenizer  # Hugging Face tokenizers
+from tokenizers.models import BPE  # byte-pair encoding model
+from tokenizers.pre_tokenizers import Whitespace  # splits at whitespace and punctuation first
+from tokenizers.trainers import BpeTrainer  # learns the BPE pieces
+
+bpe_tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+bpe_tokenizer.pre_tokenizer = Whitespace()
+bpe_trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
+                         vocab_size=BPE_VOCAB_SIZE, show_progress=False)
+bpe_tokenizer.train_from_iterator(df["text"].tolist(), bpe_trainer)  # display only: never used by a model
+bpe_lengths = np.array([len(encoding.ids) for encoding in bpe_tokenizer.encode_batch(df["text"].tolist())])
+print(f"BPE subword level: {bpe_tokenizer.get_vocab_size():,} pieces in the vocabulary "
+      f"(at most {BPE_VOCAB_SIZE:,} requested); {bpe_lengths.mean():.2f} tokens per post on average")
+
+# %% [markdown]
+# ### Side by side
+#
+# The chosen posts cut both ways. Tokens are separated by " | ". Look at how each way handles the emoji, "n't" and the apostrophes, and at rare words that BPE spells with several pieces.
+#
+# ***
+#
+# ### 并排对比
+#
+# 把挑出的帖子用两种方法各切一遍，词元之间用「 | 」隔开。看看两种切法各自怎么处理表情、「n't」和撇号，以及 BPE 怎么用几块片段拼出少见的词。
+
+# %%
+# Show the chosen posts cut both ways.
+for example in token_examples:
+    words = word_tokenize(example["text"])
+    pieces = bpe_tokenizer.encode(example["text"]).tokens
+    print(f"[{example['kind']}] {example['text']}")
+    print(f"   NLTK ({len(words)} tokens): {' | '.join(words)}")
+    print(f"   BPE  ({len(pieces)} tokens): {' | '.join(pieces)}")
+    print()
+
+# %% [markdown]
+# ### Into the brief
+#
+# The `sentiment` section of the brief starts here, with the two vocabulary sizes and average lengths. The numbers describe the tokenizers only; no model uses them.
+#
+# ***
+#
+# ### 写进简报
+#
+# 简报的 `sentiment` 节从这里开始，先写两种切法的词表大小和平均长度。这些数只描述分词器，没有模型用到它们。
+
+# %%
+# Start the sentiment section of the brief with the tokenization comparison.
+brief["sentiment"] = {
+    "tokenization": {
+        "used_by_models": False,  # display only
+        "text": "original text of the working sample",
+        "n_posts": int(len(df)),
+        "nltk_word_tokenize": {
+            "vocab_size": len(nltk_vocabulary),
+            "avg_tokens_per_post": float(nltk_lengths.mean()) if len(nltk_lengths) else None,
+        },
+        "bpe": {
+            "vocab_size": int(bpe_tokenizer.get_vocab_size()),
+            "vocab_size_requested": BPE_VOCAB_SIZE,
+            "trained_on": "original text of the whole working sample",
+            "avg_tokens_per_post": float(bpe_lengths.mean()) if len(bpe_lengths) else None,
+        },
+        "examples": [{"kind": example["kind"], "post_id": example["post_id"]} for example in token_examples],
+    },
+}
+brief["sentiment"]["tokenization"]
 
 # %% [markdown]
 # ## Save the brief
