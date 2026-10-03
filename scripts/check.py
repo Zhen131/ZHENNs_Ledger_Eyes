@@ -1475,15 +1475,19 @@ def check_panel_source(report, defaults, others):
     cell_lines = panel_cell.splitlines()
     cell_setting = next((number for number, line in enumerate(cell_lines) if setting.match(line)), None)
     cell_import = next((number for number, line in enumerate(cell_lines) if importing.match(line)), None)
+    setup_cell = cell_defining("REQUIRED_PACKAGES") or ""  # the install cell, before anything else is imported
+    in_setup = any(setting.match(line) for line in setup_cell.splitlines())
     environment = (REPO_DIR / "scripts" / "env.sh").read_text(encoding="utf-8")
     report.check(first_setting is not None and first_import is not None and first_setting < first_import
-                 and cell_setting is not None and cell_import is not None and cell_setting < cell_import
+                 and in_setup and cell_setting is not None and cell_import is not None and cell_setting < cell_import
                  and bool(blocks) and all(keyword(node, "analytics_enabled") is False for node in blocks)
                  and re.search(r"^export GRADIO_ANALYTICS_ENABLED=False$", environment, flags=re.MULTILINE) is not None
                  and os.environ.get("GRADIO_ANALYTICS_ENABLED") == "False",
-                 "Gradio's usage statistics are off: GRADIO_ANALYTICS_ENABLED=False is set before any import of "
-                 "gradio (notebook) and in scripts/env.sh (checks), and the page is built with analytics_enabled=False",
-                 f"notebook lines: setting {first_setting}, first import {first_import}; panel cell: setting "
+                 "Gradio's usage statistics are off: GRADIO_ANALYTICS_ENABLED=False is set in the setup cell and again "
+                 "in the panel cell, both before any import of gradio (notebook), and in scripts/env.sh (checks); the "
+                 "page is built with analytics_enabled=False",
+                 f"setup cell sets it: {in_setup}; notebook lines: setting {first_setting}, first import {first_import}; "
+                 f"panel cell: setting "
                  f"{cell_setting}, import {cell_import}; Blocks calls "
                  f"{[keyword(node, 'analytics_enabled') for node in blocks]}; this process: "
                  f"{os.environ.get('GRADIO_ANALYTICS_ENABLED')!r}")
