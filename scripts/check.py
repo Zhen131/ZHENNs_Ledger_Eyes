@@ -39,6 +39,11 @@ TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "senti
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
+SENTIMENT_SWITCHES = ["BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE"]
+SENTIMENT_MODELS = ["count_network", "tfidf_network"]  # the two networks of chapter 7; more may be added later
+SENTIMENT_BASELINES = ["always_majority", "uniform_random"]
+SENTIMENT_SUBSETS = ["all_test", "test_mentions_btc"]
+SPLIT_PARTS = ["train", "validation", "test"]
 
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
@@ -460,6 +465,228 @@ def check_examples(report, label, examples, switches):
                 report.info(f"switches off: {raw!r} -> {clean!r}; negation words left: {kept}")
 
 
+# ---------------------------------------------------------------- sentiment chapters (4 to 8)
+
+def check_sentiment_switches(report, defaults):
+    absent = [name for name in SENTIMENT_SWITCHES if name not in defaults]
+    report.check(not absent, "switches of the sentiment chapters are present", ", ".join(absent))
+
+
+def is_score(value):
+    """A score in the brief is a number between 0 and 1, or null when it cannot be computed."""
+    return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1)
+
+
+def is_count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def check_sentiment(report, label, brief, switches, full_run):
+    """Structure of the sentiment section; on the full run also the bar: every model beats both baselines."""
+    sentiment = brief.get("sentiment")
+    if not report.check(isinstance(sentiment, dict) and bool(sentiment), f"{label}: sentiment section has content"):
+        return
+    classes = ["0", "2"] if switches["N_CLASSES"] == 2 else ["0", "1", "2"]
+    report.check(sentiment.get("classes") == classes, f"{label}: sentiment uses the classes of N_CLASSES",
+                 f"{sentiment.get('classes')} (expected {classes})")
+
+    # Chapter 4: tokenization, shown only.
+    tokenization = sentiment.get("tokenization") if isinstance(sentiment.get("tokenization"), dict) else {}
+    nltk_part = tokenization.get("nltk_word_tokenize") if isinstance(tokenization.get("nltk_word_tokenize"), dict) else {}
+    bpe_part = tokenization.get("bpe") if isinstance(tokenization.get("bpe"), dict) else {}
+    sizes = [nltk_part.get("vocab_size"), bpe_part.get("vocab_size")]
+    lengths = [nltk_part.get("avg_tokens_per_post"), bpe_part.get("avg_tokens_per_post")]
+    report.check(tokenization.get("used_by_models") is False
+                 and all(is_count(size) and size > 0 for size in sizes)
+                 and all(isinstance(length, (int, float)) and not isinstance(length, bool) and length > 0
+                         for length in lengths)
+                 and is_count(sizes[1]) and isinstance(switches.get("BPE_VOCAB_SIZE"), int)
+                 and sizes[1] <= switches["BPE_VOCAB_SIZE"],
+                 f"{label}: tokenization comparison recorded (vocabulary sizes and tokens per post, not used by models)",
+                 f"vocabulary sizes {sizes}, tokens per post {lengths}")
+
+    # Chapter 5: the split.
+    split = sentiment.get("split") if isinstance(sentiment.get("split"), dict) else {}
+    sizes = split.get("n_posts") if isinstance(split.get("n_posts"), dict) else {}
+    class_counts = split.get("class_counts") if isinstance(split.get("class_counts"), dict) else {}
+    sample = (brief.get("dataset") or {}).get("sample") or {}
+    split_ok = sorted(sizes) == sorted(SPLIT_PARTS) and all(is_count(sizes[part]) for part in SPLIT_PARTS)
+    split_ok = split_ok and sum(sizes.values()) == sample.get("n_posts")
+    for part in SPLIT_PARTS if split_ok else []:
+        counts = class_counts.get(part) if isinstance(class_counts.get(part), dict) else {}
+        split_ok = split_ok and sorted(counts) == classes and all(is_count(count) and count > 0 for count in counts.values())
+        split_ok = split_ok and sum(counts.values()) == sizes[part]
+    if split_ok:  # 80 / 10 / 10, up to rounding inside each class
+        split_ok = abs(sizes["train"] - 0.8 * sample["n_posts"]) <= len(classes) and sizes["train"] > sizes["test"] > 0
+    report.check(split_ok, f"{label}: training, validation and test sets add up to the working sample, "
+                 "about 80/10/10, every class in every part", f"{sizes} {class_counts}")
+    n_test = sizes.get("test")
+    btc_counts = split.get("n_mentions_btc") if isinstance(split.get("n_mentions_btc"), dict) else {}
+    n_test_btc = btc_counts.get("test")
+    report.check(is_count(n_test_btc) and n_test_btc <= (n_test if is_count(n_test) else -1),
+                 f"{label}: test posts that mention bitcoin are counted", f"{n_test_btc} of {n_test}")
+
+    # Chapter 6: vectorizers learn on the training set only.
+    vectors = sentiment.get("vectorizers") if isinstance(sentiment.get("vectorizers"), dict) else {}
+    vocab_sizes = [(vectors.get(name) or {}).get("vocab_size") if isinstance(vectors.get(name), dict) else None
+                   for name in ("count", "tfidf")]
+    report.check(vectors.get("fitted_on") == "train" and vectors.get("fitted_on_n_posts") == sizes.get("train")
+                 and isinstance(switches.get("VOCAB_SIZE"), int)
+                 and all(is_count(size) and 0 < size <= switches["VOCAB_SIZE"] for size in vocab_sizes),
+                 f"{label}: both vectorizers learned at most VOCAB_SIZE words from the training set only",
+                 f"fitted on {vectors.get('fitted_on')!r} ({vectors.get('fitted_on_n_posts')} posts), "
+                 f"vocabulary sizes {vocab_sizes}")
+
+    # Chapters 7 and 8: models, evaluation table, confusion matrices, choice and scoring function.
+    models = sentiment.get("models") if isinstance(sentiment.get("models"), list) else []
+    report.check(all(name in models for name in SENTIMENT_MODELS),
+                 f"{label}: the word-count and TF-IDF networks are both listed", f"{models}")
+    evaluation = sentiment.get("evaluation") if isinstance(sentiment.get("evaluation"), dict) else {}
+    rows = [row for row in evaluation.get("rows") or [] if isinstance(row, dict)]
+    found = Counter((row.get("model"), row.get("subset")) for row in rows)
+    expected = [(name, subset) for name in models + SENTIMENT_BASELINES for subset in SENTIMENT_SUBSETS]
+    wrong = [pair for pair in expected if found[pair] != 1]
+    report.check(not wrong and len(rows) == len(expected),
+                 f"{label}: evaluation table has one row per model and per baseline (always majority, uniform random) "
+                 "for all test posts and for test posts that mention bitcoin",
+                 f"missing or repeated: {wrong}; {len(rows)} rows for {len(expected)} expected")
+
+    problems = []
+    for row in rows:
+        name = f"{row.get('model')}/{row.get('subset')}"
+        n = row.get("n")
+        expected_n = n_test if row.get("subset") == "all_test" else n_test_btc
+        if not is_count(n) or n != expected_n:
+            problems.append(f"{name}: {n} posts, expected {expected_n}")
+            continue
+        per_class = row.get("per_class") if isinstance(row.get("per_class"), dict) else {}
+        if sorted(per_class) != classes or not all(isinstance(scores, dict) for scores in per_class.values()):
+            problems.append(f"{name}: classes {sorted(per_class)}")
+            continue
+        supports = [scores.get("support") for scores in per_class.values()]
+        if not all(is_count(support) for support in supports) or sum(supports) != n:
+            problems.append(f"{name}: class supports {supports} do not add up to {n}")
+        scores = [row.get("accuracy"), row.get("macro_f1")] + [
+            scores.get(measure) for scores in per_class.values() for measure in ("precision", "recall", "f1")]
+        if not all(is_score(score) for score in scores):
+            problems.append(f"{name}: a score is neither a number in [0, 1] nor null: {scores}")
+        if n == 0 and (row.get("accuracy") is not None or row.get("macro_f1") is not None):
+            problems.append(f"{name}: no posts, so accuracy and macro-F1 must be null")
+        if n > 0 and (row.get("accuracy") is None or row.get("macro_f1") is None):
+            problems.append(f"{name}: {n} posts, so accuracy and macro-F1 must be numbers")
+    report.check(bool(rows) and not problems,
+                 f"{label}: every evaluation row has the right number of posts, class supports that add up, "
+                 "and scores that are numbers in [0, 1] or null", "; ".join(problems[:5]))
+
+    accuracy_all = {row.get("model"): row.get("accuracy") for row in rows if row.get("subset") == "all_test"}
+    matrices = sentiment.get("confusion_matrices") if isinstance(sentiment.get("confusion_matrices"), dict) else {}
+    problems = []
+    for name in models:
+        matrix = matrices.get(name) if isinstance(matrices.get(name), dict) else {}
+        counts = matrix.get("counts")
+        if not (matrix.get("labels") == classes and isinstance(counts, list) and len(counts) == len(classes)
+                and all(isinstance(line, list) and len(line) == len(classes) and all(is_count(cell) for cell in line)
+                        for line in counts)):
+            problems.append(f"{name}: not a {len(classes)}x{len(classes)} table of counts with labels {classes}")
+            continue
+        total = sum(sum(line) for line in counts)
+        if total != n_test or matrix.get("n") != total:
+            problems.append(f"{name}: cells add up to {total}, test posts {n_test}")
+        elif is_count(n_test) and n_test > 0 and isinstance(accuracy_all.get(name), float) and \
+                abs(sum(counts[i][i] for i in range(len(classes))) / n_test - accuracy_all[name]) > 1e-9:
+            problems.append(f"{name}: diagonal does not match the accuracy in the evaluation table")
+    report.check(bool(models) and not problems,
+                 f"{label}: one confusion matrix per model, adding up to the number of test posts", "; ".join(problems))
+
+    selection = sentiment.get("selection") if isinstance(sentiment.get("selection"), dict) else {}
+    validation = selection.get("validation_macro_f1") if isinstance(selection.get("validation_macro_f1"), dict) else {}
+    report.check(selection.get("selected") in models and sorted(validation) == sorted(models)
+                 and all(is_score(score) for score in validation.values()),
+                 f"{label}: one model chosen by validation macro-F1, with the validation score of every model",
+                 f"selected {selection.get('selected')!r}, validation scores {validation}")
+
+    scoring = sentiment.get("scoring") if isinstance(sentiment.get("scoring"), dict) else {}
+    scoring_check = scoring.get("check") if isinstance(scoring.get("check"), dict) else {}
+    report.check(scoring.get("function") == "sentiment_proba" and scoring.get("column_labels") == classes
+                 and scoring.get("bullish_column") == len(classes) - 1
+                 and scoring.get("model") == selection.get("selected")
+                 and scoring.get("train_ids") == "train_post_ids" and scoring.get("n_train_ids") == sizes.get("train")
+                 and scoring_check.get("n_texts") == n_test and scoring_check.get("n_columns") == len(classes)
+                 and scoring_check.get("rows_sum_to_one") is True
+                 and scoring_check.get("matches_evaluated_predictions") is True,
+                 f"{label}: scoring function gives one column per class (bullish last), rows adding up to 1, "
+                 "and the chosen model's evaluated test labels",
+                 f"columns {scoring.get('column_labels')}, bullish column {scoring.get('bullish_column')}, "
+                 f"model {scoring.get('model')!r}, check {scoring_check}")
+
+    duplicates = sentiment.get("test_texts_also_in_train")
+    duplicates = duplicates if isinstance(duplicates, dict) else {}
+    report.check(all(is_count(duplicates.get(key)) and duplicates[key] <= (n_test if is_count(n_test) else -1)
+                     for key in ("same_text", "same_clean_text")),
+                 f"{label}: test posts with the same text as a training post are counted", f"{duplicates}")
+
+    macro_all = {row.get("model"): row.get("macro_f1") for row in rows if row.get("subset") == "all_test"}
+
+    def beats_both(name):
+        score = macro_all.get(name)
+        return score is not None and all(macro_all.get(baseline) is not None and score > macro_all[baseline]
+                                         for baseline in SENTIMENT_BASELINES)
+
+    report.check(sentiment.get("beats_baselines") == {name: beats_both(name) for name in models},
+                 f"{label}: beats_baselines agrees with the evaluation rows", f"{sentiment.get('beats_baselines')}")
+
+    if not full_run:
+        return  # the sample is too small for the scores to mean anything
+    btc_rows = [row for row in rows if row.get("subset") == "test_mentions_btc"]
+    report.check(bool(btc_rows) and all(is_count(row.get("n")) and row["n"] > 0 for row in btc_rows),
+                 f"{label}: the rows for test posts that mention bitcoin have posts",
+                 f"{[row.get('n') for row in btc_rows]}")
+    for name in models:
+        report.check(beats_both(name),
+                     f"{label}: {name} macro-F1 on all test posts beats always majority and uniform random",
+                     f"{macro_all.get(name)} vs " + ", ".join(f"{baseline} {macro_all.get(baseline)}"
+                                                               for baseline in SENTIMENT_BASELINES))
+
+
+def print_sentiment(brief):
+    """Print the key numbers of the sentiment section (full run)."""
+    sentiment = brief.get("sentiment") if isinstance(brief.get("sentiment"), dict) else {}
+    if not sentiment:
+        return
+    tokenization = sentiment.get("tokenization") or {}
+    split = sentiment.get("split") or {}
+    selection = sentiment.get("selection") or {}
+    print("\nSentiment (full run)")
+    for name in ("nltk_word_tokenize", "bpe"):
+        part = tokenization.get(name) or {}
+        print(f"  tokenization {name + ':':20} vocabulary {part.get('vocab_size')}, "
+              f"tokens per post {part.get('avg_tokens_per_post')}")
+    print(f"  split (posts):                 {split.get('n_posts')}   mention bitcoin: {split.get('n_mentions_btc')}")
+    print(f"  vectorizers:                   {sentiment.get('vectorizers')}")
+    print(f"  validation macro-F1:           {selection.get('validation_macro_f1')}   chosen: {selection.get('selected')}")
+    print(f"  test texts also in training:   {sentiment.get('test_texts_also_in_train')}")
+    classes = sentiment.get("classes") or []
+    header = f"  {'model':16} {'subset':18} {'posts':>6} {'accuracy':>8} " + " ".join(
+        f"{'P' + c:>6} {'R' + c:>6} {'F1-' + c:>6}" for c in classes) + f" {'macro-F1':>8}"
+    print("  evaluation table (P precision, R recall, F1 per class; - = null):")
+    print(header)
+
+    def number(value):
+        return f"{value:.4f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
+
+    for row in (sentiment.get("evaluation") or {}).get("rows") or []:
+        per_class = row.get("per_class") or {}
+        cells = " ".join(f"{number((per_class.get(c) or {}).get('precision')):>6.6} "
+                         f"{number((per_class.get(c) or {}).get('recall')):>6.6} "
+                         f"{number((per_class.get(c) or {}).get('f1')):>6.6}" for c in classes)
+        print(f"  {str(row.get('model')):16} {str(row.get('subset')):18} {str(row.get('n')):>6} "
+              f"{number(row.get('accuracy')):>8} {cells} {number(row.get('macro_f1')):>8}")
+    for name, matrix in (sentiment.get("confusion_matrices") or {}).items():
+        print(f"  confusion matrix {name} (rows true, columns predicted, labels {matrix.get('labels')}): "
+              f"{matrix.get('counts')}")
+    print(f"  beats both baselines:          {sentiment.get('beats_baselines')}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -493,6 +720,7 @@ def quick(report, defaults, others, overrides):
         brief = read_brief(report, label, brief_path) if ok else None
         if brief is not None:
             check_brief(report, label, brief, switches)
+            check_sentiment(report, label, brief, switches, full_run=False)
 
 
 def full(report, defaults, overrides):
@@ -514,6 +742,7 @@ def full(report, defaults, overrides):
     if brief is None:
         return
     check_brief(report, "full run", brief, switches)
+    check_sentiment(report, "full run", brief, switches, full_run=True)
     dataset = brief.get("dataset") or {}
     sample, cleaning = dataset.get("sample") or {}, dataset.get("cleaning") or {}
     btc = dataset.get("btc_mentions") or {}
@@ -529,6 +758,7 @@ def full(report, defaults, overrides):
     print(f"  average words before / after:  {cleaning.get('avg_words_before')} / {cleaning.get('avg_words_after')}")
     print(f"  empty after cleaning:          {cleaning.get('n_empty_after')}")
     print(f"  run time:                      {seconds:.1f} s")
+    print_sentiment(brief)
 
 
 def main():
@@ -544,6 +774,7 @@ def main():
     check_requirements(report)
     check_notebook_files(report)
     defaults, others = read_switches(report)
+    check_sentiment_switches(report, defaults)
     check_numbering_rules(report)
     check_text(report)
     unknown = [name for name in overrides if name not in defaults]
