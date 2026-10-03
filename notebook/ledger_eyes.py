@@ -1961,7 +1961,7 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
 #
 # The row **all** does the same for the whole topic post table and is the baseline.
 #
-# **Too few posts.** A topic with fewer than `MIN_TOPIC_POSTS` posts is marked: its shares rest on so few posts that chance alone can move them a lot. Why 200 by default: about half of the Bitcoin posts are neutral, so a topic of 200 posts has about 100 bullish or bearish posts, and with 100 posts a bullish share near one half can be off by about 10 percentage points by chance (two standard errors: 2 × √(0.5 × 0.5 / 100) = 0.1). A smaller topic's lean says little. This is a rule of thumb for the default, not a statistical test.
+# **Too few posts.** A topic with fewer than `MIN_TOPIC_POSTS` posts is marked: its shares rest on so few posts that chance alone can move them a lot. Why 200 by default: if about half of a topic's posts are neutral, 200 posts leave about 100 bullish or bearish posts, and with 100 posts a bullish share near one half can be off by about 10 percentage points by chance (two standard errors: 2 × √(0.5 × 0.5 / 100) = 0.1). A smaller topic's lean says little. This is a rule of thumb for the default, not a statistical test.
 #
 # A share whose denominator is 0 (for example a topic in which the model calls no post bullish or bearish) cannot be computed: it is "—" in the table and `null` in the brief, and so is every difference computed from it.
 #
@@ -1978,7 +1978,7 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
 #
 # **all** 那一行对整张话题帖子表做同样的计算，作为基准。
 #
-# **帖子太少。** 帖子数少于 `MIN_TOPIC_POSTS` 的话题会被标出来：它的比例建立在很少几条帖子上，光靠偶然就能变很多。默认为什么是 200：提到比特币的帖子大约一半是中性，所以 200 条帖子的话题大约有 100 条看多或看空；只有 100 条时，一个接近一半的看多比例，光靠偶然就可能差 10 个百分点左右（两个标准误：2 × √(0.5 × 0.5 / 100) = 0.1）。再小的话题，偏多偏空就说明不了什么。这只是给默认值的经验算法，不是统计检验。
+# **帖子太少。** 帖子数少于 `MIN_TOPIC_POSTS` 的话题会被标出来：它的比例建立在很少几条帖子上，光靠偶然就能变很多。默认为什么是 200：如果一个话题大约一半是中性帖，200 条帖子里大约剩 100 条看多或看空；只有 100 条时，一个接近一半的看多比例，光靠偶然就可能差 10 个百分点左右（两个标准误：2 × √(0.5 × 0.5 / 100) = 0.1）。再小的话题，偏多偏空就说明不了什么。这只是给默认值的经验算法，不是统计检验。
 #
 # 分母为 0 的比例（例如模型在某个话题里一条看多、看空都没判出来）算不出来：表里显示「—」，简报里写 `null`，由它算出的差值也一样。
 
