@@ -1846,7 +1846,7 @@ topic_posts["topic"].value_counts().sort_index().rename("posts")
 #
 # - **name**: the `TOPIC_NAME_WORDS` words (5) with the largest values in the topic's centre, put together by the program; a person can give the topics better names after reading them;
 # - **posts** and **share**: how many posts of the topic table it holds, and what part of the table that is;
-# - **quotes**: the original text of the `TOPIC_QUOTES` posts (3) closest to the centre, skipping a text that is already shown, with their `post_id` and label.
+# - **quotes**: the original text of the `TOPIC_QUOTES` posts (3) closest to the centre, skipping a text that is already shown, with their `post_id` and label. Only posts with at least one word of the vocabulary are quoted (unless a topic has no other posts): a post without any such word is a vector of zeros, which can sit close to a centre near zero without having anything in common with the topic.
 #
 # Everything goes into the brief's `topics` section. The table is sorted by size, largest topic first.
 #
@@ -1858,7 +1858,7 @@ topic_posts["topic"].value_counts().sort_index().rename("posts")
 #
 # - **名字**：中心里数值最大的 `TOPIC_NAME_WORDS` 个词（5 个），由程序拼出来；人读过之后可以起更好的名字；
 # - **帖子数**和**占比**：它有话题表里的多少条帖子，占整张表多少；
-# - **原话**：离中心最近的 `TOPIC_QUOTES` 条帖子（3 条）的原文，已经出现过的文字跳过，附上 `post_id` 和标签。
+# - **原话**：离中心最近的 `TOPIC_QUOTES` 条帖子（3 条）的原文，已经出现过的文字跳过，附上 `post_id` 和标签。只从至少有一个词表里的词的帖子里挑（除非这个话题只有那种帖子）：一个词都没有的帖子向量全是 0，可能离一个靠近 0 的中心很近，却和这个话题没有任何共同点。
 #
 # 这些都写进简报的 `topics` 节。下表按大小排，最大的话题在最前面。
 
@@ -1880,8 +1880,12 @@ for topic in range(n_topics):
         distances = squared_lengths[members] - 2 * (X_topics[members] @ centre) + centre @ centre  # |x - c|^2
     if not np.isfinite(distances).all():
         raise ValueError(f"Topic {topic}: a distance to the centre is not a finite number")
+    readable = ~posts_without_words[members]  # posts with at least one word of the vocabulary
+    if not readable.any():  # quote those only, unless the topic has nothing else
+        readable[:] = True
+    candidates, candidate_distances = members[readable], distances[readable]
     quotes, seen_texts = [], set()
-    for row in members[np.lexsort((members, distances))]:  # closest first; ties in file order
+    for row in candidates[np.lexsort((candidates, candidate_distances))]:  # closest first; ties in file order
         text = topic_posts.at[row, "text"]
         if text in seen_texts:
             continue
