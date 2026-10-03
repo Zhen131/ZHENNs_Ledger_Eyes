@@ -35,3 +35,9 @@ export MPLCONFIGDIR="$REPO_DIR/data/mpl-config"
 mkdir -p "$REPO_DIR/data/ipython" "$REPO_DIR/data/jupyter-runtime"
 export IPYTHONDIR="$REPO_DIR/data/ipython"
 export JUPYTER_RUNTIME_DIR="$REPO_DIR/data/jupyter-runtime"
+
+# Jupyter's own data and settings (notebook signatures, migration marker) under data/.
+# Kernel specs are still found in the virtual environment.
+mkdir -p "$REPO_DIR/data/jupyter-data" "$REPO_DIR/data/jupyter-config"
+export JUPYTER_DATA_DIR="$REPO_DIR/data/jupyter-data"
+export JUPYTER_CONFIG_DIR="$REPO_DIR/data/jupyter-config"

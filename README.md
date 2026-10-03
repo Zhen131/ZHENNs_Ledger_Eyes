@@ -48,7 +48,7 @@ scripts/check.sh quick
 scripts/check.sh full
 ```
 
-The scripts run under `bash` and set up their own environment from `scripts/env.sh`: Hugging Face cache in `data/hf_home`, NLTK data in `data/nltk_data`, pip cache in `data/pip-cache`, Matplotlib and IPython settings under `data/`; no stored Hugging Face token is ever sent (`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`), Hugging Face telemetry is off, and pip does not check for its own updates. The scripts use `.venv/bin/python` unless `EYES_PYTHON` points to another interpreter.
+The scripts run under `bash` and set up their own environment from `scripts/env.sh`: Hugging Face cache in `data/hf_home`, NLTK data in `data/nltk_data`, pip cache in `data/pip-cache`, Matplotlib, IPython and Jupyter settings under `data/`; no stored Hugging Face token is ever sent (`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`), Hugging Face telemetry is off, and pip does not check for its own updates. The scripts use `.venv/bin/python` unless `EYES_PYTHON` points to another interpreter.
 
 ### The two checks
 
@@ -132,7 +132,7 @@ Top level, always present: `format_version` (a draft value for now), `generated_
 2. Regenerate the notebook: `scripts/build_notebook.sh` (writes `notebook/ledger_eyes.ipynb`; cell ids come from the cell content, so an unchanged source gives a byte-identical file).
 3. Run `scripts/check.sh quick`.
 
-Writing rules for the notebook: one cell does one thing; every code cell is preceded by an explanation cell; explanation cells are English, then a line with `***`, then Chinese; code comments are English only. New switches go into the parameters cell in the same form, all package installs stay in the single install cell right after it, and the "Save the brief" cell stays last.
+Writing rules for the notebook: one cell does one thing; every code cell, or short run of related code cells, is preceded by an explanation cell; explanation cells are English, then a line with `***`, then Chinese; code comments are English only. New switches go into the parameters cell in the same form, all package installs stay in the single install cell right after it, and the "Save the brief" cell stays last.
 
 ### Text rules
 
