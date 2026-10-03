@@ -48,7 +48,7 @@ scripts/check.sh quick
 scripts/check.sh full
 ```
 
-The scripts run under `bash` and set up their own environment from `scripts/env.sh`: Hugging Face cache in `data/hf_home`, NLTK data in `data/nltk_data`, pip cache in `data/pip-cache`, Matplotlib, IPython and Jupyter settings under `data/`; no stored Hugging Face token is ever sent (`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`), Hugging Face telemetry is off, and pip does not check for its own updates. The scripts use `.venv/bin/python` unless `EYES_PYTHON` points to another interpreter.
+The scripts run under `bash` and set up their own environment from `scripts/env.sh`: Hugging Face cache in `data/hf_home`, NLTK data in `data/nltk_data`, pip cache in `data/pip-cache`, Keras settings in `data/keras`, Matplotlib, IPython and Jupyter settings under `data/`; no stored Hugging Face token is ever sent (`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`), Hugging Face telemetry is off, and pip does not check for its own updates. The scripts use `.venv/bin/python` unless `EYES_PYTHON` points to another interpreter.
 
 ### The two checks
 

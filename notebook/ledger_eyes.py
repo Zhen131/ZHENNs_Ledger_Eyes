@@ -1101,7 +1101,7 @@ split_table
 #
 # Both keep the `VOCAB_SIZE` most frequent words (default 1000, as in the course). **Each vectorizer learns its vocabulary (and, for TF-IDF, its word weights) from the training set only**; the validation and test sets are only transformed with what was learned. Words that occur only outside the training set are therefore ignored, exactly as they would be for a brand-new post.
 #
-# **Memory.** The course turns the count matrix into an ordinary (dense) table with `.toarray()`. With the full working sample that table would hold 100,000 rows × 1,000 columns, almost all zeros. We keep both kinds of vectors as sparse matrices, which store only the non-zero cells, in 32-bit floats; the network of chapter 7 accepts sparse input directly. The cell prints how much memory the sparse matrices take next to the size a dense table would have.
+# **Memory.** The course turns the count matrix into an ordinary (dense) table with `.toarray()`. With the full working sample that table would hold 100,000 rows × 1,000 columns, almost all zeros. We keep both kinds of vectors as sparse matrices, which store only the non-zero cells, in 32-bit floats. Keras takes the sparse matrices as they are and turns only one batch at a time (`BATCH_SIZE` posts) into an ordinary table while training. The cell prints how much memory the sparse matrices take next to the size a dense table would have.
 #
 # ***
 #
@@ -1114,7 +1114,7 @@ split_table
 #
 # 两种都只留最常见的 `VOCAB_SIZE` 个词（默认 1000，和课堂一样）。**两个向量化器都只在训练集上学词表（TF-IDF 还要学每个词的权重）**；验证集和测试集只用学好的东西去转换。只在训练集以外出现的词因此被忽略，和对待一条全新帖子完全一样。
 #
-# **内存。** 课堂上用 `.toarray()` 把词数矩阵变成普通（稠密）的表。用完整的工作样本时，这张表有 100,000 行 × 1,000 列，几乎全是 0。我们把两种向量都存成稀疏矩阵（只记非零的格子），用 32 位浮点数；第 7 章的网络能直接吃稀疏矩阵。这一格会打印稀疏矩阵占了多少内存，并和稠密表的大小对照。
+# **内存。** 课堂上用 `.toarray()` 把词数矩阵变成普通（稠密）的表。用完整的工作样本时，这张表有 100,000 行 × 1,000 列，几乎全是 0。我们把两种向量都存成稀疏矩阵（只记非零的格子），用 32 位浮点数。Keras 直接收下稀疏矩阵，训练时每次只把一批（`BATCH_SIZE` 条）变成普通的表。这一格会打印稀疏矩阵占了多少内存，并和稠密表的大小对照。
 
 # %%
 # Word counts: learn the vocabulary on the training set, then transform all three parts.
@@ -1242,7 +1242,7 @@ def predict_proba(model, matrix):
     """Class probabilities, one column per label in CLASS_LABELS (bearish first, bullish last)."""
     if matrix.shape[0] == 0:
         return np.empty((0, len(CLASS_LABELS)), dtype=np.float32)
-    if not matrix.has_sorted_indices:
+    if hasattr(matrix, "has_sorted_indices") and not matrix.has_sorted_indices:
         matrix = matrix.sorted_indices()  # TensorFlow needs the non-zero cells of every row in column order
     output = model.predict(matrix, batch_size=1024, verbose=0)
     if output.shape[1] == 1:  # two classes: the single output is the probability of bullish
@@ -1400,7 +1400,7 @@ pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
 # %% [markdown]
 # ## 8. Evaluation on the test set
 #
-# Only now do we look at the test set. The measures, for each class:
+# Until now the test set was only split off (chapter 5) and turned into vectors with the vocabulary learned on the training set (chapter 6). Only now are its posts labelled and scored. The measures, for each class:
 #
 # - **precision**: of the posts the model put into this class, the share that really belong to it;
 # - **recall**: of the posts that really belong to this class, the share the model found;
@@ -1421,7 +1421,7 @@ pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
 #
 # ## 8. 在测试集上评估
 #
-# 到这里才第一次看测试集。每一类的指标：
+# 在这之前，测试集只是在第 5 章被切出来、在第 6 章用训练集上学好的词表转成了向量。到这里才第一次给测试帖判类别、算分数。每一类的指标：
 #
 # - **precision（精确率）**：模型判成这一类的帖子里，真是这一类的占多少；
 # - **recall（召回率）**：真是这一类的帖子里，被模型找出来的占多少；

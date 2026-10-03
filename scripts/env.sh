@@ -31,6 +31,10 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 # Matplotlib font cache under data/.
 export MPLCONFIGDIR="$REPO_DIR/data/mpl-config"
 
+# Keras settings file (keras.json) under data/, so a ~/.keras on this machine is neither read nor written.
+mkdir -p "$REPO_DIR/data/keras"
+export KERAS_HOME="$REPO_DIR/data/keras"
+
 # IPython profile and Jupyter runtime files under data/.
 mkdir -p "$REPO_DIR/data/ipython" "$REPO_DIR/data/jupyter-runtime"
 export IPYTHONDIR="$REPO_DIR/data/ipython"
