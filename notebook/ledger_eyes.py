@@ -1092,6 +1092,97 @@ split_table["mention bitcoin"] = [brief["sentiment"]["split"]["n_mentions_btc"][
 split_table
 
 # %% [markdown]
+# ## 6. Vectorization: from cleaned text to numbers
+#
+# A model needs numbers, so every cleaned post (`clean_text`) becomes a vector with one position per word of a fixed vocabulary. We build two kinds of vectors, as in the course:
+#
+# - **Word counts** (`CountVectorizer`): each position holds how often that word occurs in the post.
+# - **TF-IDF** (`TfidfVectorizer`): each count is weighted by how rare the word is across posts, so words that appear almost everywhere count less.
+#
+# Both keep the `VOCAB_SIZE` most frequent words (default 1000, as in the course). **Each vectorizer learns its vocabulary (and, for TF-IDF, its word weights) from the training set only**; the validation and test sets are only transformed with what was learned. Words that occur only outside the training set are therefore ignored, exactly as they would be for a brand-new post.
+#
+# **Memory.** The course turns the count matrix into an ordinary (dense) table with `.toarray()`. With the full working sample that table would hold 100,000 rows × 1,000 columns, almost all zeros. We keep both kinds of vectors as sparse matrices, which store only the non-zero cells, in 32-bit floats; the network of chapter 7 accepts sparse input directly. The cell prints how much memory the sparse matrices take next to the size a dense table would have.
+#
+# ***
+#
+# ## 6. 向量化：把清洗后的文字变成数
+#
+# 模型要的是数，所以每条清洗后的帖子（`clean_text`）都变成一个向量，词表里每个词占一个位置。照课堂的做法做两种向量：
+#
+# - **词数统计**（`CountVectorizer`）：每个位置是这个词在帖子里出现了几次。
+# - **TF-IDF**（`TfidfVectorizer`）：在次数上再乘一个权重，一个词在越多帖子里出现，权重越低，几乎处处都有的词就不那么重要。
+#
+# 两种都只留最常见的 `VOCAB_SIZE` 个词（默认 1000，和课堂一样）。**两个向量化器都只在训练集上学词表（TF-IDF 还要学每个词的权重）**；验证集和测试集只用学好的东西去转换。只在训练集以外出现的词因此被忽略，和对待一条全新帖子完全一样。
+#
+# **内存。** 课堂上用 `.toarray()` 把词数矩阵变成普通（稠密）的表。用完整的工作样本时，这张表有 100,000 行 × 1,000 列，几乎全是 0。我们把两种向量都存成稀疏矩阵（只记非零的格子），用 32 位浮点数；第 7 章的网络能直接吃稀疏矩阵。这一格会打印稀疏矩阵占了多少内存，并和稠密表的大小对照。
+
+# %%
+# Word counts: learn the vocabulary on the training set, then transform all three parts.
+from sklearn.feature_extraction.text import CountVectorizer  # word counts
+
+count_vectorizer = CountVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  # the most frequent VOCAB_SIZE words
+X_train_count = count_vectorizer.fit_transform(train_df["clean_text"])  # learns the vocabulary: training set only
+X_val_count = count_vectorizer.transform(val_df["clean_text"])  # transform only
+X_test_count = count_vectorizer.transform(test_df["clean_text"])  # transform only
+print(f"Word counts: {len(count_vectorizer.vocabulary_):,} words; training matrix {X_train_count.shape}")
+
+# %%
+# TF-IDF: learn the vocabulary and the word weights on the training set, then transform all three parts.
+from sklearn.feature_extraction.text import TfidfVectorizer  # TF-IDF weights
+
+tfidf_vectorizer = TfidfVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  # the most frequent VOCAB_SIZE words
+X_train_tfidf = tfidf_vectorizer.fit_transform(train_df["clean_text"])  # learns vocabulary and weights: training set only
+X_val_tfidf = tfidf_vectorizer.transform(val_df["clean_text"])  # transform only
+X_test_tfidf = tfidf_vectorizer.transform(test_df["clean_text"])  # transform only
+print(f"TF-IDF: {len(tfidf_vectorizer.vocabulary_):,} words; training matrix {X_train_tfidf.shape}")
+
+# %% [markdown]
+# ### What the vectors look like
+#
+# For each kind: vocabulary size, matrix shapes, the share of cells that are not zero, and the memory the sparse matrices use compared with dense 32-bit tables. Every count is recorded in the brief, together with the number of training posts the vectorizers learned from.
+#
+# ***
+#
+# ### 向量长什么样
+#
+# 每种向量各报：词表大小、矩阵形状、非零格子的占比，以及稀疏矩阵实际占的内存和 32 位稠密表的对照。这些数都写进简报，连同向量化器是在多少条训练帖上学的。
+
+# %%
+# Summarise both kinds of vectors and record them in the brief.
+vectorizers = {"count": count_vectorizer, "tfidf": tfidf_vectorizer}  # name -> fitted vectorizer
+features = {  # name -> part -> sparse matrix
+    "count": {"train": X_train_count, "validation": X_val_count, "test": X_test_count},
+    "tfidf": {"train": X_train_tfidf, "validation": X_val_tfidf, "test": X_test_tfidf},
+}
+
+
+def sparse_megabytes(matrix):
+    """Memory of a sparse CSR matrix in megabytes (values, column indices and row pointers)."""
+    return (matrix.data.nbytes + matrix.indices.nbytes + matrix.indptr.nbytes) / 1e6
+
+
+vector_rows = []
+for name, parts in features.items():
+    cells = sum(matrix.shape[0] * matrix.shape[1] for matrix in parts.values())
+    vector_rows.append({
+        "vectors": name,
+        "vocabulary": len(vectorizers[name].vocabulary_),
+        "training shape": parts["train"].shape,
+        "non-zero share": safe_ratio(sum(matrix.nnz for matrix in parts.values()), cells),
+        "sparse MB": round(sum(sparse_megabytes(matrix) for matrix in parts.values()), 1),
+        "dense float32 MB": round(cells * 4 / 1e6, 1),
+    })
+brief["sentiment"]["vectorizers"] = {
+    "vocab_size_requested": VOCAB_SIZE,
+    "fitted_on": "train",
+    "fitted_on_n_posts": int(X_train_count.shape[0]),
+    "text": "clean_text",
+    "storage": "sparse float32",
+    **{name: {"vocab_size": len(vectorizer.vocabulary_)} for name, vectorizer in vectorizers.items()},
+}
+pd.DataFrame(vector_rows).set_index("vectors")
+
+# %% [markdown]
 # ## Save the brief
 #
 # The brief is written to `WORK_DIR/brief.json` with the current UTC time. Every value that could not be computed (None, NaN or infinity) is converted to `null` before saving, never to 0 or NaN. As a safety net the JSON writer is also told to refuse NaN, so a NaN that slipped past the conversion would stop the save instead of reaching the file.
