@@ -1015,6 +1015,83 @@ brief["sentiment"] = {
 brief["sentiment"]["tokenization"]
 
 # %% [markdown]
+# ## 5. Training, validation and test sets
+#
+# From here on we build the bullish-or-bearish models. The working sample is split into three parts, as in the course:
+#
+# - **training set (80%)**: the models learn from it, and the vectorizers of chapter 6 learn their vocabulary from it alone;
+# - **validation set (10%)**: watched during training, and used once at the end of chapter 7 to choose the model that later chapters use;
+# - **test set (10%)**: kept aside until chapter 8 and used only for the final evaluation, so that the scores describe posts the models have never seen.
+#
+# As in the course, the sample is first split 80 / 20, and the 20% part is then split in half. Both splits are **stratified** by label, so every part keeps the class shares of the working sample, and both use `RANDOM_SEED`, so the same switches give the same parts on every run. Every class needs at least 10 posts in the working sample for each part to get at least one post of it; with fewer, the cell stops with a clear message.
+#
+# ***
+#
+# ## 5. 训练集、验证集和测试集
+#
+# 从这里开始做「看多还是看空」的模型。照课堂的做法，把工作样本切成三份：
+#
+# - **训练集（80%）**：模型从它学；第 6 章的向量化器也只在它上面学词表；
+# - **验证集（10%）**：训练时用来盯着看，第 7 章最后再用它一次，选出后面章节要用的模型；
+# - **测试集（10%）**：一直放到第 8 章，只用来做最后的评估，这样分数说的是模型从没见过的帖子。
+#
+# 和课堂一样，先按 80 / 20 切，再把 20% 那份对半切。两次切分都按标签**分层**，每一份保持工作样本里的类别占比；两次都用 `RANDOM_SEED`，开关不变时每次切出来都一样。工作样本里每一类至少要有 10 条，每一份才都能分到这一类的帖子；不够时这一格会停下并说明原因。
+
+# %%
+# Split the working sample into training, validation and test sets, stratified by label.
+from sklearn.model_selection import train_test_split  # random splits
+
+CLASS_LABELS = [0, 2] if N_CLASSES == 2 else [0, 1, 2]  # labels in use; also the column order of every class table below
+SPLIT_FRACTIONS = {"train": 0.8, "validation": 0.1, "test": 0.1}
+MIN_POSTS_PER_CLASS = 10  # fewest posts per class that still put every class into every part
+
+smallest_class = int(df["label"].value_counts().reindex(CLASS_LABELS, fill_value=0).min())
+if smallest_class < MIN_POSTS_PER_CLASS:
+    raise ValueError(f"The working sample has only {smallest_class} posts in its smallest class; "
+                     f"at least {MIN_POSTS_PER_CLASS} are needed to split it. Raise SAMPLE_PER_CLASS "
+                     "or use a larger data source.")
+train_df, rest_df = train_test_split(df, test_size=0.2, random_state=RANDOM_SEED, stratify=df["label"])  # 80 / 20
+val_df, test_df = train_test_split(rest_df, test_size=0.5, random_state=RANDOM_SEED,
+                                   stratify=rest_df["label"])  # the 20% part, half and half
+print(f"Training set: {len(train_df):,} posts; validation set: {len(val_df):,}; test set: {len(test_df):,}")
+
+# %% [markdown]
+# ### Class counts and shares in each part
+#
+# The three parts should show (almost) the same class shares as the working sample. The last column counts the posts that mention Bitcoin, which chapter 8 reports separately.
+#
+# ***
+#
+# ### 每一份里各类的条数和占比
+#
+# 三份的类别占比应当和工作样本（几乎）一样。最后一列是提到比特币的帖子条数，第 8 章会把它们单独报一行。
+
+# %%
+# Count posts per class in each part and record the split in the brief.
+split_parts = {"train": train_df, "validation": val_df, "test": test_df}
+split_counts = pd.DataFrame({name: part["label"].value_counts().reindex(CLASS_LABELS, fill_value=0)
+                             for name, part in split_parts.items()}).T  # one row per part, one column per label
+brief["sentiment"]["classes"] = [str(label) for label in CLASS_LABELS]
+brief["sentiment"]["split"] = {
+    "seed": RANDOM_SEED,
+    "fractions": SPLIT_FRACTIONS,
+    "stratified_by": "label",
+    "n_posts": {name: int(len(part)) for name, part in split_parts.items()},
+    "class_counts": {name: {str(label): int(split_counts.loc[name, label]) for label in CLASS_LABELS}
+                     for name in split_parts},
+    "class_shares": {name: {str(label): safe_ratio(int(split_counts.loc[name, label]), len(part))
+                            for label in CLASS_LABELS} for name, part in split_parts.items()},
+    "n_mentions_btc": {name: int(part["mentions_btc"].sum()) for name, part in split_parts.items()},
+}
+split_table = split_counts.rename(columns=LABEL_NAMES)
+for label in CLASS_LABELS:
+    split_table[f"{LABEL_NAMES[label]} share"] = [brief["sentiment"]["split"]["class_shares"][name][str(label)]
+                                                  for name in split_parts]
+split_table["posts"] = [len(part) for part in split_parts.values()]
+split_table["mention bitcoin"] = [brief["sentiment"]["split"]["n_mentions_btc"][name] for name in split_parts]
+split_table
+
+# %% [markdown]
 # ## Save the brief
 #
 # The brief is written to `WORK_DIR/brief.json` with the current UTC time. Every value that could not be computed (None, NaN or infinity) is converted to `null` before saving, never to 0 or NaN. As a safety net the JSON writer is also told to refuse NaN, so a NaN that slipped past the conversion would stop the save instead of reaching the file.
