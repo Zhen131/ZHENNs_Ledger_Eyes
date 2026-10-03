@@ -1398,6 +1398,233 @@ pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
              columns=[LABEL_NAMES[label] for label in SENTIMENT_PROBA_LABELS])
 
 # %% [markdown]
+# ## 8. Evaluation on the test set
+#
+# Only now do we look at the test set. The measures, for each class:
+#
+# - **precision**: of the posts the model put into this class, the share that really belong to it;
+# - **recall**: of the posts that really belong to this class, the share the model found;
+# - **F1**: the harmonic mean of precision and recall.
+#
+# **Macro-F1** is the plain average of the per-class F1 scores, so a large class cannot hide a small one. **Accuracy** is the share of posts the model got right. A **confusion matrix** has one row per true class and one column per predicted class; each cell counts posts.
+#
+# Two baselines show what "no skill" scores:
+#
+# - **always majority**: always guess the most frequent class of the training set; if classes are equally frequent, the smallest label (bearish) is taken;
+# - **uniform random**: for every post, pick one of the classes at random with equal chances, with `RANDOM_SEED`, so the guesses are the same on every run.
+#
+# **The bar:** each model's macro-F1 on all test posts must be higher than that of both baselines. Every model and every baseline gets two rows: one on all test posts and one on only the test posts that mention Bitcoin.
+#
+# A score that cannot be computed (for example the precision of a class the model never predicts, or any score on an empty subset) is left empty: "—" in the tables and `null` in the brief, never 0. Macro-F1 averages only the classes whose F1 can be computed.
+#
+# ***
+#
+# ## 8. 在测试集上评估
+#
+# 到这里才第一次看测试集。每一类的指标：
+#
+# - **precision（精确率）**：模型判成这一类的帖子里，真是这一类的占多少；
+# - **recall（召回率）**：真是这一类的帖子里，被模型找出来的占多少；
+# - **F1**：精确率和召回率的调和平均。
+#
+# **Macro-F1** 是各类 F1 的简单平均，条数多的类盖不住条数少的类。**Accuracy（准确率）**是判对的帖子占多少。**混淆矩阵**每一行是一个真实类别，每一列是一个判出的类别，格子里是帖子条数。
+#
+# 两条对照线，表示「毫无本事」能拿多少分：
+#
+# - **永远猜多数**：永远猜训练集里最多的那一类；各类一样多时，取标签最小的那一类（看空）；
+# - **随机乱猜**：每条帖子都从各类里等概率随便挑一个，用 `RANDOM_SEED`，所以每次挑得一样。
+#
+# **过线标准：** 每个模型在全部测试帖上的 macro-F1，必须同时高于这两条对照线。每个模型、每条对照线都有两行：一行是全部测试帖，一行只看提到比特币的测试帖。
+#
+# 算不出来的分数（比如模型从来没判过的那一类的精确率，或者空子集上的任何分数）一律留空：表里显示「—」，简报里写 `null`，绝不写 0。Macro-F1 只平均那些算得出 F1 的类别。
+
+# %% [markdown]
+# ### Test posts whose text also appears in the training set
+#
+# The dataset author removed duplicate posts, but a few exact repeats remain (chapter 2). A test post with exactly the same text as a training post is easier for the models than a truly new one. We count such test posts, by original text and by cleaned text, and record the numbers in the brief; we keep them in the test set and do not remove anything.
+#
+# ***
+#
+# ### 文字和训练集里某条一模一样的测试帖
+#
+# 数据集作者去过重，但还剩少量一字不差的重复（第 2 章）。和某条训练帖文字完全相同的测试帖，对模型来说比真正的新帖容易。这里按原文和按清洗后的文字各数一遍，写进简报；这些帖子照样留在测试集里，一条不删。
+
+# %%
+# Count test posts whose text also appears in the training set (recorded only, nothing is removed).
+test_texts_also_in_train = {
+    "same_text": int(test_df["text"].isin(set(train_df["text"])).sum()),
+    "same_clean_text": int(test_df["clean_text"].isin(set(train_df["clean_text"])).sum()),
+}
+brief["sentiment"]["test_texts_also_in_train"] = test_texts_also_in_train
+print(f"Test posts: {len(test_df):,}; with the same original text as a training post: "
+      f"{test_texts_also_in_train['same_text']:,}; with the same cleaned text: {test_texts_also_in_train['same_clean_text']:,}")
+
+# %% [markdown]
+# ### Predictions on the test set
+#
+# Both networks and both baselines label every test post. The baselines ignore the text, so they get a dummy column of zeros as input; scikit-learn's `DummyClassifier` does the guessing, and we check that "always majority" really guesses the most frequent training label.
+#
+# ***
+#
+# ### 在测试集上做判断
+#
+# 两个网络和两条对照线都给每条测试帖判一个类别。对照线不看文字，所以只喂给它一列全是 0 的假输入；猜的活由 scikit-learn 的 `DummyClassifier` 干。我们还核对「永远猜多数」猜的确实是训练集里最多的那一类。
+
+# %%
+# Label the test set with both networks and both baselines.
+from sklearn.dummy import DummyClassifier  # baselines that ignore the input
+
+BASELINES = ["always_majority", "uniform_random"]
+y_test = test_df["label"].to_numpy()
+majority_label = int(train_df["label"].value_counts().reindex(CLASS_LABELS, fill_value=0).idxmax())  # tie: smallest label
+no_text_train = np.zeros((len(train_df), 1))  # the baselines ignore the text
+no_text_test = np.zeros((len(test_df), 1))
+always_majority = DummyClassifier(strategy="most_frequent").fit(no_text_train, train_df["label"])
+uniform_random = DummyClassifier(strategy="uniform", random_state=RANDOM_SEED).fit(no_text_train, train_df["label"])
+
+test_predictions = {name: predict_labels(entry["model"], features[entry["vectors"]]["test"])
+                    for name, entry in models.items()}  # model name -> predicted labels
+test_predictions["always_majority"] = always_majority.predict(no_text_test)
+test_predictions["uniform_random"] = uniform_random.predict(no_text_test)
+if not (test_predictions["always_majority"] == majority_label).all():
+    raise AssertionError("the majority baseline does not guess the most frequent training label")
+print(f"Most frequent label in the training set: {majority_label} ({LABEL_NAMES[majority_label]})")
+pd.DataFrame({name: pd.Series(predicted).value_counts().reindex(CLASS_LABELS, fill_value=0)
+              for name, predicted in test_predictions.items()}).rename(index=LABEL_NAMES)  # guesses per class
+
+# %% [markdown]
+# ### The evaluation table
+#
+# One row per model or baseline and per subset: all test posts, and only the test posts that mention Bitcoin. Columns: number of posts, accuracy, precision / recall / F1 for each class, and macro-F1.
+#
+# ***
+#
+# ### 评估表
+#
+# 每个模型或对照线、每个子集一行：全部测试帖；只含提到比特币的测试帖。列：帖子条数、准确率、每一类的精确率／召回率／F1、macro-F1。
+
+# %%
+# Score every model and baseline on both subsets of the test set.
+SUBSETS = {"all_test": "all test posts", "test_mentions_btc": "test posts that mention bitcoin or btc"}
+subset_masks = {"all_test": np.ones(len(test_df), dtype=bool), "test_mentions_btc": test_df["mentions_btc"].to_numpy()}
+
+
+def evaluate(true_labels, predicted_labels):
+    """Accuracy, per-class precision / recall / F1 / support and macro-F1; NaN where a score cannot be computed."""
+    precision, recall, f1, support = class_scores(true_labels, predicted_labels)
+    return {
+        "n": int(len(true_labels)),
+        "accuracy": float(np.mean(true_labels == predicted_labels)) if len(true_labels) else float("nan"),
+        "per_class": {str(label): {"precision": float(precision[position]), "recall": float(recall[position]),
+                                   "f1": float(f1[position]), "support": int(support[position])}
+                      for position, label in enumerate(CLASS_LABELS)},
+        "macro_f1": macro_f1(true_labels, predicted_labels),
+    }
+
+
+evaluation_rows = [
+    {"model": name, "kind": "baseline" if name in BASELINES else "model", "subset": subset,
+     **evaluate(y_test[mask], predicted[mask])}
+    for name, predicted in test_predictions.items() for subset, mask in subset_masks.items()
+]
+brief["sentiment"]["evaluation"] = {
+    "subsets": SUBSETS,
+    "baselines": BASELINES,
+    "majority_label": str(majority_label),
+    "rows": evaluation_rows,
+}
+
+
+def blank_if_nan(value):
+    """Show scores with three decimals and a dash where a score cannot be computed."""
+    if isinstance(value, float):
+        return "—" if np.isnan(value) else round(value, 3)
+    return value
+
+
+pd.DataFrame([{
+    "model": row["model"], "subset": row["subset"], "posts": row["n"], "accuracy": row["accuracy"],
+    **{f"{LABEL_NAMES[label]} {measure}": row["per_class"][str(label)][measure]
+       for label in CLASS_LABELS for measure in ("precision", "recall", "f1")},
+    "macro-F1": row["macro_f1"],
+} for row in evaluation_rows]).map(blank_if_nan)
+
+# %% [markdown]
+# ### Do the models beat both baselines?
+#
+# The bar from the start of this chapter, on all test posts.
+#
+# ***
+#
+# ### 模型是否同时胜过两条对照线？
+#
+# 本章开头定的过线标准，在全部测试帖上看。
+
+# %%
+# Compare each model's macro-F1 on all test posts with both baselines.
+all_test_macro_f1 = {row["model"]: row["macro_f1"] for row in evaluation_rows if row["subset"] == "all_test"}
+beats_baselines = {name: bool(all(all_test_macro_f1[name] > all_test_macro_f1[baseline] for baseline in BASELINES))
+                   for name in models}  # False when a score is missing
+brief["sentiment"]["beats_baselines"] = beats_baselines
+pd.DataFrame([{"model": name, "macro-F1": all_test_macro_f1[name],
+               **{baseline: all_test_macro_f1[baseline] for baseline in BASELINES},
+               "beats both": beats_baselines[name]} for name in models]).set_index("model").map(blank_if_nan)
+
+# %% [markdown]
+# ### Confusion matrices
+#
+# One matrix per model, on all test posts: rows are the true classes, columns the predicted ones. The counts go into the brief; each matrix adds up to the number of test posts.
+#
+# ***
+#
+# ### 混淆矩阵
+#
+# 每个模型一张，用全部测试帖：行是真实类别，列是判出的类别。计数写进简报；每张矩阵的格子加起来等于测试帖条数。
+
+# %%
+# Draw a confusion matrix for each model and record the counts.
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix  # confusion matrices
+
+class_names = [LABEL_NAMES[label] for label in CLASS_LABELS]
+figure, axes = plt.subplots(1, len(models), figsize=(4.5 * len(models), 4))
+confusion_matrices = {}
+for axis, name in zip(np.atleast_1d(axes), models):
+    counts = confusion_matrix(y_test, test_predictions[name], labels=CLASS_LABELS)  # rows: true, columns: predicted
+    confusion_matrices[name] = {"labels": [str(label) for label in CLASS_LABELS], "rows": "true label",
+                                "columns": "predicted label", "counts": counts.tolist(), "n": int(counts.sum())}
+    ConfusionMatrixDisplay(counts, display_labels=class_names).plot(ax=axis, colorbar=False, values_format="d")
+    axis.set_title(name)
+    axis.set_xlabel("predicted")
+    axis.set_ylabel("true")
+plt.tight_layout()
+plt.show()
+brief["sentiment"]["confusion_matrices"] = confusion_matrices
+
+# %% [markdown]
+# ### Checking the scoring function
+#
+# Finally we make sure that `sentiment_proba`, the function later chapters use, gives exactly the labels that were evaluated above for the chosen model, that it returns one column per class and that every row adds up to 1. The test posts are only read here; nothing is trained or chosen any more.
+#
+# ***
+#
+# ### 核对打分函数
+#
+# 最后核对后面章节要用的 `sentiment_proba`：它给出的类别，和上面评估选中模型时用的完全一样；它每一类返回一列；每一行加起来等于 1。这里只读测试帖，不再训练、也不再做任何选择。
+
+# %%
+# Check sentiment_proba against the evaluated predictions of the chosen model.
+test_proba = sentiment_proba(test_df["clean_text"])
+scoring_check = {
+    "n_texts": int(test_proba.shape[0]),
+    "n_columns": int(test_proba.shape[1]),
+    "rows_sum_to_one": bool(np.allclose(test_proba.sum(axis=1), 1.0, atol=1e-5)),
+    "matches_evaluated_predictions": bool(np.array_equal(
+        np.asarray(SENTIMENT_PROBA_LABELS)[test_proba.argmax(axis=1)], test_predictions[selected_model_name])),
+}
+brief["sentiment"]["scoring"]["check"] = scoring_check
+scoring_check
+
+# %% [markdown]
 # ## Save the brief
 #
 # The brief is written to `WORK_DIR/brief.json` with the current UTC time. Every value that could not be computed (None, NaN or infinity) is converted to `null` before saving, never to 0 or NaN. As a safety net the JSON writer is also told to refuse NaN, so a NaN that slipped past the conversion would stop the save instead of reaching the file.
