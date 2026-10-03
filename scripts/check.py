@@ -9,8 +9,13 @@ quick: static checks, then the notebook runs three times on the bundled
        topics sections of the two default runs must be identical. A fourth
        run sets both thresholds of the why chapter to 0.5 and the too-few bar
        above the topic post table; the why section of every brief is checked.
+       Every brief must pass the format rules (docs/brief.schema.json); the
+       first two are also broken on purpose (locked counterexamples, all of
+       which must be rejected) and shown on the panel, built but not started.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief.
+
+Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
 -p NAME VALUE overrides a switch of the notebook's parameters cell for every
 run (VALUE is read as a Python literal when possible, otherwise as text).
@@ -19,9 +24,17 @@ Exit code 0 means every check passed.
 
 import argparse
 import ast
+import builtins
+import contextlib
+import copy
 import hashlib
+import io
 import json
+import os
 import re
+import shutil
+import subprocess
+import symtable
 import sys
 import time
 from collections import Counter
@@ -55,6 +68,14 @@ MODEL_CALLS = ["bullish", "bearish", "unsure"]  # the model's calls in the why s
 FAIR_CLASSES = ["0", "2"]  # the fair comparison uses posts labelled bearish or bullish only
 THRESHOLD_SETTINGS = {"BULLISH_THRESHOLD": 0.5, "BEARISH_THRESHOLD": 0.5}  # fourth quick run; plus MIN_TOPIC_POSTS
 THRESHOLD_LABEL = "threshold run"
+# Chapter 11: the brief's format rules, its documentation and the panel.
+SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
+FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
+DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
+PANEL_SWITCH = "LAUNCH_PANEL"
+CHECK_SETTINGS = {PANEL_SWITCH: False}  # every run of both checks: the panel is built, never started
+PANEL_TABLES = ["scope", "evaluation", "topics", "why"]  # the panel's tables, in tab order
+LOOPBACK_HOST = "127.0.0.1"  # the only address the panel may listen on
 
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
@@ -1113,11 +1134,12 @@ def compare_why(report, first, again):
                  "label shares)", detail)
 
 
-def threshold_run(report, defaults, overrides, default_brief):
+def threshold_run(report, defaults, overrides, default_brief, rules=None):
     """Both thresholds at 0.5 and MIN_TOPIC_POSTS above the topic post table: no post unsure, every topic too small."""
     table = as_dict(as_dict(default_brief).get("topics")).get("n_posts")
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
     parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
+    parameters = panel_settings(report, THRESHOLD_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
     report.info(f"{THRESHOLD_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
     kept = [name for name in settings if name in overrides]
@@ -1130,6 +1152,8 @@ def threshold_run(report, defaults, overrides, default_brief):
     if brief is None:
         return
     check_why(report, THRESHOLD_LABEL, brief, switches)
+    check_format(report, THRESHOLD_LABEL, brief, rules)
+    check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
     rows, overall = why_rows(why), as_dict(why.get("overall"))
     n_table = as_dict(brief.get("topics")).get("n_posts")
@@ -1196,6 +1220,578 @@ def print_why(brief):
         print(f"    topic {row.get('topic')}: {row.get('name')}")
 
 
+# ---------------------------------------------------------------- the brief's format and the panel (chapter 11)
+
+def code_cells():
+    """The notebook source's code cells, in order."""
+    return [cell.source for cell in jupytext.read(SOURCE, fmt="py:percent").cells if cell.cell_type == "code"]
+
+
+def cell_defining(name):
+    """Source of the code cell whose top level defines name (assignment, def or import), or None."""
+    for source in code_cells():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name == name:
+                return source
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == name
+                                                    for target in node.targets):
+                return source
+    return None
+
+
+def schema_field_rows(schema):
+    """{path: (type, required, null)} for every field the rules allow, $refs expanded; and problems found."""
+    definitions = schema.get("$defs", {}) if isinstance(schema, dict) else {}
+    rows, problems = {}, []
+
+    def resolve(node):
+        node = dict(node) if isinstance(node, dict) else {}
+        while "$ref" in node:
+            reference = node.pop("$ref")
+            name = reference.rsplit("/", 1)[-1]
+            if not reference.startswith("#/$defs/") or name not in definitions:
+                problems.append(f"unknown reference {reference}")
+                return node
+            node = {**definitions[name], **node}
+        return node
+
+    def walk(node, path, required):
+        node = resolve(node)
+        types = node.get("type")
+        types = [types] if isinstance(types, str) else list(types or [])
+        kinds = [kind for kind in types if kind != "null"]
+        if len(kinds) != 1:
+            problems.append(f"{path or 'brief'}: needs exactly one type besides null, has {types}")
+            return
+        kind = kinds[0]
+        if path:
+            rows[path] = (kind, required, "yes" if "null" in types else "no")
+        if kind == "object":
+            if "properties" in node:
+                if node.get("additionalProperties") is not False:
+                    problems.append(f"{path or 'brief'}: an object with fields must set additionalProperties to false")
+                for name, child in node["properties"].items():
+                    walk(child, f"{path}.{name}" if path else name,
+                         "yes" if name in node.get("required", []) else "no")
+            elif isinstance(node.get("additionalProperties"), dict):
+                key = resolve(node.get("propertyNames", {})).get("title")
+                if not key:
+                    problems.append(f"{path}: an object with varying keys needs propertyNames with a title")
+                    return
+                walk(node["additionalProperties"], f"{path}.<{key}>", "—")
+            else:
+                problems.append(f"{path}: an object must list its fields or describe its keys")
+        elif kind == "array":
+            if not isinstance(node.get("items"), dict):
+                problems.append(f"{path}: an array must describe its items")
+                return
+            walk(node["items"], f"{path}[]", "—")
+
+    walk(schema, "", "yes")
+    return rows, problems
+
+
+def doc_field_rows(text):
+    """{path: (type, required, null)} from every field table of the format document; and problems found."""
+    rows, problems, inside = {}, [], False
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.strip() == DOC_TABLE_HEADER:
+            inside = True
+            continue
+        if inside and not line.startswith("|"):
+            inside = False
+        if not inside:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if all(set(cell) <= {"-", " ", ":"} for cell in cells):
+            continue  # the line under the header
+        if len(cells) != 5 or not re.fullmatch(r"`[^`]+`", cells[0]):
+            problems.append(f"line {number}: not a field row with five cells")
+            continue
+        path = cells[0].strip("`")
+        if path in rows:
+            problems.append(f"line {number}: {path} listed twice")
+        rows[path] = tuple(cells[1:4])
+    return rows, problems
+
+
+def outside_names(source):
+    """Names a cell reads that it neither defines nor imports itself (builtins excluded)."""
+    table = symtable.symtable(source, "cell", "exec")
+    bound = {symbol.get_name() for symbol in table.get_symbols() if symbol.is_assigned() or symbol.is_imported()}
+    used = set()
+
+    def walk(scope, top):
+        for symbol in scope.get_symbols():
+            if symbol.is_referenced() and (top or symbol.is_global()):
+                used.add(symbol.get_name())
+        for child in scope.get_children():
+            walk(child, False)
+
+    walk(table, True)
+    return sorted(used - bound - set(dir(builtins)))
+
+
+def load_format_rules(report):
+    """Static checks of the format rules, their notebook copy and their documentation.
+
+    Returns the notebook's own rules and check functions (BRIEF_SCHEMA, brief_problems, save_brief, ...),
+    executed from its source, or None when they cannot be loaded.
+    """
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
+
+    try:
+        schema_text = SCHEMA_FILE.read_text(encoding="utf-8")
+        schema = json.loads(schema_text)
+        Draft202012Validator.check_schema(schema)
+        detail = ""
+    except (OSError, ValueError, SchemaError) as exc:
+        schema_text, schema, detail = None, None, f"{type(exc).__name__}: {str(exc)[:200]}"
+    if not report.check(isinstance(schema, dict), f"{shown(SCHEMA_FILE)} is a valid JSON Schema (draft 2020-12)", detail):
+        return None
+    version = as_dict(as_dict(schema.get("properties")).get("format_version")).get("const")
+    report.info(f"format rules: {schema.get('title')!r}, format_version {version!r}")
+
+    # The notebook's copy of the rules and its check functions, executed from the source.
+    namespace, problems = {"__name__": "notebook_cells"}, []
+    for name in ("BRIEF_SCHEMA_TEXT", "brief_problems", "save_brief"):
+        source = cell_defining(name)
+        if source is None:
+            problems.append(f"no cell defines {name}")
+            continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, f"cell defining {name}", "exec"), namespace)
+        except Exception as exc:  # the cell itself is broken
+            problems.append(f"cell defining {name}: {type(exc).__name__}: {exc}")
+    if not report.check(not problems, "the notebook's rules and check functions load from its source", "; ".join(problems)):
+        return None
+    same = namespace.get("BRIEF_SCHEMA_TEXT") == schema_text and namespace.get("BRIEF_SCHEMA") == schema
+    report.check(same, f"the notebook's copy of the format rules is identical to {shown(SCHEMA_FILE)} (one set of rules)",
+                 "" if same else "copy the file's text into BRIEF_SCHEMA_TEXT unchanged")
+
+    # The version: the same in the rules, the notebook's brief and the document.
+    source = SOURCE.read_text(encoding="utf-8")
+    written = re.search(r'"format_version": "([^"]*)"', source)
+    documented = re.search(r"describes format \*\*([^*]+)\*\*", FORMAT_DOC.read_text(encoding="utf-8")
+                           if FORMAT_DOC.exists() else "")
+    versions = [version, written.group(1) if written else None, documented.group(1) if documented else None]
+    report.check(isinstance(version, str) and len(set(versions)) == 1,
+                 "format_version is the same in the rules, in the brief the notebook writes and in the format document",
+                 f"rules {versions[0]!r}, notebook {versions[1]!r}, document {versions[2]!r}")
+
+    # The document lists exactly the fields of the rules, and the rules allow no undocumented field.
+    expected, schema_problems = schema_field_rows(schema)
+    report.check(not schema_problems, "every object of the format rules lists its fields or names its keys, and allows "
+                 "no other field (so every field of a passing brief is documented)", "; ".join(schema_problems[:5]))
+    listed, doc_problems = doc_field_rows(FORMAT_DOC.read_text(encoding="utf-8") if FORMAT_DOC.exists() else "")
+    missing = [path for path in expected if path not in listed]
+    extra = [path for path in listed if path not in expected]
+    differ = [f"{path}: document {listed[path]}, rules {expected[path]} (type, required, null)"
+              for path in expected if path in listed and listed[path] != expected[path]]
+    report.check(bool(expected) and not (missing or extra or differ or doc_problems),
+                 f"{shown(FORMAT_DOC)} lists every field of the rules with the same type, required and null "
+                 f"({len(listed)} of {len(expected)} fields)",
+                 "; ".join(doc_problems[:3] + [f"missing {missing[:5]}"] * bool(missing)
+                           + [f"not in the rules {extra[:5]}"] * bool(extra) + differ[:3]))
+
+    # Saving: only through save_brief, which checks before it writes and refuses NaN.
+    save_source = cell_defining("save_brief") or ""
+    function = next((node for node in ast.walk(ast.parse(save_source))
+                     if isinstance(node, ast.FunctionDef) and node.name == "save_brief"), None)
+    order = {}
+    for node in ast.walk(function) if function else []:
+        if isinstance(node, ast.Call):
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            order.setdefault(name, node.lineno)
+            if name == "dumps":
+                order["allow_nan=False"] = any(keyword.arg == "allow_nan" and isinstance(keyword.value, ast.Constant)
+                                               and keyword.value.value is False for keyword in node.keywords)
+    save_cell = cell_defining("brief_path") or ""
+    cells = code_cells()
+    writers = [index for index, cell in enumerate(cells) if re.search(r"\.write_text\(|json\.dump\(", cell)]
+    report.check(function is not None and "validate_brief" in order and "write_text" in order
+                 and order["validate_brief"] < order["write_text"] and order.get("allow_nan=False") is True
+                 and re.search(r"\bsave_brief\(brief, brief_path\)", save_cell) is not None
+                 and writers == [cells.index(save_source) if save_source in cells else -1],
+                 "the notebook saves the brief only through save_brief, which runs validate_brief before writing and "
+                 "refuses NaN (allow_nan=False)",
+                 f"calls in save_brief {order}, cells that write files {writers}")
+    return namespace
+
+
+def check_panel_source(report, defaults, others):
+    """The panel switch, and the panel cell: reads only the brief file, no public link, no usage statistics."""
+    report.check(defaults.get(PANEL_SWITCH) is True and PANEL_SWITCH not in others,
+                 f"{PANEL_SWITCH} exists, defaults to True and is not a two-state switch (the checks always set it to False)",
+                 f"default {defaults.get(PANEL_SWITCH)!r}, two-state: {PANEL_SWITCH in others}")
+
+    panel_cell = cell_defining("build_panel") or ""
+    outside = outside_names(panel_cell) if panel_cell else ["(no cell defines build_panel)"]
+    functions = {node.name: node for node in ast.walk(ast.parse(panel_cell)) if isinstance(node, ast.FunctionDef)}
+    parameters = {name: [argument.arg for argument in functions[name].args.args] if name in functions else None
+                  for name in ("panel_tables", "build_panel")}
+    cells = code_cells()
+    last = cells[-1] if cells else ""
+    report.check(panel_cell != "" and not outside and all(value == ["brief_path"] for value in parameters.values())
+                 and re.search(r"\bbuild_panel\(brief_path\)", last) is not None,
+                 "the panel cell uses no other variable of the notebook, panel_tables and build_panel take only the "
+                 "brief file's path, and the last cell builds the panel from the saved file",
+                 f"names from outside the cell {outside}, parameters {parameters}")
+
+    # No public link, no server beyond this machine, Gradio's usage statistics off before the import.
+    source = SOURCE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+
+    def keyword(call, name):
+        found = [item.value for item in call.keywords if item.arg == name]
+        return found[0].value if found and isinstance(found[0], ast.Constant) else ("missing" if not found else "not a constant")
+
+    launches = [node for node in calls if node.func.attr == "launch"]
+    blocks = [node for node in calls if node.func.attr == "Blocks"]
+    every_share = [keyword(node, "share") for node in ast.walk(tree) if isinstance(node, ast.Call)
+                   and any(item.arg == "share" for item in node.keywords)]
+    every_server = [keyword(node, "server_name") for node in ast.walk(tree) if isinstance(node, ast.Call)
+                    and any(item.arg == "server_name" for item in node.keywords)]
+    report.check(bool(launches) and all(keyword(node, "share") is False and keyword(node, "server_name") == LOOPBACK_HOST
+                                        for node in launches)
+                 and all(value is False for value in every_share) and all(value == LOOPBACK_HOST for value in every_server),
+                 f"the panel is started with share=False and server_name=\"{LOOPBACK_HOST}\" only (no public link, "
+                 "nothing served beyond this machine)",
+                 f"launch calls: {[(keyword(node, 'share'), keyword(node, 'server_name')) for node in launches]}; "
+                 f"every share= {every_share}, every server_name= {every_server}")
+
+    lines = source.splitlines()
+    setting = re.compile(r'^\s*os\.environ\["GRADIO_ANALYTICS_ENABLED"\] = "False"')
+    importing = re.compile(r"^\s*(?:import gradio\b|from gradio\b)")
+    first_setting = next((number for number, line in enumerate(lines) if setting.match(line)), None)
+    first_import = next((number for number, line in enumerate(lines) if importing.match(line)), None)
+    cell_lines = panel_cell.splitlines()
+    cell_setting = next((number for number, line in enumerate(cell_lines) if setting.match(line)), None)
+    cell_import = next((number for number, line in enumerate(cell_lines) if importing.match(line)), None)
+    environment = (REPO_DIR / "scripts" / "env.sh").read_text(encoding="utf-8")
+    report.check(first_setting is not None and first_import is not None and first_setting < first_import
+                 and cell_setting is not None and cell_import is not None and cell_setting < cell_import
+                 and bool(blocks) and all(keyword(node, "analytics_enabled") is False for node in blocks)
+                 and re.search(r"^export GRADIO_ANALYTICS_ENABLED=False$", environment, flags=re.MULTILINE) is not None
+                 and os.environ.get("GRADIO_ANALYTICS_ENABLED") == "False",
+                 "Gradio's usage statistics are off: GRADIO_ANALYTICS_ENABLED=False is set before any import of "
+                 "gradio (notebook) and in scripts/env.sh (checks), and the page is built with analytics_enabled=False",
+                 f"notebook lines: setting {first_setting}, first import {first_import}; panel cell: setting "
+                 f"{cell_setting}, import {cell_import}; Blocks calls "
+                 f"{[keyword(node, 'analytics_enabled') for node in blocks]}; this process: "
+                 f"{os.environ.get('GRADIO_ANALYTICS_ENABLED')!r}")
+
+
+def check_format(report, label, brief, rules):
+    """The brief passes the notebook's own check against the format rules."""
+    if rules is None:
+        report.check(False, f"{label}: brief passes the format rules", "the rules could not be loaded")
+        return
+    problems = rules["brief_problems"](brief)
+    report.check(not problems, f"{label}: brief passes the format rules ({shown(SCHEMA_FILE)}, no NaN or infinity)",
+                 "; ".join(problems[:5]))
+
+
+DELETE = object()  # a counterexample that removes the field
+NAN, INFINITY = float("nan"), float("inf")
+
+
+def changed_copy(document, path, change):
+    """A deep copy of document with the field at path removed (DELETE) or replaced by change(old value)."""
+    result = copy.deepcopy(document)
+    target = result
+    for key in path[:-1]:
+        target = target[key]
+    if change is DELETE:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = change(target.get(path[-1]) if isinstance(target, dict) else target[path[-1]])
+    return result
+
+
+# Locked counterexamples: each breaks a valid brief in one place, and the format check must reject it with a
+# problem at the given path that mentions the given word. Kinds 1 to 5 are the five kinds the format check must
+# catch at least; kind 6 adds a null where the format does not allow one, and a field the format does not know.
+BROKEN_BRIEFS = [
+    *[("1 top-level field missing", (field,), DELETE, "brief", field) for field in TOP_LEVEL_FIELDS],
+    ("2 required field missing in a section", ("scope", "granularity"), DELETE, "scope", "granularity"),
+    ("2 required field missing in a section", ("dataset", "n_posts"), DELETE, "dataset", "n_posts"),
+    ("2 required field missing in a section", ("sentiment", "evaluation"), DELETE, "sentiment", "evaluation"),
+    ("2 required field missing in a section", ("sentiment", "evaluation", "rows", 0, "macro_f1"), DELETE,
+     "sentiment.evaluation.rows[0]", "macro_f1"),
+    ("2 required field missing in a section", ("topics", "topics"), DELETE, "topics", "topics"),
+    ("2 required field missing in a section", ("why", "overall"), DELETE, "why", "overall"),
+    ("2 required field missing in a section", ("why", "topics", 0, "fair", "label_bullish_share"), DELETE,
+     "why.topics[0].fair", "label_bullish_share"),
+    ("3 wrong type", ("dataset", "n_posts"), str, "dataset.n_posts", "integer"),  # a count written as text
+    ("3 wrong type", ("why", "overall", "label_bullish_share"), lambda old: "0.5", "why.overall.label_bullish_share",
+     "number"),  # a share written as text
+    ("3 wrong type", ("topics", "topics"), lambda old: {}, "topics.topics", "array"),  # a list written as an object
+    ("3 wrong type", ("scope",), lambda old: [], "scope", "object"),  # an object written as a list
+    ("3 wrong type", ("dataset", "cleaning", "keep_negations"), lambda old: "true", "dataset.cleaning.keep_negations",
+     "boolean"),
+    ("3 wrong type", ("topics", "topics", 0, "n_posts"), lambda old: 1.5, "topics.topics[0].n_posts", "integer"),
+    ("4 granularity not allowed", ("scope", "granularity"), lambda old: "weekly", "scope.granularity", "weekly"),
+    ("4 granularity not allowed", ("scope", "granularity"), lambda old: "Batch", "scope.granularity", "Batch"),
+    ("4 granularity not allowed", ("scope", "granularity"), lambda old: "", "scope.granularity", "''"),
+    ("4 granularity not allowed", ("scope", "granularity"), lambda old: None, "scope.granularity", "None"),
+    ("4 granularity not allowed", ("scope", "granularity"), lambda old: 1, "scope.granularity", "1"),
+    ("5 NaN or infinity", ("dataset", "class_shares", "0"), lambda old: NAN, "dataset.class_shares.0", "nan"),
+    ("5 NaN or infinity", ("why", "overall", "fair", "model_minus_label_pp"), lambda old: NAN,
+     "why.overall.fair.model_minus_label_pp", "nan"),
+    ("5 NaN or infinity", ("dataset", "n_posts"), lambda old: NAN, "dataset.n_posts", "nan"),
+    ("5 NaN or infinity", ("why", "scoring", "seconds"), lambda old: INFINITY, "why.scoring.seconds", "inf"),
+    ("5 NaN or infinity", ("sentiment", "evaluation", "rows", 0, "accuracy"), lambda old: -INFINITY,
+     "sentiment.evaluation.rows[0].accuracy", "-inf"),
+    ("6 null not allowed, or an unknown field", ("dataset", "n_posts"), lambda old: None, "dataset.n_posts", "None"),
+    ("6 null not allowed, or an unknown field", ("topics", "n_topics"), lambda old: None, "topics.n_topics", "None"),
+    ("6 null not allowed, or an unknown field", ("why", "topics", 0, "name"), lambda old: None, "why.topics[0].name",
+     "None"),
+    ("6 null not allowed, or an unknown field", ("why", "extra_field"), lambda old: 1, "why", "extra_field"),
+]
+# Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
+NULL_ALLOWED = [
+    ("dataset", "class_shares", "0"),
+    ("dataset", "length_words", "p90"),
+    ("sentiment", "evaluation", "rows", 0, "macro_f1"),
+    ("why", "overall", "fair", "model_minus_label_pp"),
+    ("why", "topics", 0, "label_vs_overall_pp"),
+]
+
+
+def path_text(path):
+    return "".join(f"[{part}]" if isinstance(part, int) else (f".{part}" if index else str(part))
+                   for index, part in enumerate(path))
+
+
+def check_counterexamples(report, label, brief, rules):
+    """Every locked counterexample is rejected for the right reason; null is accepted where the format allows it."""
+    if rules is None:
+        report.check(False, f"{label}: counterexamples", "the rules could not be loaded")
+        return
+    kinds = {}
+    for kind, path, change, where, word in BROKEN_BRIEFS:
+        try:
+            broken = changed_copy(brief, path, change)
+        except (KeyError, IndexError, TypeError) as exc:
+            kinds.setdefault(kind, []).append((path, False, f"could not be applied: {type(exc).__name__} {exc}"))
+            continue
+        problems = rules["brief_problems"](broken)
+        reason = [problem for problem in problems if problem.startswith(f"{where}: ") and word in problem]
+        kinds.setdefault(kind, []).append((path, bool(reason), (reason or problems or ["no problem found"])[0]))
+    for kind, cases in kinds.items():
+        rejected = sum(ok for _, ok, _ in cases)
+        report.check(rejected == len(cases), f"{label}: the format check rejects every counterexample of kind "
+                     f"'{kind}' ({rejected} of {len(cases)})",
+                     "; ".join(f"{path_text(path)}: {message}" for path, ok, message in cases if not ok))
+        for path, ok, message in cases:
+            report.info(f"{'rejected' if ok else 'NOT rejected'}: {path_text(path)} -> {message}")
+    accepted, refused = 0, []
+    for path in NULL_ALLOWED:
+        try:
+            problems = rules["brief_problems"](changed_copy(brief, path, lambda old: None))
+        except (KeyError, IndexError, TypeError) as exc:
+            problems = [f"could not be applied: {exc}"]
+        accepted += not problems
+        refused += [f"{path_text(path)}: {problems[0]}"] if problems else []
+    report.check(not refused, f"{label}: the format check accepts null in fields that may be null "
+                 f"({accepted} of {len(NULL_ALLOWED)})", "; ".join(refused))
+
+
+def check_save_refuses(report, label, brief, rules):
+    """save_brief writes nothing for a brief that breaks the rules, and never writes NaN."""
+    if rules is None:
+        report.check(False, f"{label}: save_brief", "the rules could not be loaded")
+        return
+    folder = REPO_DIR / "data" / "checks" / "save-probe"
+    shutil.rmtree(folder, ignore_errors=True)
+    target = folder / "brief.json"
+
+    def attempt(document):
+        target.unlink(missing_ok=True)
+        try:
+            rules["save_brief"](document, target)
+            return None
+        except ValueError as exc:
+            lines = str(exc).splitlines()
+            return lines[1].strip().removeprefix("- ") if len(lines) > 1 else str(exc)
+
+    results = []
+    for description, path, change in [("a missing section", ("why",), DELETE),
+                                      ("NaN in a field that may not be null", ("dataset", "n_posts"), lambda old: NAN)]:
+        message = attempt(changed_copy(brief, path, change))
+        results.append(message is not None and not target.exists())
+        report.info(f"save_brief with {description}: {'refused, nothing written' if results[-1] else 'NOT refused'}"
+                    f" ({message})")
+    message = attempt(changed_copy(brief, ("why", "overall", "fair", "model_minus_label_pp"), lambda old: NAN))
+    try:
+        saved = json.loads(target.read_text(encoding="utf-8"), parse_constant=reject_constant)
+        nan_as_null = message is None and saved["why"]["overall"]["fair"]["model_minus_label_pp"] is None
+    except (OSError, ValueError, KeyError, TypeError):
+        nan_as_null = False
+    message = attempt(brief)
+    try:
+        round_trip = message is None and json.loads(target.read_text(encoding="utf-8"), parse_constant=reject_constant) == brief
+    except (OSError, ValueError):
+        round_trip = False
+    report.check(all(results) and nan_as_null and round_trip,
+                 f"{label}: save_brief writes nothing when the check fails, saves a NaN in a field that may be null "
+                 "as null, and writes a valid brief unchanged", f"refused {results}, NaN saved as null {nan_as_null}, "
+                 f"round trip {round_trip}")
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+# Run in a separate Python with an audit hook that records every network connection and name lookup to a
+# host other than this machine. It executes the notebook's panel cell, then builds the panel from a brief file
+# and from a copy with marked values, and prints the tables and the page's table components as JSON.
+PANEL_PROBE = r'''
+import json, os, sys
+LOOPBACK = {"127.0.0.1", "::1", "localhost", b"127.0.0.1", b"::1", b"localhost"}
+network = []
+
+def audit(event, args):
+    if event == "socket.connect" and isinstance(args[1], tuple) and args[1][0] not in LOOPBACK:
+        network.append(f"connect {args[1]!r}")
+    elif event == "socket.getaddrinfo" and args[0] is not None and args[0] not in LOOPBACK:
+        network.append(f"getaddrinfo {args[0]!r}")
+    elif event in ("socket.sendto", "socket.sendmsg"):
+        network.append(f"{event}")
+
+sys.addaudithook(audit)
+cell_file, brief_file, marked_file = sys.argv[1:4]
+namespace = {"__name__": "panel_cell"}
+exec(compile(open(cell_file, encoding="utf-8").read(), "panel cell", "exec"), namespace)
+result = {"environment": os.environ.get("GRADIO_ANALYTICS_ENABLED")}
+for key, path in (("brief", brief_file), ("marked", marked_file)):
+    tables = namespace["panel_tables"](path)
+    page = namespace["build_panel"](path)
+    components = [block.value for block in page.blocks.values() if type(block).__name__ == "Dataframe"]
+    result[key] = {
+        "page": type(page).__name__,
+        "analytics_enabled": page.analytics_enabled,
+        "tables": {name: {"columns": [str(column) for column in table.columns],
+                          "rows": [[str(cell) for cell in row] for row in table.values.tolist()]}
+                   for name, table in tables.items()},
+        "components": [{"columns": [str(column) for column in value.get("headers", [])],
+                        "rows": [[str(cell) for cell in row] for row in value.get("data", [])]}
+                       for value in components],
+    }
+result["network"] = network
+print("PANEL-PROBE " + json.dumps(result))
+'''
+PANEL_MARKS = [  # (path in the brief, marker, table that must show it)
+    (("scope", "source"), "PANEL-MARK-SOURCE", "scope"),
+    (("sentiment", "evaluation", "rows", 0, "model"), "PANEL-MARK-MODEL", "evaluation"),
+    (("topics", "topics", 0, "name"), "PANEL-MARK-TOPIC", "topics"),
+    (("why", "topics", 0, "name"), "PANEL-MARK-WHY", "why"),
+]
+
+
+def check_panel(report, label, brief_path, brief):
+    """Build the panel from the brief file in a separate Python; tables from the file; no network connection."""
+    folder = REPO_DIR / "data" / "checks" / "panel-probe"
+    folder.mkdir(parents=True, exist_ok=True)
+    cell_file, marked_file = folder / "panel_cell.py", folder / "marked-brief.json"
+    cell_file.write_text(cell_defining("build_panel") or "", encoding="utf-8")
+    marked = brief
+    try:
+        for path, marker, _ in PANEL_MARKS:
+            marked = changed_copy(marked, path, lambda old, marker=marker: marker)
+    except (KeyError, IndexError, TypeError) as exc:
+        report.check(False, f"{label}: panel probe", f"cannot mark the brief: {exc}")
+        return
+    marked_file.write_text(json.dumps(marked, ensure_ascii=False), encoding="utf-8")
+    started = time.perf_counter()
+    completed = subprocess.run([sys.executable, "-c", PANEL_PROBE, str(cell_file), str(brief_path), str(marked_file)],
+                               capture_output=True, text=True, cwd=REPO_DIR, timeout=900)
+    seconds = time.perf_counter() - started
+    lines = [line for line in completed.stdout.splitlines() if line.startswith("PANEL-PROBE ")]
+    built_ok = completed.returncode == 0 and len(lines) == 1
+    if not report.check(built_ok, f"{label}: the panel builds from the brief file without being started ({seconds:.1f} s)",
+                        "" if built_ok else (completed.stderr.strip().splitlines() or ["no output"])[-1][:300]):
+        return
+    probe = json.loads(lines[0][len("PANEL-PROBE "):])
+    built = probe["brief"]
+    tables = built["tables"]
+    sentiment, topics, why = as_dict(brief.get("sentiment")), as_dict(brief.get("topics")), as_dict(brief.get("why"))
+    expected_rows = {"evaluation": len(as_dict(sentiment.get("evaluation")).get("rows") or []),
+                     "topics": len(topics.get("topics") or []), "why": 1 + len(why.get("topics") or [])}
+    rows = {name: len(table["rows"]) for name, table in tables.items()}
+    scope_values = [row[-1] for row in as_dict(tables.get("scope")).get("rows", [])]
+    report.check(list(tables) == PANEL_TABLES and all(rows[name] == count for name, count in expected_rows.items())
+                 and brief.get("format_version") in scope_values and as_dict(brief.get("scope")).get("source") in scope_values
+                 and built["page"] == "Blocks"
+                 and built["components"] == [tables[name] for name in PANEL_TABLES],
+                 f"{label}: the panel shows the scope, evaluation, topic and topic x bullish tables with one row per "
+                 "row of the brief, on one tab each",
+                 f"tables {rows}, expected {expected_rows}; page {built['page']}; "
+                 f"{len(built['components'])} table components matching the tables: "
+                 f"{built['components'] == [tables[name] for name in PANEL_TABLES]}")
+    marks = []
+    for _, marker, table in PANEL_MARKS:
+        shown_marked = any(marker in cell for row in probe["marked"]["tables"][table]["rows"] for cell in row)
+        on_page = any(marker in cell for component in probe["marked"]["components"] for row in component["rows"]
+                      for cell in row)
+        before = any(marker in cell for table_value in tables.values() for row in table_value["rows"] for cell in row)
+        marks.append(shown_marked and on_page and not before)
+        report.info(f"panel marker {marker}: in the {table} table {shown_marked}, on the page {on_page}, "
+                    f"before marking {before}")
+    report.check(all(marks), f"{label}: the panel's tables come from the brief file (values changed in a copy of the "
+                 "file show up on the panel built from that copy)", f"{marks}")
+    report.check(probe["network"] == [] and probe["environment"] == "False"
+                 and built["analytics_enabled"] is False and probe["marked"]["analytics_enabled"] is False,
+                 f"{label}: importing Gradio and building the panel made no network connection beyond this machine "
+                 "(usage statistics off)",
+                 f"connections {probe['network'][:5]}, GRADIO_ANALYTICS_ENABLED {probe['environment']!r}, "
+                 f"analytics_enabled {built['analytics_enabled']!r}")
+
+
+def check_panel_output(report, label, executed):
+    """The executed notebook saved the brief through the format check and built the panel without starting it."""
+    lines = []
+    if executed.exists():
+        for cell in json.loads(executed.read_text(encoding="utf-8"))["cells"]:
+            for out in cell.get("outputs", []):
+                text = out.get("text", "")
+                lines += ("".join(text) if isinstance(text, list) else text).splitlines()
+    saved = [line for line in lines if line.startswith("[brief] saved") and "passed the format check" in line]
+    built = [line for line in lines if line.startswith("[panel] built from")]
+    idle = [line for line in lines if line.startswith(f"[panel] not started ({PANEL_SWITCH} = False)")]
+    report.check(len(saved) == 1 and len(built) == 1 and len(idle) == 1,
+                 f"{label}: the notebook saved the brief after the format check and built the panel without starting it",
+                 " | ".join(saved + built + idle) or "no [brief] or [panel] lines")
+    for line in saved + built + idle:
+        report.info(line)
+
+
+def null_fields(value, path=""):
+    """Generalised paths ([] for list items) of every null in a brief."""
+    if value is None:
+        return {path}
+    found = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found |= null_fields(item, f"{path}.{key}" if path else key)
+    elif isinstance(value, list):
+        for item in value:
+            found |= null_fields(item, f"{path}[]")
+    return found
+
+
+def panel_settings(report, label, parameters, overrides):
+    """The checks never start the panel, whatever -p says."""
+    if PANEL_SWITCH in overrides and overrides[PANEL_SWITCH] != CHECK_SETTINGS[PANEL_SWITCH]:
+        report.info(f"{label}: keeps {PANEL_SWITCH}={CHECK_SETTINGS[PANEL_SWITCH]!r} instead of the -p value")
+    return {**parameters, **CHECK_SETTINGS}
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -1238,13 +1834,14 @@ def compare_topics(report, first, again):
                  "default switches run twice: the two briefs have identical topics sections", detail)
 
 
-def quick(report, defaults, others, overrides):
+def quick(report, defaults, others, overrides, rules=None):
     runs = [("default switches", {}, "quick-default"),
             ("other switches", dict(others), "quick-other"),
             (REPEAT_LABEL, {}, "quick-default-again")]
     briefs = {}
     for label, flipped, folder in runs:
         parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
+        parameters = panel_settings(report, label, parameters, overrides)
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
         brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
@@ -1258,13 +1855,21 @@ def quick(report, defaults, others, overrides):
             check_topics(report, label, brief, switches, full_run=False)
         if brief is not None:
             check_why(report, label, brief, switches)
+            check_format(report, label, brief, rules)
+            check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+        if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
+            check_counterexamples(report, label, brief, rules)
+            check_panel(report, label, brief_path, brief)
+        if brief is not None and label == "default switches":
+            check_save_refuses(report, label, brief, rules)
     compare_topics(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_why(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
-    threshold_run(report, defaults, overrides, briefs.get("default switches"))
+    threshold_run(report, defaults, overrides, briefs.get("default switches"), rules)
 
 
-def full(report, defaults, overrides):
+def full(report, defaults, overrides, rules=None):
     parameters = {"DATA_SOURCE": FULL_SOURCE, **overrides}
+    parameters = panel_settings(report, "full run", parameters, overrides)
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
     if "://" not in source:
@@ -1285,6 +1890,9 @@ def full(report, defaults, overrides):
     check_sentiment(report, "full run", brief, switches, full_run=True)
     check_topics(report, "full run", brief, switches, full_run=True)
     check_why(report, "full run", brief, switches)
+    check_format(report, "full run", brief, rules)
+    check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
+    check_panel(report, "full run", brief_path, brief)
     dataset = brief.get("dataset") or {}
     sample, cleaning = dataset.get("sample") or {}, dataset.get("cleaning") or {}
     btc = dataset.get("btc_mentions") or {}
@@ -1303,6 +1911,9 @@ def full(report, defaults, overrides):
     print_sentiment(brief)
     print_topics(brief)
     print_why(brief)
+    print("\nBrief format (full run)")
+    print(f"  format_version:                {brief.get('format_version')}")
+    print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
 
 
 def main():
@@ -1323,13 +1934,15 @@ def main():
     check_why_switches(report, defaults)
     check_numbering_rules(report)
     check_text(report)
+    rules = load_format_rules(report)
+    check_panel_source(report, defaults, others)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
         if args.mode == "quick":
-            quick(report, defaults, others, overrides)
+            quick(report, defaults, others, overrides, rules)
         else:
-            full(report, defaults, overrides)
+            full(report, defaults, overrides, rules)
 
     print()
     if report.failures:
