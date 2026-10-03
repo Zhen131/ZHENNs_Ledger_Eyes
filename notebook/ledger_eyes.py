@@ -75,6 +75,9 @@ REQUIRED_PACKAGES = {
     "tqdm": "tqdm==4.70.1",
     "emoji": "emoji==2.16.0",
     "contractions": "contractions==0.1.73",
+    "tokenizers": "tokenizers==0.22.2",
+    "tensorflow": "tensorflow==2.20.0",
+    "keras": "keras==3.15.1",
 }
 missing = [requirement for module, requirement in REQUIRED_PACKAGES.items() if importlib.util.find_spec(module) is None]
 if missing:
@@ -89,7 +92,8 @@ from importlib.metadata import version  # standard library: version of an instal
 
 print(f"python {sys.version.split()[0]}")  # Python version
 for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "openpyxl", "pyarrow", "huggingface_hub",
-                     "fsspec", "matplotlib", "beautifulsoup4", "tqdm", "emoji", "contractions"]:
+                     "fsspec", "matplotlib", "beautifulsoup4", "tqdm", "emoji", "contractions",
+                     "tokenizers", "tensorflow", "keras"]:
     print(f"{distribution} {version(distribution)}")  # one line per package
 
 # %% [markdown]
