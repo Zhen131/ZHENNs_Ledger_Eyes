@@ -6,7 +6,9 @@
 quick: static checks, then the notebook runs three times on the bundled
        sample (default switches, every two-state switch flipped, default
        switches again); the first two saved briefs are checked, and the
-       topics sections of the two default runs must be identical.
+       topics sections of the two default runs must be identical. A fourth
+       run sets both thresholds of the why chapter to 0.5 and the too-few bar
+       above the topic post table; the why section of every brief is checked.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief.
 
@@ -48,6 +50,11 @@ SPLIT_PARTS = ["train", "validation", "test"]
 TOPIC_SWITCHES = ["TOPIC_SCOPE", "TOPIC_MAX_POSTS", "N_TOPICS"]
 TOPIC_CLASSES = ["0", "1", "2"]  # the topic table keeps all three classes, whatever N_CLASSES says
 SELECTION_WORDS = {"bitcoin", "btc"}  # with TOPIC_SCOPE "btc" every topic post has one; never part of a topic name
+WHY_SWITCHES = ["BULLISH_THRESHOLD", "BEARISH_THRESHOLD", "MIN_TOPIC_POSTS"]
+MODEL_CALLS = ["bullish", "bearish", "unsure"]  # the model's calls in the why section
+FAIR_CLASSES = ["0", "2"]  # the fair comparison uses posts labelled bearish or bullish only
+THRESHOLD_SETTINGS = {"BULLISH_THRESHOLD": 0.5, "BEARISH_THRESHOLD": 0.5}  # fourth quick run; plus MIN_TOPIC_POSTS
+THRESHOLD_LABEL = "threshold run"
 
 # Text scan. Each pattern is written so that it does not match its own source line
 # (for example "c[l]aude" matches the word but not this file).
@@ -866,6 +873,329 @@ def print_topics(brief):
             print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
 
 
+# ---------------------------------------------------------------- why chapter (10)
+
+def check_why_switches(report, defaults):
+    absent = [name for name in WHY_SWITCHES if name not in defaults]
+    report.check(not absent, "switches of the why chapter are present", ", ".join(absent))
+
+
+INVALID = object()  # marks a share that cannot be derived because its counts are malformed
+
+
+def share_of(numerator, denominator):
+    """The share the notebook must have written: None when the denominator is 0."""
+    return None if denominator == 0 else numerator / denominator
+
+
+def points(share, baseline):
+    """Difference in percentage points: None when either share is None, INVALID when either is INVALID."""
+    if share is INVALID or baseline is INVALID:
+        return INVALID
+    return None if share is None or baseline is None else 100 * (share - baseline)
+
+
+def same_value(value, expected):
+    """value is None where expected is None, otherwise a number equal to expected up to rounding."""
+    if expected is INVALID:
+        return False
+    if expected is None:
+        return value is None
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and abs(value - expected) <= 1e-9 * max(1.0, abs(expected)))
+
+
+def counts_of(value, keys):
+    """The counts stored under exactly these keys, or None when the keys or the counts are wrong."""
+    if not isinstance(value, dict) or sorted(value) != sorted(keys) or not all(is_count(value[key]) for key in keys):
+        return None
+    return {key: value[key] for key in keys}
+
+
+def label_share_from(row):
+    """Bullish share by label that follows from the row's label counts (INVALID when they are malformed)."""
+    labels = counts_of(as_dict(row).get("label_counts"), TOPIC_CLASSES)
+    return INVALID if labels is None else share_of(labels["2"], labels["0"] + labels["2"])
+
+
+def why_row_problems(row, where):
+    """Problems of one why row: (identities, shares, fair comparison)."""
+    identity, shares, fair_problems = [], [], []
+    n = row.get("n_posts")
+    labels = counts_of(row.get("label_counts"), TOPIC_CLASSES)
+    calls = counts_of(row.get("model_counts"), MODEL_CALLS)
+    if not is_count(n) or labels is None or calls is None:
+        identity.append(f"{where}: posts {n!r}, label counts {row.get('label_counts')!r}, "
+                        f"model calls {row.get('model_counts')!r}")
+    else:
+        if sum(labels.values()) != n:
+            identity.append(f"{where}: label classes {labels} do not add up to {n} posts")
+        if sum(calls.values()) != n:
+            identity.append(f"{where}: model calls {calls} do not add up to {n} posts")
+
+    expected_label = INVALID if labels is None else share_of(labels["2"], labels["0"] + labels["2"])
+    expected_model = INVALID if calls is None else share_of(calls["bullish"], calls["bullish"] + calls["bearish"])
+    expected_unsure = INVALID if calls is None or not is_count(n) else share_of(calls["unsure"], n)
+    for key, expected in [("label_bullish_share", expected_label), ("model_bullish_share", expected_model),
+                          ("model_unsure_share", expected_unsure)]:
+        if not (is_score(row.get(key)) and same_value(row.get(key), expected)):
+            shares.append(f"{where}: {key} {row.get(key)!r}")
+
+    fair = as_dict(row.get("fair"))
+    fair_n = fair.get("n_posts")
+    fair_labels = counts_of(fair.get("label_counts"), FAIR_CLASSES)
+    fair_calls = counts_of(fair.get("model_counts"), MODEL_CALLS)
+    if not is_count(fair_n) or fair_labels is None or fair_calls is None:
+        fair_problems.append(f"{where}: fair comparison {fair!r}")
+        return identity, shares, fair_problems
+    if sum(fair_labels.values()) != fair_n or sum(fair_calls.values()) != fair_n:
+        fair_problems.append(f"{where}: fair labels {fair_labels} or calls {fair_calls} do not add up to {fair_n}")
+    if labels is None or fair_n > labels["0"] + labels["2"] or any(fair_labels[c] > labels[c] for c in FAIR_CLASSES):
+        fair_problems.append(f"{where}: {fair_n} fair posts {fair_labels} but labels {labels}")
+    fair_label = share_of(fair_labels["2"], fair_labels["0"] + fair_labels["2"])
+    fair_model = share_of(fair_calls["bullish"], fair_calls["bullish"] + fair_calls["bearish"])
+    for key, expected in [("label_bullish_share", fair_label), ("model_bullish_share", fair_model)]:
+        if not (is_score(fair.get(key)) and same_value(fair.get(key), expected)):
+            shares.append(f"{where}: fair {key} {fair.get(key)!r}")
+    if not same_value(fair.get("model_minus_label_pp"), points(fair_model, fair_label)):
+        shares.append(f"{where}: fair model_minus_label_pp {fair.get('model_minus_label_pp')!r}")
+    return identity, shares, fair_problems
+
+
+def why_rows(why):
+    """The topic rows of a why section (dicts only)."""
+    rows = why.get("topics") if isinstance(why.get("topics"), list) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def check_why(report, label, brief, switches):
+    """The topic x bullish table: one row per topic plus the overall row; counts add up; shares, marks and order."""
+    why = brief.get("why")
+    if not report.check(isinstance(why, dict) and bool(why), f"{label}: why section has content"):
+        return
+    sentiment, topics = as_dict(brief.get("sentiment")), as_dict(brief.get("topics"))
+    selected = as_dict(sentiment.get("selection")).get("selected")
+    scoring, thresholds = as_dict(why.get("scoring")), as_dict(why.get("thresholds"))
+    high, low, min_posts = (switches.get("BULLISH_THRESHOLD"), switches.get("BEARISH_THRESHOLD"),
+                            switches.get("MIN_TOPIC_POSTS"))
+    report.check(why.get("post_table") == "topic_posts" and why.get("topic_column") == "topic"
+                 and isinstance(selected, str) and why.get("model") == selected
+                 and scoring.get("function") == "sentiment_proba" and is_count(topics.get("n_posts"))
+                 and scoring.get("n_scored") == topics["n_posts"]
+                 and same_value(thresholds.get("bullish_at_or_above"), high)
+                 and same_value(thresholds.get("bearish_at_or_below"), low)
+                 and is_count(min_posts) and why.get("min_topic_posts") == min_posts,
+                 f"{label}: why scores every topic post with the chosen model and records the thresholds and "
+                 "MIN_TOPIC_POSTS as set",
+                 f"model {why.get('model')!r} (chosen {selected!r}), scored {scoring.get('n_scored')!r} of "
+                 f"{topics.get('n_posts')!r} topic posts, thresholds {thresholds}, min posts {why.get('min_topic_posts')!r}")
+
+    # One row per topic of the topics section, plus the overall row for the whole topic post table.
+    overall = as_dict(why.get("overall"))
+    rows = why_rows(why)
+    topic_items = [item for item in topics.get("topics") or [] if isinstance(item, dict)] \
+        if isinstance(topics.get("topics"), list) else []
+    expected = {item.get("topic"): item for item in topic_items if is_count(item.get("topic"))}
+    numbers = [row.get("topic") for row in rows]
+    one_to_one = (isinstance(why.get("topics"), list) and len(rows) == len(why["topics"])
+                  and all(is_count(number) for number in numbers) and len(set(numbers)) == len(numbers)
+                  and sorted(numbers) == sorted(expected) and len(expected) == len(topic_items)
+                  and all(row.get("name") == expected[row["topic"]].get("name")
+                          and row.get("n_posts") == expected[row["topic"]].get("n_posts") for row in rows))
+    overall_ok = (bool(overall) and is_count(overall.get("n_posts")) and overall["n_posts"] == topics.get("n_posts")
+                  and counts_of(overall.get("label_counts"), TOPIC_CLASSES) is not None
+                  and overall.get("label_counts") == topics.get("class_counts"))
+    report.check(one_to_one and overall_ok,
+                 f"{label}: why has one row per topic of the topics section (same numbers, names and sizes) and an "
+                 "overall row for the whole topic post table",
+                 f"why topics {numbers}, topics section {sorted(expected)}; overall {overall.get('n_posts')!r} posts "
+                 f"{overall.get('label_counts')!r} vs topic table {topics.get('n_posts')!r} {topics.get('class_counts')!r}")
+
+    identity, shares, fair_problems = [], [], []
+    for where, row in [("all", overall)] + [(f"topic {row.get('topic')}", row) for row in rows]:
+        row_identity, row_shares, row_fair = why_row_problems(row, where)
+        identity += row_identity
+        shares += row_shares
+        fair_problems += row_fair
+    overall_share = label_share_from(overall)
+    for row in rows:
+        expected_points = points(label_share_from(row), overall_share)
+        if not same_value(row.get("label_vs_overall_pp"), expected_points):
+            shares.append(f"topic {row.get('topic')}: label_vs_overall_pp {row.get('label_vs_overall_pp')!r}")
+    report.check(not identity, f"{label}: why rows add up: model calls bullish + bearish + unsure = posts and label "
+                 "classes = posts (every topic and the overall row)", "; ".join(identity[:5]))
+    report.check(not shares, f"{label}: why shares follow from the counts (null when the denominator is 0, "
+                 "otherwise in [0, 1]) and differences from the shares (percentage points)", "; ".join(shares[:5]))
+
+    # Topic rows add up to the overall row.
+    def total(part, key, keys):
+        values = [counts_of(as_dict(row.get(part) if part else row).get(key), keys) for row in rows]
+        if any(value is None for value in values):
+            return None
+        return {item: sum(value[item] for value in values) for item in keys}
+
+    overall_fair = as_dict(overall.get("fair"))
+    sums_ok = (total(None, "label_counts", TOPIC_CLASSES) == counts_of(overall.get("label_counts"), TOPIC_CLASSES)
+               and total(None, "model_counts", MODEL_CALLS) == counts_of(overall.get("model_counts"), MODEL_CALLS)
+               and total("fair", "label_counts", FAIR_CLASSES) == counts_of(overall_fair.get("label_counts"), FAIR_CLASSES)
+               and total("fair", "model_counts", MODEL_CALLS) == counts_of(overall_fair.get("model_counts"), MODEL_CALLS)
+               and counts_of(overall.get("model_counts"), MODEL_CALLS) is not None)
+    report.check(sums_ok, f"{label}: why topic rows add up to the overall row (label classes, model calls, fair "
+                 "comparison labels and calls)")
+
+    # The fair comparison: unseen posts labelled bearish or bullish.
+    info = as_dict(why.get("fair_comparison"))
+    unseen, in_training = info.get("n_unseen_bullish_or_bearish"), info.get("n_topic_posts_in_training_set")
+    topic_fair = [as_dict(row.get("fair")).get("n_posts") for row in rows]
+    overall_fair_n = overall_fair.get("n_posts")
+    n_train_ids = as_dict(sentiment.get("scoring")).get("n_train_ids")
+    fair_ok = (not fair_problems and is_count(unseen) and is_count(overall_fair_n)
+               and all(is_count(size) for size in topic_fair) and sum(topic_fair) == overall_fair_n == unseen
+               and is_count(in_training) and is_count(n_train_ids) and in_training <= n_train_ids
+               and is_count(overall.get("n_posts")) and in_training <= overall["n_posts"]
+               and all(is_count(info.get(key)) and info[key] <= overall_fair_n
+                       for key in ("n_same_text_as_a_training_post", "n_same_clean_text_as_a_training_post")))
+    report.check(fair_ok, f"{label}: fair comparison: each topic has at most its bullish + bearish posts in it; the "
+                 "topics add up to the overall row and to the unseen bullish or bearish posts of the topic table",
+                 f"topics {topic_fair} (sum {sum(size for size in topic_fair if is_count(size))}), overall "
+                 f"{overall_fair_n!r}, unseen bullish or bearish {unseen!r}, topic posts in training {in_training!r} "
+                 f"of {n_train_ids!r} training ids; " + "; ".join(fair_problems[:3]))
+
+    marks_ok = is_count(min_posts) and all(
+        row.get("too_few_posts") is (is_count(row.get("n_posts")) and row["n_posts"] < min_posts) for row in rows)
+    report.check(marks_ok, f"{label}: too-few marks follow MIN_TOPIC_POSTS",
+                 f"{[(row.get('topic'), row.get('n_posts'), row.get('too_few_posts')) for row in rows]}")
+
+    def order_key(row):
+        share = row.get("label_bullish_share")
+        return (share is None, -share if isinstance(share, (int, float)) else 0.0, row.get("topic"))
+
+    order_ok = (all(row.get("label_bullish_share") is None or isinstance(row.get("label_bullish_share"), (int, float))
+                    for row in rows) and all(is_count(number) for number in numbers)
+                and numbers == [row.get("topic") for row in sorted(rows, key=order_key)])
+    report.check(order_ok, f"{label}: why topics sorted by bullish share by label, highest first, null last, ties by "
+                 "topic number", f"order {numbers}")
+
+
+WHY_STABLE_ROW_FIELDS = ["topic", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
+                         "label_vs_overall_pp"]
+WHY_STABLE_FAIR_FIELDS = ["n_posts", "label_counts", "label_bullish_share"]
+WHY_STABLE_COUNTS = ["n_topic_posts_in_training_set", "n_unseen_bullish_or_bearish",
+                     "n_same_text_as_a_training_post", "n_same_clean_text_as_a_training_post"]
+
+
+def stable_why(brief):
+    """The parts of the why section that do not depend on training, or None when there is no why section."""
+    why = as_dict(brief).get("why") if isinstance(brief, dict) else None
+    if not isinstance(why, dict) or not why:
+        return None
+
+    def part(row):
+        row = as_dict(row)
+        return {**{key: row.get(key) for key in WHY_STABLE_ROW_FIELDS},
+                "fair": {key: as_dict(row.get("fair")).get(key) for key in WHY_STABLE_FAIR_FIELDS}}
+
+    return {"overall": part(why.get("overall")), "topics": [part(row) for row in why_rows(why)],
+            "fair_comparison": {key: as_dict(why.get("fair_comparison")).get(key) for key in WHY_STABLE_COUNTS}}
+
+
+def compare_why(report, first, again):
+    """Two runs with the same switches: everything in the why section that does not depend on training is identical."""
+    left, right = stable_why(first), stable_why(again)
+    detail = ""
+    if left is None or right is None:
+        detail = "a brief or its why section is missing"
+    elif left != right:
+        detail = "differing parts: " + ", ".join(key for key in left if left[key] != right[key])
+    report.check(left is not None and left == right,
+                 "default switches run twice: the why sections agree on everything that does not depend on training "
+                 "(label counts and shares, differences from all, too-few marks, order, fair comparison sizes and "
+                 "label shares)", detail)
+
+
+def threshold_run(report, defaults, overrides, default_brief):
+    """Both thresholds at 0.5 and MIN_TOPIC_POSTS above the topic post table: no post unsure, every topic too small."""
+    table = as_dict(as_dict(default_brief).get("topics")).get("n_posts")
+    settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
+    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
+    switches = {**defaults, **parameters}
+    report.info(f"{THRESHOLD_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
+    kept = [name for name in settings if name in overrides]
+    if kept:
+        report.info(f"{THRESHOLD_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
+    brief_path.unlink(missing_ok=True)  # a stale brief must never pass
+    ok, _, _ = run_notebook(report, THRESHOLD_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    brief = read_brief(report, THRESHOLD_LABEL, brief_path) if ok else None
+    if brief is None:
+        return
+    check_why(report, THRESHOLD_LABEL, brief, switches)
+    why = as_dict(brief.get("why"))
+    rows, overall = why_rows(why), as_dict(why.get("overall"))
+    n_table = as_dict(brief.get("topics")).get("n_posts")
+    report.check(is_count(n_table) and switches["MIN_TOPIC_POSTS"] > n_table,
+                 f"{THRESHOLD_LABEL}: MIN_TOPIC_POSTS is larger than the whole topic post table",
+                 f"{switches['MIN_TOPIC_POSTS']} vs {n_table!r} posts")
+    unsure = []
+    for where, row in [("all", overall)] + [(f"topic {row.get('topic')}", row) for row in rows]:
+        calls, n = counts_of(row.get("model_counts"), MODEL_CALLS), row.get("n_posts")
+        expected = (0.0 if n > 0 else None) if is_count(n) else INVALID
+        if calls is None or calls["unsure"] != 0 or not same_value(row.get("model_unsure_share"), expected):
+            unsure.append(f"{where}: calls {row.get('model_counts')!r}, unsure share {row.get('model_unsure_share')!r}")
+    report.check(bool(overall) and not unsure,
+                 f"{THRESHOLD_LABEL}: with both thresholds at 0.5 no post is unsure (unsure share 0 in every topic and "
+                 "the overall row)", "; ".join(unsure[:5]))
+    report.check(all(row.get("too_few_posts") is True for row in rows),
+                 f"{THRESHOLD_LABEL}: every topic is marked as having too few posts",
+                 f"{sum(row.get('too_few_posts') is True for row in rows)} of {len(rows)} topics marked")
+
+
+def print_why(brief):
+    """Print the topic x bullish table (full run)."""
+    why = as_dict(brief.get("why"))
+    if not why:
+        return
+
+    def share(value):
+        return f"{value:.4f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
+
+    def pp(value):
+        return f"{value:+.2f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
+
+    def line(name, row, few, versus):
+        labels, calls = as_dict(row.get("label_counts")), as_dict(row.get("model_counts"))
+        fair = as_dict(row.get("fair"))
+        return (f"  {name:>5} {str(row.get('n_posts')):>6} {few:>3} "
+                f"{str(labels.get('0')):>6} {str(labels.get('1')):>6} {str(labels.get('2')):>6} "
+                f"{share(row.get('label_bullish_share')):>7} {versus:>7} "
+                f"{str(calls.get('bullish')):>6} {str(calls.get('bearish')):>6} {str(calls.get('unsure')):>6} "
+                f"{share(row.get('model_bullish_share')):>7} {share(row.get('model_unsure_share')):>7} "
+                f"{str(fair.get('n_posts')):>6} {share(fair.get('label_bullish_share')):>7} "
+                f"{share(fair.get('model_bullish_share')):>7} {pp(fair.get('model_minus_label_pp')):>7}")
+
+    scoring, info = as_dict(why.get("scoring")), as_dict(why.get("fair_comparison"))
+    print("\nWhy: topic x bullish (full run)")
+    print(f"  model:                         {why.get('model')}   bullish probability: {scoring.get('bullish_probability')}")
+    print(f"  thresholds:                    {why.get('thresholds')}   too few below {why.get('min_topic_posts')} posts")
+    seconds = scoring.get("seconds")
+    seconds_text = f"{seconds:.2f} s" if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else "-"
+    print(f"  scored:                        {scoring.get('n_scored')} topic posts in {seconds_text}")
+    print(f"  fair comparison:               {info}")
+    print("  columns: topic, posts, too few, label bearish / neutral / bullish, bullish share by label, vs all (pp),")
+    print("           model bullish / bearish / unsure, bullish share by model, unsure share,")
+    print("           fair posts, fair share by label, fair share by model, model minus label (pp); - = null")
+    print(f"  {'topic':>5} {'posts':>6} {'few':>3} {'bear':>6} {'neut':>6} {'bull':>6} {'label':>7} {'vs all':>7} "
+          f"{'m-bull':>6} {'m-bear':>6} {'unsure':>6} {'model':>7} {'unsure%':>7} "
+          f"{'fair':>6} {'f-label':>7} {'f-model':>7} {'m-l pp':>7}")
+    print(line("all", as_dict(why.get("overall")), "", ""))
+    for row in why_rows(why):
+        print(line(str(row.get("topic")), row, "yes" if row.get("too_few_posts") else "no",
+                   pp(row.get("label_vs_overall_pp"))))
+    print("  topic names:")
+    for row in why_rows(why):
+        print(f"    topic {row.get('topic')}: {row.get('name')}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -926,7 +1256,11 @@ def quick(report, defaults, others, overrides):
             check_brief(report, label, brief, switches)
             check_sentiment(report, label, brief, switches, full_run=False)
             check_topics(report, label, brief, switches, full_run=False)
+        if brief is not None:
+            check_why(report, label, brief, switches)
     compare_topics(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    compare_why(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    threshold_run(report, defaults, overrides, briefs.get("default switches"))
 
 
 def full(report, defaults, overrides):
@@ -950,6 +1284,7 @@ def full(report, defaults, overrides):
     check_brief(report, "full run", brief, switches)
     check_sentiment(report, "full run", brief, switches, full_run=True)
     check_topics(report, "full run", brief, switches, full_run=True)
+    check_why(report, "full run", brief, switches)
     dataset = brief.get("dataset") or {}
     sample, cleaning = dataset.get("sample") or {}, dataset.get("cleaning") or {}
     btc = dataset.get("btc_mentions") or {}
@@ -967,6 +1302,7 @@ def full(report, defaults, overrides):
     print(f"  run time:                      {seconds:.1f} s")
     print_sentiment(brief)
     print_topics(brief)
+    print_why(brief)
 
 
 def main():
@@ -984,6 +1320,7 @@ def main():
     defaults, others = read_switches(report)
     check_sentiment_switches(report, defaults)
     check_topic_switches(report, defaults)
+    check_why_switches(report, defaults)
     check_numbering_rules(report)
     check_text(report)
     unknown = [name for name in overrides if name not in defaults]
