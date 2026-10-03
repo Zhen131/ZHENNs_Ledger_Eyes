@@ -452,6 +452,7 @@ def full(report, defaults, overrides):
     if "://" not in source:
         path = REPO_DIR / source
         if not report.check(path.is_file(), "full dataset available locally",
+                            "" if path.is_file() else
                             f"{source} not found; run scripts/download_data.sh or pass -p DATA_SOURCE <address>"):
             return
         report.info(f"data file {source}: {path.stat().st_size:,} bytes, sha256 {sha256_of(path)}")
