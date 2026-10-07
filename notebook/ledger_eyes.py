@@ -3496,6 +3496,201 @@ plt.show()
 brief["emotions"]["confusion_matrices"] = emotion_confusion_matrices
 
 # %% [markdown]
+# ### Giving every topic post an emotion
+#
+# The chosen network scores the `clean_text` of every post of `topic_posts` (chapter 9), and every post gets the emotion with the highest probability (a tie goes to the earlier emotion in `emotion_classes`). The result is a table of its own, `emotion_posts`, one row per topic post in the same order: `post_id`, `emotion`, `emotion_probability` (the probability of that emotion) and `in_emotion_data` (whether the post is part of the emotion data, so that the networks learned from it, were chosen with it or were tested on it). `topic_posts` itself is not changed.
+#
+# ***
+#
+# ### 给每条话题帖子判一个情绪
+#
+# 选中的网络给 `topic_posts`（第 9 章）里每条帖子的 `clean_text` 打分，每条帖子取概率最大的那种情绪（一样大时取 `emotion_classes` 里排在前面的）。结果放进一张单独的表 `emotion_posts`，一行对一条话题帖子，顺序不变：`post_id`；`emotion`；`emotion_probability`（那种情绪的概率）；`in_emotion_data`（这条帖子在不在情绪数据里；在的话，网络从它学过、拿它选过或拿它考过）。`topic_posts` 本身不改。
+
+# %%
+# Give every topic post the emotion with the highest probability from the chosen emotion network.
+emotion_scoring_started = time.perf_counter()
+emotion_topic_proba = emotion_proba(topic_posts["clean_text"])  # one row per topic post, one column per emotion
+emotion_scoring_seconds = time.perf_counter() - emotion_scoring_started
+
+emotion_posts = topic_posts[["post_id"]].copy()  # a table of its own; topic_posts stays unchanged
+emotion_posts["emotion"] = np.asarray(emotion_classes, dtype=object)[emotion_topic_proba.argmax(axis=1)]
+emotion_posts["emotion_probability"] = emotion_topic_proba.max(axis=1).astype("float64")
+emotion_posts["in_emotion_data"] = emotion_posts["post_id"].isin(set(emotion_data["post_id"]))
+brief["emotions"]["scoring"] = {
+    "function": "emotion_proba",
+    "model": selected_emotion_model_name,
+    "post_table": "topic_posts",
+    "table": "emotion_posts",
+    "n_scored": int(len(emotion_posts)),
+    "n_in_emotion_data": int(emotion_posts["in_emotion_data"].sum()),
+}
+print(f"Scored {len(emotion_posts):,} topic posts with {selected_emotion_model_name} in {emotion_scoring_seconds:.1f} s; "
+      f"{brief['emotions']['scoring']['n_in_emotion_data']:,} of them are in the emotion data")
+emotion_posts.head()
+
+# %% [markdown]
+# ### How the emotions are spread
+#
+# Posts per emotion, and their share of the group, for all topic posts, for every drawer of chapter 9 (`drawer_hits`), for the posts in at least one drawer and for the posts in no drawer. As in chapter 10, a post can sit in several drawers, so the drawers overlap; the posts in at least one drawer and those in no drawer together are exactly all topic posts. The counts include the topic posts that are also in the emotion data: this describes what the network says about the posts, it is not an evaluation.
+#
+# **Example posts.** For all topic posts at most 3 per emotion; for every drawer, and for the posts in at least one drawer and in no drawer, at most 1 per emotion. Examples are taken only from posts that are not in the emotion data, so the networks never learned from them, chose with them or were tested on them; within an emotion the posts with the highest probability of it come first, and a text is shown only once in a group. A group in which the network gave no such post that emotion has no example for it. On the bundled sample every post has a pre-label, so the topic posts may all be emotion data and the examples may be empty.
+#
+# ***
+#
+# ### 情绪怎么分布
+#
+# 每种情绪各几条、占这一组的比例，分别给出：全部话题帖子；第 9 章的每个抽屉（`drawer_hits`）；至少进了一个抽屉的帖子；一个抽屉都没进的帖子。和第 10 章一样，一条帖子可以同时在好几个抽屉里，所以抽屉之间有重叠；「至少进了一个」和「一个都没进」合起来正好是全部话题帖子。这里的条数也算上了同时在情绪数据里的话题帖子：这是描述网络对这些帖子怎么说，不是评估。
+#
+# **例句。** 全部话题帖子：每种情绪最多 3 条；每个抽屉，以及「至少进了一个」「一个都没进」两组：每种情绪最多 1 条。例句只从不在情绪数据里的帖子里挑，也就是网络从没拿它们学过、选过、考过的帖子；同一种情绪里，这种情绪概率最大的排在前面；同一组里一段文字只出现一次。某一组里网络没把这样的帖子判成某种情绪，这种情绪就没有例句。仓库带的样本每条帖子都有预标，话题帖子可能全在情绪数据里，例句可能是空的。
+
+# %%
+# Posts per emotion and their shares for all topic posts, every drawer, any drawer and no drawer, with example posts.
+EMOTION_QUOTES_OVERALL = 3  # example posts per emotion for all topic posts
+EMOTION_QUOTES_PER_GROUP = 1  # example posts per emotion for every drawer, any drawer and no drawer
+
+
+def emotion_distribution(mask, quotes_per_class):
+    """Posts per emotion, shares and example posts for the topic posts selected by mask (a boolean array)."""
+    members = emotion_posts[mask]
+    counts = members["emotion"].value_counts().reindex(emotion_classes, fill_value=0)
+    candidates = members[~members["in_emotion_data"]]  # posts the networks never met
+    quotes, seen_texts = {}, set()
+    for position, label in enumerate(emotion_classes):
+        ranked = candidates[candidates["emotion"] == label].sort_values("emotion_probability", ascending=False,
+                                                                       kind="stable")  # ties keep the file order
+        chosen = []
+        for row in ranked.index:
+            text = topic_posts.at[row, "text"]
+            if len(chosen) == quotes_per_class:
+                break
+            if text in seen_texts:
+                continue
+            seen_texts.add(text)
+            chosen.append({"post_id": emotion_posts.at[row, "post_id"], "text": text,
+                           "probability": float(emotion_topic_proba[row, position]),
+                           "probabilities": {other: float(emotion_topic_proba[row, column])
+                                             for column, other in enumerate(emotion_classes)}})
+        quotes[label] = chosen
+    return {
+        "n_posts": int(len(members)),
+        "counts": {label: int(count) for label, count in counts.items()},
+        "shares": {label: safe_ratio(int(count), len(members)) for label, count in counts.items()},
+        "quotes_per_class": quotes_per_class,
+        "quotes": quotes,
+    }
+
+
+every_topic_post = np.ones(len(emotion_posts), dtype=bool)
+in_any_drawer = (drawer_hits["n_drawers"] > 0).to_numpy()
+brief["emotions"]["overall"] = emotion_distribution(every_topic_post, EMOTION_QUOTES_OVERALL)
+brief["emotions"]["drawers"] = [
+    {"drawer": item["drawer"], "name": item["name"],
+     **emotion_distribution(drawer_hits[item["drawer"]].to_numpy(), EMOTION_QUOTES_PER_GROUP)}
+    for item in brief["drawers"]["drawers"]  # word-list order
+]
+brief["emotions"]["any_drawer"] = emotion_distribution(in_any_drawer, EMOTION_QUOTES_PER_GROUP)
+brief["emotions"]["no_drawer"] = emotion_distribution(~in_any_drawer, EMOTION_QUOTES_PER_GROUP)
+
+emotion_groups = ([("all", "all topic posts", brief["emotions"]["overall"]),
+                   ("any drawer", "in at least one drawer", brief["emotions"]["any_drawer"]),
+                   ("no drawer", "in no drawer", brief["emotions"]["no_drawer"])]
+                  + [(item["drawer"], item["name"], item) for item in brief["emotions"]["drawers"]])
+emotion_table = pd.DataFrame([{"group": key, "name": name, "posts": group["n_posts"],
+                               **{label: shown_share(group["shares"][label]) for label in emotion_classes}}
+                              for key, name, group in emotion_groups]).set_index("group")
+print(f"Share of each emotion in each group of topic posts (the network's calls; {len(emotion_classes)} classes)")
+emotion_table
+
+# %% [markdown]
+# ### Example posts
+#
+# The examples chosen above, first for all topic posts (up to 3 per emotion), then for every drawer (up to 1 per emotion), each with the network's probability of the emotion.
+#
+# ***
+#
+# ### 例句
+#
+# 上面挑出的例句：先是全部话题帖子（每种情绪最多 3 条），再是每个抽屉（每种情绪最多 1 条），每条附上网络给这种情绪的概率。
+
+# %%
+# Print the example posts of all topic posts and of every drawer.
+def print_emotion_quotes(title, group):
+    """One line per example post of a group, emotion by emotion."""
+    print(f"{title} ({group['n_posts']:,} posts)")
+    for label in emotion_classes:
+        for quote in group["quotes"][label]:
+            print(f"    [{label} {quote['probability']:.2f}, {quote['post_id']}] {quote['text']}")
+    if not any(group["quotes"].values()):
+        print("    (no example: the posts of this group are all in the emotion data, or the group is empty)")
+
+
+print_emotion_quotes("All topic posts", brief["emotions"]["overall"])
+for item in brief["emotions"]["drawers"]:
+    print_emotion_quotes(f"Drawer {item['drawer']}: {item['name']}", item)
+print_emotion_quotes("In at least one drawer", brief["emotions"]["any_drawer"])
+print_emotion_quotes("In no drawer", brief["emotions"]["no_drawer"])
+
+# %% [markdown]
+# ### Checking the silver labels: the review table
+#
+# The repository holds a review table, `labels/emotions-review-template.csv`: 200 rows of the full pre-label file with the columns `post_id`, `prelabel` (the model's label) and `human_label` (empty), for a person to fill in with one of the nine labels. `emotion_review_agreement(table)` takes such a table and counts only the rows whose `human_label` is filled in: how many there are, the share in which the person agrees with the pre-label, and the same per pre-label. Set `EMOTION_REVIEW_SOURCE` to the path or address of a filled-in table to use it; with the default `""` nothing is read and the brief records 0 reviewed rows and `null` agreement. Nobody has filled in the table yet, so no agreement is reported for now.
+#
+# **Weighting.** The review table was drawn label by label, about the same number of rows per label, while the labels are far from equally common in the pre-label file. The plain share of matching rows in the table is therefore not the agreement over all pre-labels: that needs each label's agreement weighted by the label's share of the labelled (not `unparsed`) rows of the pre-label file. This chapter reports the unweighted numbers only.
+#
+# ***
+#
+# ### 核对银标签：抽查表
+#
+# 仓库里有一张抽查表 `labels/emotions-review-template.csv`：从完整预标文件里抽的 200 行，列是 `post_id`、`prelabel`（模型贴的标签）和 `human_label`（空着），等人来填九个标签之一。`emotion_review_agreement(table)` 读这样一张表，只算 `human_label` 填了的行：填了几行；人和预标一致的比例；以及按预标每一类的同样两个数。把 `EMOTION_REVIEW_SOURCE` 改成一张填好的表的路径或地址就会用上它；默认 `""` 时什么都不读，简报里记 0 行、一致比例 `null`。现在还没有人填过这张表，所以暂时不报一致率。
+#
+# **加权。** 抽查表是按标签轮流抽的，每类行数差不多一样，而这些标签在预标文件里远不是一样多。所以表里直接数出的一致比例，不是全部预标的一致率：那要把每一类的一致比例按这一类在预标文件里（不算 `unparsed`）所占的比例加权。本章只报不加权的数。
+
+# %%
+# Agreement between a person and the pre-labels in a review table; read the table only when one is given.
+EMOTION_REVIEW_COLUMNS = ["post_id", "prelabel", "human_label"]
+EMOTION_REVIEW_HINT = ("Give the path or address of a review table with the columns post_id, prelabel and human_label, "
+                       "such as a filled-in copy of labels/emotions-review-template.csv, or \"\" to read none.")
+
+
+def emotion_review_agreement(table):
+    """Rows reviewed by a person (human_label filled in), the share agreeing with the pre-label, and both per pre-label.
+
+    table has the columns post_id, prelabel and human_label; human_label is compared without surrounding spaces and
+    ignoring case. Returns {"n_reviewed", "agreement", "by_prelabel": {label: {"n_reviewed", "agreement"}}} for the
+    nine labels; an agreement is None when no row counts.
+    """
+    absent = [column for column in EMOTION_REVIEW_COLUMNS if column not in table.columns]
+    if absent:
+        raise ValueError(f"The review table has no column(s) {absent}; it needs {EMOTION_REVIEW_COLUMNS}")
+    prelabels = table["prelabel"].fillna("").astype(str).str.strip()
+    unknown = sorted(set(prelabels) - set(EMOTION_FILE_LABELS))
+    if unknown:
+        raise ValueError(f"The review table has pre-labels that are not one of the nine labels: {unknown}")
+    human = table["human_label"].fillna("").astype(str).str.strip().str.lower()
+    reviewed = (human != "").to_numpy()
+    agreeing = reviewed & (human == prelabels).to_numpy()
+    by_prelabel = {}
+    for label in EMOTION_FILE_LABELS:
+        mine = reviewed & (prelabels == label).to_numpy()
+        n = int(mine.sum())
+        by_prelabel[label] = {"n_reviewed": n, "agreement": None if n == 0 else int((agreeing & mine).sum()) / n}
+    n_reviewed = int(reviewed.sum())
+    return {"n_reviewed": n_reviewed, "agreement": None if n_reviewed == 0 else int(agreeing.sum()) / n_reviewed,
+            "by_prelabel": by_prelabel}
+
+
+if EMOTION_REVIEW_SOURCE:
+    review_table = read_emotion_table(EMOTION_REVIEW_SOURCE, "EMOTION_REVIEW_SOURCE", EMOTION_REVIEW_HINT)
+else:
+    review_table = pd.DataFrame(columns=EMOTION_REVIEW_COLUMNS)  # nothing is read
+brief["emotions"]["human_review"] = {"source": EMOTION_REVIEW_SOURCE, **emotion_review_agreement(review_table)}
+human_review = brief["emotions"]["human_review"]
+print(f"Review table: {EMOTION_REVIEW_SOURCE or '(none)'}; rows reviewed by a person: {human_review['n_reviewed']:,}; "
+      f"agreement with the pre-labels: {'—' if human_review['agreement'] is None else round(human_review['agreement'], 3)} "
+      "(unweighted)")
+pd.DataFrame.from_dict(human_review["by_prelabel"], orient="index").rename_axis("prelabel")
+
+# %% [markdown]
 # ## 11. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
