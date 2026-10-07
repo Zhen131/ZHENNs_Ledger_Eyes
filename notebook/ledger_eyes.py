@@ -65,6 +65,13 @@ DATED_BTC_ONLY = True  # default: True (chapter 12 keeps only posts that mention
 DATED_LANGUAGE = "en"  # default: "en" (chapter 12 keeps only tweets marked with this language); two-state, other: None (no language filter)
 NEWS_TEXT = "title"  # default: "title" (chapter 12 uses the news headline); two-state, other: "text" (headline and summary)
 NEWS_LABEL = "market_direction"  # default: "market_direction" (chapter 12 converts the dataset's class); two-state, other: "votes" (the side with more reader votes)
+DAILY_MIN_POSTS = 100  # default: 100; or any positive integer (chapter 13: a layer's day, or a drawer on one day, with fewer scored posts gets no bullish share; 100 posts leave a share near one half about 10 percentage points of chance error)
+NEW_WORD_WINDOW = 7  # default: 7; or any positive integer (chapter 14 compares a word's posts on a day with its daily mean over this many days before it)
+NEW_WORD_MIN_COUNT = 10  # default: 10; or any positive integer (chapter 14: a new word is in at least this many posts of the day)
+NEW_WORD_RATIO = 3.0  # default: 3.0; or any number above 0 (chapter 14: a new word is in at least this many times as many posts as its past daily mean)
+NEW_WORD_MAX_PER_DAY = 5  # default: 5; or any positive integer (chapter 14 reports at most this many new words per layer and day)
+EVENT_DAYS = ["2022-05-09", "2022-11-09"]  # default: a day of the LUNA crash week (May 2022) and a day of the FTX collapse week (November 2022); or any list of UTC days "YYYY-MM-DD" (chapter 13 shows example posts of these days)
+EVENT_EXAMPLES = 3  # default: 3; or any positive integer (chapter 13: example posts per side, bullish and bearish, for every event day and layer)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -217,6 +224,22 @@ if NEWS_TEXT not in ("title", "text"):
     raise ValueError(f'NEWS_TEXT must be "title" or "text", got {NEWS_TEXT!r}')
 if NEWS_LABEL not in ("market_direction", "votes"):
     raise ValueError(f'NEWS_LABEL must be "market_direction" or "votes", got {NEWS_LABEL!r}')
+for name, value in [("DAILY_MIN_POSTS", DAILY_MIN_POSTS), ("NEW_WORD_WINDOW", NEW_WORD_WINDOW),  # chapters 13 and 14
+                    ("NEW_WORD_MIN_COUNT", NEW_WORD_MIN_COUNT), ("NEW_WORD_MAX_PER_DAY", NEW_WORD_MAX_PER_DAY),
+                    ("EVENT_EXAMPLES", EVENT_EXAMPLES)]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+if isinstance(NEW_WORD_RATIO, bool) or not isinstance(NEW_WORD_RATIO, (int, float)) or not 0 < NEW_WORD_RATIO < float("inf"):
+    raise ValueError(f"NEW_WORD_RATIO must be a number above 0, got {NEW_WORD_RATIO!r}")
+if not isinstance(EVENT_DAYS, (list, tuple)) or len(set(map(str, EVENT_DAYS))) != len(EVENT_DAYS):
+    raise ValueError(f'EVENT_DAYS must be a list of different UTC days written "YYYY-MM-DD", got {EVENT_DAYS!r}')
+for value in EVENT_DAYS:
+    try:
+        real_day = isinstance(value, str) and calendar_date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        real_day = False
+    if not real_day:
+        raise ValueError(f'EVENT_DAYS must list UTC days written "YYYY-MM-DD", got {value!r} in {EVENT_DAYS!r}')
 print("Switches look fine.")
 
 # %% [markdown]
