@@ -46,6 +46,16 @@ quick: static checks, then the notebook runs three times on the bundled
        every new word against the rules) and compared between the two default
        runs. A fifth run reads a copy of the tweet sample with made-up words
        added on one day, which the new words must report (the spike run).
+       The two layers and validation chapters (14 and 15) read made-up prices
+       and a part of the Fear and Greed Index from samples/ (or nothing) in
+       every run, so the quick check connects to nothing; their layers and
+       validation sections are checked in every brief (the overlap, the
+       opposite days, the model on the news headlines, where the price and the
+       index come from, every coefficient recomputed from the files the run
+       read) and compared between the two default runs. Before any run, their
+       switches, where chapter 15 may connect, and its parsers and caches with
+       fake sources are checked. A sixth run reads no prices at all, which the
+       notebook must take as "not obtained".
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
@@ -58,7 +68,11 @@ full:  static checks, then one run on the full dataset with the default
        data/raw/dlt-tweets/ and data/raw/dlt-news/; its dated_data section
        is checked and its numbers are printed. The daily and new_words
        sections are checked, and their numbers, every new word day by day and
-       the event days are printed.
+       the event days are printed. Chapter 15 reads the BTC daily closes and the
+       Fear and Greed Index from the web (Yahoo Finance through yfinance, then
+       Coinbase, then Stooq; alternative.me) the first time and from its caches
+       in WORK_DIR/cache/ afterwards; the layers and validation sections are
+       checked (every coefficient recomputed from the cache) and printed.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -101,7 +115,7 @@ REQUIREMENTS = REPO_DIR / "requirements.txt"
 SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
 FULL_SOURCE = "data/raw/st-data-full.xlsx"
 TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers",
-                    "emotions", "dated_data", "daily", "new_words"]
+                    "emotions", "dated_data", "daily", "new_words", "layers", "validation"]
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -157,7 +171,7 @@ DRAWER_FILE_PROBES = [("moon shot soon", ["moon"]), ("no moon shot today", [])]
 DRAWER_QUOTES = 5  # spot-check quotes per drawer, at most
 DRAWER_STABLE_ROW_FIELDS = ["drawer", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
                             "label_vs_overall_pp", "too_few_bullish_bearish"]  # why.drawers fields that ignore training
-# Chapter 14: the brief's format rules, its documentation and the panel.
+# Chapter 16: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
@@ -1235,13 +1249,15 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
     settings["MIN_BULLISH_BEARISH_POSTS"] = settings["MIN_TOPIC_POSTS"]  # above every row's bullish + bearish posts
     parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
-                  **DATED_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
+                  **DATED_SAMPLE_SETTINGS, **VALIDATION_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-thresholds",
+                  **overrides, **settings}
     parameters = panel_settings(report, THRESHOLD_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
     report.info(f"{THRESHOLD_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
     kept = [name for name in settings if name in overrides]
     if kept:
         report.info(f"{THRESHOLD_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    check_offline_sources(report, THRESHOLD_LABEL, parameters, defaults)
     brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
     brief_path.unlink(missing_ok=True)  # a stale brief must never pass
     ok, _, _ = run_notebook(report, THRESHOLD_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -1255,6 +1271,8 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     check_dated_data(report, THRESHOLD_LABEL, brief, switches, quick_default=True)
     check_daily(report, THRESHOLD_LABEL, brief, switches)
     check_new_words(report, THRESHOLD_LABEL, brief, switches)
+    check_layers(report, THRESHOLD_LABEL, brief, switches)
+    check_validation(report, THRESHOLD_LABEL, brief, switches)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -1982,7 +2000,7 @@ def print_drawers(brief):
             print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
 
 
-# ---------------------------------------------------------------- the brief's format and the panel (chapter 14)
+# ---------------------------------------------------------------- the brief's format and the panel (chapter 16)
 
 def code_cells():
     """The notebook source's code cells, in order."""
@@ -2394,6 +2412,20 @@ BROKEN_BRIEFS = [
      "daily.layers.retail.days[0].date", "outside"),
     ("7 value the format does not allow", ("new_words", "layers", "retail", "days", 0, "date"), day_before,
      "new_words.layers.retail.days[0].date", "outside"),
+    ("7 value the format does not allow", ("validation", "layers", "retail", "fear_greed", "spearman"), lambda old: 1.5,
+     "validation.layers.retail.fear_greed.spearman", "1.5"),
+    ("7 value the format does not allow", ("validation", "price", "source"), lambda old: "binance",
+     "validation.price.source", "binance"),
+    ("3 wrong type", ("layers", "days", 0, "opposite"), lambda old: "yes", "layers.days[0].opposite", "boolean"),
+    ("7 value the format does not allow", ("validation", "layers"),
+     lambda old: {("whale" if key == "retail" else key): value for key, value in old.items()}, "validation.layers", "whale"),
+    ("7 value the format does not allow", ("layers", "n_days_with_share"),
+     lambda old: {("whale" if key == "retail" else key): value for key, value in old.items()}, "layers.n_days_with_share",
+     "whale"),
+    ("7 value the format does not allow", ("layers", "n_days_opposite"), lambda old: -1, "layers.n_days_opposite", "minimum"),
+    ("7 value the format does not allow", ("validation", "layers", "retail", "next_day_change", "n_days"), lambda old: -3,
+     "validation.layers.retail.next_day_change.n_days", "minimum"),
+    ("2 required field missing in a section", ("layers", "date_from"), DELETE, "layers", "date_from"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2413,6 +2445,11 @@ NULL_ALLOWED = [
     ("daily", "layers", "retail", "overall", "calibrated_bullish_share"),
     ("daily", "layers", "retail", "days", 0, "half_bullish_share"),
     ("daily", "calibration", "rate_gap"),
+    ("layers", "date_from"),
+    ("layers", "days", 0, "opposite"),
+    ("layers", "media_recognition", "true_bullish_rate"),
+    ("validation", "layers", "retail", "fear_greed", "spearman"),
+    ("validation", "price", "fetched_on"),
 ]
 
 
@@ -3301,21 +3338,24 @@ def chapter_cells():
 
 
 def check_emotion_chapter(report):
-    """Chapter numbers 0 to 14 in order with the brief last; chapter 11 explains silver labels in both languages and
+    """Chapter numbers 0 to 16 in order with the brief last; chapter 11 explains silver labels in both languages and
     reads nothing but its two sources."""
     notebook = jupytext.read(SOURCE, fmt="py:percent")
     numbers = [int(match.group(1)) for cell in notebook.cells if cell.cell_type == "markdown"
                for match in [re.match(r"## ([0-9]+)\. ", cell.source)] if match]
     chapters = chapter_cells()
     heading = {number: cells[0].source.splitlines()[0] for number, cells in chapters.items()}
-    report.check(numbers == list(range(15)) and heading.get(11, "").startswith("## 11. Emotions")
+    report.check(numbers == list(range(17)) and heading.get(11, "").startswith("## 11. Emotions")
                  and heading.get(12, "").startswith("## 12. Dated data")
                  and heading.get(13, "").startswith("## 13. Day by day")
-                 and heading.get(14, "").startswith("## 14. The brief"),
-                 "chapters 0 to 14 in order: chapter 11 is the emotions chapter, chapter 12 the dated data, chapter 13 "
-                 "day by day, chapter 14 the brief, which stays last",
+                 and heading.get(14, "").startswith("## 14. Two layers")
+                 and heading.get(15, "").startswith("## 15. Against the market")
+                 and heading.get(16, "").startswith("## 16. The brief"),
+                 "chapters 0 to 16 in order: chapter 11 is the emotions chapter, chapter 12 the dated data, chapter 13 "
+                 "day by day, chapter 14 the two layers, chapter 15 against the market, chapter 16 the brief, which stays "
+                 "last",
                  f"chapter headings {numbers}; 11: {heading.get(11)!r}; 12: {heading.get(12)!r}; 13: {heading.get(13)!r}; "
-                 f"14: {heading.get(14)!r}")
+                 f"14: {heading.get(14)!r}; 15: {heading.get(15)!r}; 16: {heading.get(16)!r}")
 
     explained = []
     for cell in chapters.get(11, []):
@@ -4919,7 +4959,7 @@ def spike_run(report, defaults, overrides, rules=None, built_in=None):
     report.info(f"{SPIKE_LABEL}: words added to {shown(path)} (word: posts per day): "
                 + "; ".join(f"{SPIKE_WORDS[key]}: {added[key]}" for key in SPIKE_WORDS))
     parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE, **DATED_SAMPLE_SETTINGS,
-                  "WORK_DIR": "data/checks/quick-spike", **overrides, **SPIKE_SETTINGS,
+                  **VALIDATION_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-spike", **overrides, **SPIKE_SETTINGS,
                   "DATED_TWEETS_SOURCE": shown(path)}
     parameters = panel_settings(report, SPIKE_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
@@ -4927,6 +4967,7 @@ def spike_run(report, defaults, overrides, rules=None, built_in=None):
     kept = [name for name in list(SPIKE_SETTINGS) + ["DATED_TWEETS_SOURCE"] if name in overrides]
     if kept:
         report.info(f"{SPIKE_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    check_offline_sources(report, SPIKE_LABEL, parameters, defaults)
     brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
     brief_path.unlink(missing_ok=True)  # a stale brief must never pass
     ok, _, _ = run_notebook(report, SPIKE_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -4936,6 +4977,12 @@ def spike_run(report, defaults, overrides, rules=None, built_in=None):
     check_dated_data(report, SPIKE_LABEL, brief, switches)
     check_daily(report, SPIKE_LABEL, brief, switches)
     check_new_words(report, SPIKE_LABEL, brief, switches)
+    check_layers(report, SPIKE_LABEL, brief, switches)
+    index_coefficients, change_coefficients = check_validation(report, SPIKE_LABEL, brief, switches)
+    report.check(index_coefficients > 0 and change_coefficients > 0,
+                 f"{SPIKE_LABEL}: with both small files of chapter 15 and a too-few bar of 1, coefficients can be computed: "
+                 f"{index_coefficients} against the index and {change_coefficients} against the next day's change are not "
+                 "null and agree with the check's own computation")
     check_format(report, SPIKE_LABEL, brief, rules)
     reported = {}  # word -> {day: (posts, ratio, example texts)}
     for name, layer in as_dict(as_dict(brief.get("new_words")).get("layers")).items():
@@ -5060,6 +5107,658 @@ def print_new_words(brief):
                     f"{'null' if item['ratio'] is None else round(item['ratio'], 2)})" for item in day["new_words"]))
 
 
+# ---------------------------------------------------------------- two layers and validation (chapters 14 and 15)
+
+VALIDATION_SWITCH_DEFAULTS = {"LAYER_GAP": 0.1, "PRICE_SOURCE": "auto",
+                              "FEAR_GREED_SOURCE": "https://api.alternative.me/fng/?limit=0&format=json",
+                              "VALIDATION_MIN_DAYS": 30}
+# Locked (only add): switch values the switch check cell must accept (True) or stop at with the switch's name (False).
+VALIDATION_SWITCH_PROBES = [
+    ({"LAYER_GAP": 0.5, "PRICE_SOURCE": "none", "FEAR_GREED_SOURCE": "none", "VALIDATION_MIN_DAYS": 1}, True),
+    ({"LAYER_GAP": 0.05, "PRICE_SOURCE": "samples/btc-usd-made-up-closes.csv",
+      "FEAR_GREED_SOURCE": "https://api.alternative.me/fng/?limit=10&format=json"}, True),
+    ({"LAYER_GAP": 0}, False), ({"LAYER_GAP": -0.1}, False), ({"LAYER_GAP": 0.6}, False), ({"LAYER_GAP": "0.1"}, False),
+    ({"LAYER_GAP": True}, False), ({"LAYER_GAP": float("nan")}, False),
+    ({"PRICE_SOURCE": ""}, False), ({"PRICE_SOURCE": None}, False), ({"PRICE_SOURCE": "https://stooq.com/q/d/l/?s=btcusd&i=d"}, False),
+    ({"FEAR_GREED_SOURCE": ""}, False), ({"FEAR_GREED_SOURCE": "https://example.com/fng/"}, False),
+    ({"FEAR_GREED_SOURCE": "http://api.alternative.me/fng/"}, False), ({"FEAR_GREED_SOURCE": 7}, False),
+    ({"VALIDATION_MIN_DAYS": 0}, False), ({"VALIDATION_MIN_DAYS": 2.5}, False), ({"VALIDATION_MIN_DAYS": False}, False),
+]
+PRICE_SAMPLE = "samples/btc-usd-made-up-closes.csv"  # made-up closes, not real prices
+FEAR_GREED_SAMPLE = "samples/fear-greed-alternative-me-sample.json"  # a part of the index, data from alternative.me
+# Every run of the quick check reads the price and the index from these files (or not at all), so it connects to nothing.
+VALIDATION_SAMPLE_SETTINGS = {"PRICE_SOURCE": PRICE_SAMPLE, "FEAR_GREED_SOURCE": FEAR_GREED_SAMPLE}
+OTHER_RUN_SOURCES = {"FEAR_GREED_SOURCE": "none"}  # the run with the other switches also takes the index's "none" path
+# One more run of the quick check: no prices at all ("not obtained"); a too-few bar of 1 gives the index days to pair.
+PRICE_NONE_LABEL = "price not obtained run"
+PRICE_NONE_SETTINGS = {"PRICE_SOURCE": "none", "FEAR_GREED_SOURCE": FEAR_GREED_SAMPLE, "DAILY_MIN_POSTS": 1}
+LAYER_PAIR = ["media", "retail"]  # the two layers chapter 14 compares, in this order
+PRICE_WEB_SOURCES = ["yfinance", "coinbase", "stooq"]  # in the order "auto" tries them
+WEB_ADDRESS_PREFIXES = ["https://api.exchange.coinbase.com/", "https://stooq.com/", "https://api.alternative.me/",
+                        "https://alternative.me/"]  # the only web addresses chapter 15 may hold
+WEB_ADDRESS = re.compile(r"[a-z]+://[^\s)\"']+")  # a web address inside a text
+NETWORK_MODULES = ("urllib", "requests", "http", "socket", "httpx", "urllib3", "aiohttp", "yfinance", "curl_cffi")
+VALIDATION_HOST_WORDS = ["yfinance", "coinbase", "stooq", "alternative.me", "yahoo"]  # only chapter 15 talks to them
+CORRELATION_TOLERANCE = 1e-9
+VALIDATION_PROBE_DIR = REPO_DIR / "data" / "checks" / "validation-probe"
+
+
+def check_validation_switches(report, defaults, others):
+    """The four switches of chapters 14 and 15 with their defaults, none two-state, and the switch check cell."""
+    wrong = [f"{name}={defaults.get(name, 'missing')!r}" for name, value in VALIDATION_SWITCH_DEFAULTS.items()
+             if name not in defaults or defaults[name] != value or type(defaults[name]) is not type(value)]
+    two_state = sorted(set(VALIDATION_SWITCH_DEFAULTS) & set(others))
+    report.check(not wrong and not two_state,
+                 "switches of the two layers and validation chapters are present with their defaults (a lean 0.1 away "
+                 "from 0.5; prices \"auto\"; the index from the alternative.me address; at least 30 days for a "
+                 "correlation), none of them two-state", f"other defaults {wrong}; two-state {two_state}")
+    wrong = []
+    for overrides, accepted in VALIDATION_SWITCH_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace.update(overrides)
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{overrides} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and any(name in stopped[0] for name in overrides)):
+            wrong.append(f"{overrides} not refused with its name: {problems[:1]}")
+    report.check(not wrong, f"the switch check cell accepts good switches of chapters 14 and 15 and stops at bad ones "
+                 f"with the switch's name ({len(VALIDATION_SWITCH_PROBES)} cases: a gap that is not a number above 0 and "
+                 "at most 0.5, a price source that is empty or a web address, an index source that is empty or an "
+                 "address outside https://api.alternative.me/, a day count that is not a positive integer)",
+                 "; ".join(wrong[:3]))
+
+
+def string_constants(tree):
+    return [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+
+
+def imported_modules(tree):
+    return sorted({alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                   for alias in (node.names if isinstance(node, ast.Import) else [ast.alias(node.module or "")])})
+
+
+def check_validation_chapters(report):
+    """Chapter 14 holds no web address and imports no network package; chapter 15 is the only chapter that talks to
+    the price sources and alternative.me, only through web_get (urllib) and yfinance, only at their addresses, and
+    keeps its caches (yfinance's too) under WORK_DIR."""
+    chapters = chapter_cells()
+    code14 = "\n".join(cell.source for cell in chapters.get(14, []) if cell.cell_type == "code")
+    code15 = "\n".join(cell.source for cell in chapters.get(15, []) if cell.cell_type == "code")
+    tree14, tree15 = ast.parse(code14), ast.parse(code15)
+    addresses14 = [value for value in string_constants(tree14) if "://" in value]
+    network14 = [name for name in imported_modules(tree14) if name.split(".")[0] in NETWORK_MODULES]
+    report.check(bool(code14) and not addresses14 and not network14,
+                 "chapter 14 (two layers) holds no web address and imports no network package",
+                 f"addresses {addresses14}; network imports {network14}")
+    addresses15 = [address for value in string_constants(tree15) for address in WEB_ADDRESS.findall(value)]
+    outside = [value for value in addresses15 if not any(value.startswith(prefix) for prefix in WEB_ADDRESS_PREFIXES)]
+    network15 = [name for name in imported_modules(tree15) if name.split(".")[0] in NETWORK_MODULES]
+    functions = {node.name: node for node in ast.walk(tree15) if isinstance(node, ast.FunctionDef)}
+    opened_in = sorted({name for name, node in functions.items() for call in ast.walk(node)
+                        if isinstance(call, ast.Call) and ast.unparse(call.func).endswith("urlopen")})
+    all_opens = [call for call in ast.walk(tree15) if isinstance(call, ast.Call) and ast.unparse(call.func).endswith("urlopen")]
+    cache_calls = [ast.unparse(call) for call in ast.walk(tree15) if isinstance(call, ast.Call)
+                   and ast.unparse(call.func).endswith("set_tz_cache_location")]
+    cache_files = [ast.unparse(node) for name in ("price_cache_file", "fear_greed_index") if name in functions
+                   for node in ast.walk(functions[name]) if isinstance(node, ast.BinOp) and "cache" in ast.unparse(node)]
+    report.check(bool(addresses15) and not outside and sorted(network15) == ["urllib.error", "urllib.request", "yfinance",
+                                                                              "yfinance.data"]
+                 and opened_in == ["web_get"] and len(all_opens) == 1
+                 and len(cache_calls) == 1 and "WORK_DIR" in cache_calls[0]
+                 and cache_files and all("WORK_DIR" in text for text in cache_files),
+                 "chapter 15 reads the web only through web_get (its one urlopen, Python's urllib) and yfinance, holds "
+                 f"web addresses only under {', '.join(WEB_ADDRESS_PREFIXES)}, and keeps its caches and yfinance's "
+                 "cookie and time zone files under WORK_DIR/cache/",
+                 f"addresses outside {outside}; network imports {network15}; urlopen in {opened_in} ({len(all_opens)} "
+                 f"calls); yfinance cache {cache_calls}; cache paths {cache_files}")
+    elsewhere = []
+    for number, cells in chapters.items():
+        if number == 15:
+            continue
+        for cell in cells:
+            if cell.cell_type != "code" or "BRIEF_SCHEMA_TEXT = " in cell.source:  # the format rules name the sources
+                continue
+            lowered = cell.source.lower()
+            elsewhere += [f"chapter {number}: {word}" for word in VALIDATION_HOST_WORDS if word in lowered]
+    report.check(not elsewhere, "no chapter but chapter 15 names yfinance, Yahoo, Coinbase, Stooq or alternative.me in its "
+                 "code (the parameters, install and switch check cells come before chapter 0)", "; ".join(elsewhere[:5]))
+
+
+def check_validation_probes(report):
+    """Chapter 15's functions, executed from the source, without any connection (in data/checks/validation-probe/):
+    the parsers on replies written here, and the caches with fake sources: a cache that covers the days is read
+    without asking any source; one that does not is fetched again and replaced; a source that fails or misses days
+    is passed over with its reason; when every source fails the prices are not obtained."""
+    import pandas as pd
+    shutil.rmtree(VALIDATION_PROBE_DIR, ignore_errors=True)
+    namespace = {"__name__": "notebook_cells", "WORK_DIR": str(VALIDATION_PROBE_DIR), "PRICE_SOURCE": "auto",
+                 "FEAR_GREED_SOURCE": VALIDATION_SWITCH_DEFAULTS["FEAR_GREED_SOURCE"]}
+    problems = run_cells(["btc_closes"], namespace)
+    if not report.check(not problems, "chapter 15's function cell runs from the source", "; ".join(problems)):
+        return
+    not_obtained = namespace["NotObtained"]
+    wrong = []
+
+    def refused(function, *args):
+        try:
+            function(*args)
+        except not_obtained as problem:
+            return str(problem)
+        return None
+
+    candles = json.dumps([[1650153600, 1.0, 2.0, 1.5, 40000.5, 10.0], [1650067200, 1.0, 2.0, 1.5, 39000.25, 9.0]])
+    closes = namespace["closes_from_coinbase"]([candles.encode("utf-8")])
+    if closes.to_dict() != {"2022-04-16": 39000.25, "2022-04-17": 40000.5}:
+        wrong.append(f"Coinbase candles read as {closes.to_dict()}")
+    if "not a list" not in (refused(namespace["closes_from_coinbase"], [b'{"message": "Unauthorized"}']) or ""):
+        wrong.append("a Coinbase error reply was not refused")
+    page = "<!DOCTYPE html><html><noscript>This site requires JavaScript to verify your browser.</noscript></html>"
+    if "web page" not in (refused(namespace["closes_from_stooq"], page) or ""):
+        wrong.append("a Stooq web page was not refused")
+    if "key" not in (refused(namespace["closes_from_stooq"], "Get your apikey: https://stooq.com/q/d/?s=btcusd") or ""):
+        wrong.append("a Stooq request for a key was not refused")
+    stooq = namespace["closes_from_stooq"]("Date,Open,High,Low,Close,Volume\n2022-04-15,1,2,0.5,1.5,10\n")
+    if stooq.to_dict() != {"2022-04-15": 1.5}:
+        wrong.append(f"a Stooq CSV read as {stooq.to_dict()}")
+    sample = namespace["fear_greed_from_json"]((REPO_DIR / FEAR_GREED_SAMPLE).read_text(encoding="utf-8"))
+    if (len(sample), sample.index[0], sample.index[-1]) != (179, "2022-04-15", "2022-10-10"):
+        wrong.append(f"the index sample read as {len(sample)} days {sample.index[0]} to {sample.index[-1]}")
+    try:
+        namespace["fear_greed_from_json"]('{"data": [], "metadata": {"error": "probe error"}}')
+        wrong.append("an index reply with an error was not refused")
+    except ValueError:
+        pass
+    report.check(not wrong, "chapter 15's parsers: Coinbase candles become UTC days and closes, an error reply is refused; "
+                 "a Stooq web page (one that wants JavaScript) and a request for a key are refused, a Stooq CSV is read; "
+                 "the index sample gives 179 days, a reply with an error is refused", "; ".join(wrong))
+
+    calls = []
+
+    def fake(source, first_day, last_day, fail=None):
+        def fetch(first, last):
+            calls.append(source)
+            if fail:
+                raise not_obtained(fail)
+            days = pd.date_range(first_day, last_day, freq="D").strftime("%Y-%m-%d")
+            return pd.Series(range(1, len(days) + 1), index=list(days), dtype="float64")
+        return fetch
+
+    namespace["PRICE_FETCHERS"] = {"yfinance": fake("yfinance", None, None, fail="probe: refused"),
+                                   "coinbase": fake("coinbase", "2022-01-01", "2022-12-31"),
+                                   "stooq": fake("stooq", None, None, fail="probe: a web page")}
+    steps = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        for first, last in [("2022-03-01", "2022-03-31"), ("2022-03-10", "2022-03-20"), ("2022-02-01", "2022-03-31"),
+                            ("2021-06-01", "2022-03-31")]:
+            calls.clear()
+            closes, record = namespace["btc_closes"](first, last)
+            steps.append((list(calls), record["source"], record["from_cache"], [item["source"] for item in record["failed"]],
+                          record["reason"], None if closes is None else (closes.index[0], closes.index[-1])))
+    expected = [(["yfinance", "coinbase"], "coinbase", False, ["yfinance"], None, ("2022-01-01", "2022-12-31")),
+                ([], "coinbase", True, ["yfinance"], None, ("2022-01-01", "2022-12-31")),
+                (["yfinance", "coinbase"], "coinbase", False, ["yfinance"], None, ("2022-01-01", "2022-12-31")),
+                (["yfinance", "coinbase", "stooq"], "not_obtained", False, ["yfinance", "coinbase", "stooq"], "reason", None)]
+    shape = [step[:4] + ("reason" if step[4] else None,) + step[5:] for step in steps]
+    missed = steps[3][4] or ""
+    report.check(shape == expected and "misses needed days" in missed and "probe: refused" in missed,
+                 "chapter 15's price sources with fake sources and no connection: the first that has every needed day is "
+                 "used and the ones before it are recorded with their reasons; a cache that covers the days is read without "
+                 "asking any source; wider days are fetched again (the cache is replaced); a source that misses needed days "
+                 "is passed over, and when every source fails the prices are not obtained, with every reason",
+                 f"steps {steps}")
+
+    replies = []
+
+    def fake_get(address):
+        replies.append(address)
+        return (REPO_DIR / FEAR_GREED_SAMPLE).read_bytes()
+
+    def broken_get(address):
+        raise not_obtained("probe: no reply")
+
+    namespace["web_get"] = fake_get
+    steps = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        for address in [VALIDATION_SWITCH_DEFAULTS["FEAR_GREED_SOURCE"], VALIDATION_SWITCH_DEFAULTS["FEAR_GREED_SOURCE"],
+                        "https://api.alternative.me/fng/?limit=200&format=json"]:
+            namespace["FEAR_GREED_SOURCE"] = address
+            replies.clear()
+            values, record = namespace["fear_greed_index"]("2022-05-01", "2022-05-31")
+            steps.append((len(replies), record["source"], record["from_cache"], None if values is None else len(values)))
+        namespace["web_get"] = broken_get
+        values, record = namespace["fear_greed_index"]("2022-01-01", "2022-05-31")
+        steps.append((None, record["source"], record["from_cache"], record["reason"]))
+    report.check(steps == [(1, "alternative.me", False, 179), (0, "alternative.me", True, 179), (1, "alternative.me", False, 179),
+                           (None, "not_obtained", False, "probe: no reply")],
+                 "chapter 15's index with a fake reply and no connection: fetched once and cached; read from the cache "
+                 "next time; fetched again for another address; not obtained, with the reason, when there is no reply",
+                 f"steps {steps}")
+    shutil.rmtree(VALIDATION_PROBE_DIR, ignore_errors=True)
+
+
+def check_offline_sources(report, label, parameters, defaults):
+    """In the quick check every run reads the price and the index from a local file or not at all."""
+    price = parameters.get("PRICE_SOURCE", defaults.get("PRICE_SOURCE"))
+    index = parameters.get("FEAR_GREED_SOURCE", defaults.get("FEAR_GREED_SOURCE"))
+    report.check(isinstance(price, str) and price != "auto" and "://" not in price
+                 and isinstance(index, str) and "://" not in index,
+                 f"{label}: the price and the index come from local files or none, so the run connects to nothing "
+                 f"(PRICE_SOURCE {price!r}, FEAR_GREED_SOURCE {index!r})")
+
+
+def check_lean(share, gap):
+    """'bullish', 'bearish' or 'neither' by the rule of chapter 14; None without a share."""
+    if share is None:
+        return None
+    return "bullish" if share >= 0.5 + gap else ("bearish" if share <= 0.5 - gap else "neither")
+
+
+def calendar_days(first, last):
+    """Every calendar day from first to last, YYYY-MM-DD; empty when either is None."""
+    from datetime import date, timedelta
+    if first is None or last is None:
+        return []
+    start, end = date.fromisoformat(first), date.fromisoformat(last)
+    return [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
+
+
+def check_layers(report, label, brief, switches):
+    """The layers section: the overlap of the two layers' periods, every day of it with the two shares of daily, the
+    leans and opposite days recomputed, the counts; and the model on the news headlines."""
+    layers = as_dict(brief.get("layers"))
+    if not report.check(bool(layers), f"{label}: layers section has content"):
+        return
+    daily_layers = as_dict(as_dict(brief.get("daily")).get("layers"))
+    gap = switches["LAYER_GAP"]
+    problems = []
+    if layers.get("compared") != LAYER_PAIR:
+        problems.append(f"compared {layers.get('compared')!r}")
+    if not (layers.get("gap") == gap and same_value(layers.get("bullish_at_or_above"), 0.5 + gap)
+            and same_value(layers.get("bearish_at_or_below"), 0.5 - gap)):
+        problems.append(f"gap {layers.get('gap')!r} and bars {layers.get('bullish_at_or_above')!r}, "
+                        f"{layers.get('bearish_at_or_below')!r} (LAYER_GAP {gap!r})")
+    present = all(layer in daily_layers for layer in LAYER_PAIR)
+    first = max(as_dict(daily_layers[layer]).get("date_from") for layer in LAYER_PAIR) if present else None
+    last = min(as_dict(daily_layers[layer]).get("date_to") for layer in LAYER_PAIR) if present else None
+    if first is not None and first > last:
+        first = last = None
+    if (layers.get("date_from"), layers.get("date_to")) != (first, last):
+        problems.append(f"period {layers.get('date_from')} to {layers.get('date_to')} (expected {first} to {last})")
+    days = layers.get("days") if isinstance(layers.get("days"), list) else []
+    if [as_dict(day).get("date") for day in days] != calendar_days(first, last):
+        problems.append(f"days {len(days)}, not every calendar day of the overlap ({len(calendar_days(first, last))})")
+    daily_shares = {layer: {as_dict(day).get("date"): as_dict(day).get("calibrated_bullish_share")
+                            for day in as_dict(daily_layers.get(layer)).get("days") or []} for layer in LAYER_PAIR}
+    with_share, both, opposite_dates = dict.fromkeys(LAYER_PAIR, 0), 0, []
+    for day in days:
+        day = as_dict(day)
+        shares = as_dict(day.get("calibrated_bullish_share"))
+        if list(shares) != LAYER_PAIR:
+            problems.append(f"{day.get('date')}: layers {list(shares)}")
+            continue
+        for layer in LAYER_PAIR:
+            if shares[layer] != daily_shares[layer].get(day.get("date"), "missing"):
+                problems.append(f"{day.get('date')} {layer}: {shares[layer]!r}, daily has "
+                                f"{daily_shares[layer].get(day.get('date'), 'no such day')!r}")
+            with_share[layer] += shares[layer] is not None
+        leans = [check_lean(shares[layer], gap) for layer in LAYER_PAIR]
+        expected = None if None in leans else sorted(leans) == ["bearish", "bullish"]
+        if day.get("opposite") is not expected:
+            problems.append(f"{day.get('date')}: opposite {day.get('opposite')!r} with shares {shares} (expected {expected})")
+        both += expected is not None
+        if expected:
+            opposite_dates.append(day.get("date"))
+    counted = {"n_days": len(days), "n_days_with_share": with_share, "n_days_both": both,
+               "n_days_opposite": len(opposite_dates), "opposite_dates": opposite_dates}
+    problems += [f"{key} {layers.get(key)!r} (counted {value!r})" for key, value in counted.items() if layers.get(key) != value]
+    report.check(not problems, f"{label}: layers covers the overlap of the two layers' periods ({first} to {last}), "
+                 "every calendar day of it in order, each with the calibrated shares of daily for media and retail; the "
+                 "leans (LAYER_GAP) and the opposite days recomputed agree, and so do the days with a share, the days both "
+                 f"take part ({both}), the opposite days ({len(opposite_dates)}) and their dates", "; ".join(problems[:5]))
+
+    recognition = as_dict(layers.get("media_recognition"))
+    news = as_dict(as_dict(as_dict(brief.get("dated_data")).get("datasets")).get("news"))
+    labels = as_dict(news.get("label_counts"))
+    calibration = as_dict(as_dict(brief.get("daily")).get("calibration"))
+    media = as_dict(daily_layers.get("media"))
+    problems = []
+    n_bullish, n_bearish = recognition.get("n_labelled_bullish"), recognition.get("n_labelled_bearish")
+    called_bullish, called_bearish = recognition.get("n_bullish_called_bullish"), recognition.get("n_bearish_called_bullish")
+    if not all(is_count(value) for value in (n_bullish, n_bearish, called_bullish, called_bearish)) \
+            or called_bullish > n_bullish or called_bearish > n_bearish:
+        problems.append(f"counts {n_bullish!r}, {n_bearish!r}, {called_bullish!r}, {called_bearish!r}")
+    else:
+        if (n_bullish, n_bearish) != (labels.get("2"), labels.get("0")):
+            problems.append(f"labelled {n_bullish} bullish and {n_bearish} bearish, dated_data has {labels}")
+        expected = {
+            "true_bullish_rate": share_of(called_bullish, n_bullish),
+            "false_bullish_rate": share_of(called_bearish, n_bearish),
+            "stocktwits_true_bullish_rate": calibration.get("true_bullish_rate"),
+            "stocktwits_false_bullish_rate": calibration.get("false_bullish_rate"),
+            "label_bullish_share": share_of(n_bullish, n_bullish + n_bearish),
+            "half_bullish_share": share_of(called_bullish + called_bearish, n_bullish + n_bearish),
+        }
+        expected["calibrated_bullish_share"] = calibrated_from(expected["half_bullish_share"], calibration)
+        problems += [f"{key} {recognition.get(key)!r} (expected {value!r})" for key, value in expected.items()
+                     if not (is_score(recognition.get(key)) and same_value(recognition.get(key), value))]
+    if (recognition.get("layer"), recognition.get("date_from"), recognition.get("date_to")) != \
+            ("media", media.get("date_from"), media.get("date_to")):
+        problems.append(f"layer and period {recognition.get('layer')} {recognition.get('date_from')} to "
+                        f"{recognition.get('date_to')}")
+    if (recognition.get("label_rule"), recognition.get("text_column")) != (news.get("label_rule"), news.get("text_column")):
+        problems.append(f"label rule {recognition.get('label_rule')!r} and text {recognition.get('text_column')!r}")
+    report.check(not problems, f"{label}: layers.media_recognition: the headlines labelled bullish and bearish are those "
+                 "of dated_data, the called ones at most as many, both rates and the three shares follow from the counts "
+                 "(null for an empty denominator), the calibrated one with the rates of daily.calibration, and the "
+                 "StockTwits rates beside them are those of daily.calibration; the media layer's whole period",
+                 "; ".join(problems[:5]))
+
+
+def average_ranks(values):
+    """Ranks from 1, equal values at their average rank (a second implementation, not pandas')."""
+    order = sorted(range(len(values)), key=lambda position: values[position])
+    ranks, start = [0.0] * len(values), 0
+    while start < len(order):
+        end = start
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[start]]:
+            end += 1
+        for position in order[start:end + 1]:
+            ranks[position] = (start + end) / 2 + 1
+        start = end + 1
+    return ranks
+
+
+def rank_correlation(pairs, min_days):
+    """Spearman's rank correlation of (x, y) pairs: the Pearson correlation of the average ranks; None with fewer than
+    min_days pairs or when either side has a single value."""
+    if len(pairs) < min_days or len({x for x, _ in pairs}) < 2 or len({y for _, y in pairs}) < 2:
+        return None
+    left, right = average_ranks([x for x, _ in pairs]), average_ranks([y for _, y in pairs])
+    mean_left, mean_right = sum(left) / len(left), sum(right) / len(right)
+    covariance = sum((a - mean_left) * (b - mean_right) for a, b in zip(left, right))
+    spread = (sum((a - mean_left) ** 2 for a in left) * sum((b - mean_right) ** 2 for b in right)) ** 0.5
+    return covariance / spread
+
+
+def read_validation_inputs(brief, switches):
+    """The closes and the index the run used, read by the check itself: a local file from its path, a web source from
+    its cache in WORK_DIR/cache/; (closes or None, index or None, problems)."""
+    from datetime import datetime, timezone
+    import pyarrow.parquet as pq
+    validation = as_dict(brief.get("validation"))
+    price, index = as_dict(validation.get("price")), as_dict(validation.get("fear_greed"))
+    cache = REPO_DIR / switches["WORK_DIR"] / "cache"
+    closes, values, problems = None, None, []
+    if price.get("source") == "local_file":
+        lines = [line for line in (REPO_DIR / price.get("address", "")).read_text(encoding="utf-8").splitlines()
+                 if line and not line.startswith("#")]
+        if lines[0] != "date,close":
+            problems.append(f"price file header {lines[0]!r}")
+        closes = {day: float(close) for day, close in (line.split(",") for line in lines[1:])}
+    elif price.get("source") in PRICE_WEB_SOURCES:
+        file = cache / f"price-btc-usd-{price['source']}.parquet"
+        if not file.exists():
+            problems.append(f"no price cache {shown(file)}")
+        else:
+            table = pq.read_table(file)
+            saved = json.loads(table.schema.metadata[b"ledger_eyes"])
+            if (saved.get("source"), saved.get("fetched_on")) != (price.get("source"), price.get("fetched_on")):
+                problems.append(f"price cache from {saved.get('source')} fetched on {saved.get('fetched_on')}")
+            closes = dict(zip(table.column("date").to_pylist(), table.column("value").to_pylist()))
+    if index.get("source") == "local_file":
+        content = json.loads((REPO_DIR / index.get("address", "")).read_text(encoding="utf-8"))
+        values = {datetime.fromtimestamp(int(item["timestamp"]), timezone.utc).strftime("%Y-%m-%d"): int(item["value"])
+                  for item in content["data"]}
+    elif index.get("source") == "alternative.me":
+        file = cache / "fear-greed.parquet"
+        if not file.exists():
+            problems.append(f"no index cache {shown(file)}")
+        else:
+            table = pq.read_table(file)
+            saved = json.loads(table.schema.metadata[b"ledger_eyes"])
+            if (saved.get("address"), saved.get("fetched_on")) != (index.get("address"), index.get("fetched_on")):
+                problems.append(f"index cache of {saved.get('address')} fetched on {saved.get('fetched_on')}")
+            values = dict(zip(table.column("date").to_pylist(), table.column("value").to_pylist()))
+    return closes, values, problems
+
+
+def coverage_problems(record, series, name):
+    """The first and last day and the number of days of series within the record's requested days."""
+    inside = sorted(day for day in (series or {}) if record.get("requested_from") <= day <= record.get("requested_to"))
+    expected = (inside[0] if inside else None, inside[-1] if inside else None, len(inside))
+    found = (record.get("date_from"), record.get("date_to"), record.get("n_days"))
+    return [] if found == expected else [f"{name} covers {found}, the data {expected}"]
+
+
+def check_validation(report, label, brief, switches):
+    """The validation section: where the price and the index come from, the periods, and every coefficient and its days
+    recomputed by the check from the files the run read (a local file or the cache). Returns the coefficients against
+    the index and against the next day's change that are not null."""
+    from datetime import date, timedelta
+    validation = as_dict(brief.get("validation"))
+    if not report.check(bool(validation), f"{label}: validation section has content"):
+        return 0, 0
+    daily_layers = as_dict(as_dict(brief.get("daily")).get("layers"))
+    first = min((as_dict(layer).get("date_from") for layer in daily_layers.values()), default=None)
+    last = max((as_dict(layer).get("date_to") for layer in daily_layers.values()), default=None)
+    price, index = as_dict(validation.get("price")), as_dict(validation.get("fear_greed"))
+    problems = []
+    if (validation.get("date_from"), validation.get("date_to"), validation.get("min_days")) != \
+            (first, last, switches["VALIDATION_MIN_DAYS"]):
+        problems.append(f"period {validation.get('date_from')} to {validation.get('date_to')}, min_days "
+                        f"{validation.get('min_days')!r}")
+    after = (date.fromisoformat(last) + timedelta(days=1)).isoformat() if last else None
+    if (price.get("requested_from"), price.get("requested_to"), index.get("requested_from"), index.get("requested_to")) \
+            != (first, after, first, last):
+        problems.append(f"requested days: price {price.get('requested_from')} to {price.get('requested_to')}, index "
+                        f"{index.get('requested_from')} to {index.get('requested_to')}")
+    price_switch, index_switch = switches["PRICE_SOURCE"], switches["FEAR_GREED_SOURCE"]
+    expected_price = (["not_obtained"] if price_switch == "none" else ["local_file"] if price_switch != "auto"
+                      else PRICE_WEB_SOURCES + ["not_obtained"])
+    expected_index = (["not_obtained"] if index_switch == "none" else ["local_file"] if "://" not in index_switch
+                      else ["alternative.me", "not_obtained"])
+    if price.get("source") not in expected_price or index.get("source") not in expected_index:
+        problems.append(f"sources {price.get('source')!r} and {index.get('source')!r} with PRICE_SOURCE {price_switch!r} "
+                        f"and FEAR_GREED_SOURCE {index_switch!r}")
+    for name, record, local in (("price", price, price_switch), ("index", index, index_switch)):
+        failed = record.get("failed", [])
+        if record.get("source") == "not_obtained":
+            if not (isinstance(record.get("reason"), str) and record["reason"].strip()) or record.get("address") is not None \
+                    or record.get("n_days") != 0 or record.get("fetched_on") is not None or record.get("from_cache") is not False:
+                problems.append(f"{name} not obtained: reason {record.get('reason')!r}, address {record.get('address')!r}, "
+                                f"days {record.get('n_days')!r}, fetched on {record.get('fetched_on')!r}")
+            if name == "price" and price_switch == "auto" and [item.get("source") for item in failed] != PRICE_WEB_SOURCES:
+                problems.append(f"price not obtained after trying {[item.get('source') for item in failed]}")
+        else:
+            if record.get("reason") is not None:
+                problems.append(f"{name} obtained with a reason {record.get('reason')!r}")
+            if record.get("source") == "local_file":
+                if record.get("address") != local or record.get("fetched_on") is not None or record.get("from_cache") is not False:
+                    problems.append(f"{name} from the local file {record.get('address')!r}, fetched on "
+                                    f"{record.get('fetched_on')!r}, from cache {record.get('from_cache')!r}")
+            elif not (isinstance(record.get("fetched_on"), str) and isinstance(record.get("from_cache"), bool)):
+                problems.append(f"{name} from the web: fetched on {record.get('fetched_on')!r}")
+            if name == "price":
+                tried = [item.get("source") for item in failed]
+                if record.get("source") in PRICE_WEB_SOURCES and tried != PRICE_WEB_SOURCES[:PRICE_WEB_SOURCES.index(record["source"])]:
+                    problems.append(f"price from {record.get('source')} after trying {tried}")
+                if not (isinstance(record.get("day_boundary"), str) and record["day_boundary"].strip()):
+                    problems.append("price without its day boundary")
+        if any(not (isinstance(item.get("reason"), str) and item["reason"].strip()) for item in failed):
+            problems.append(f"{name}: a failed source without a reason")
+    if "alternative.me" not in str(index.get("attribution")):
+        problems.append(f"index attribution {index.get('attribution')!r}")
+    closes, values, read_problems = read_validation_inputs(brief, switches)
+    problems += read_problems
+    problems += coverage_problems(price, closes, "price") + coverage_problems(index, values, "index")
+    report.check(not problems, f"{label}: validation records where the price ({price.get('source')}) and the index "
+                 f"({index.get('source')}) come from as the switches say, a reason when not obtained and the sources tried "
+                 "with theirs, the day boundary, the days requested (every layer's period, the price one day more) and "
+                 "the days covered, recounted from the files the run read", "; ".join(problems[:5]))
+
+    following = {}
+    for day, close in (closes or {}).items():
+        after_day = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        if after_day in closes:
+            following[day] = closes[after_day] / close - 1
+    problems, checked = [], {"fear_greed": 0, "next_day_change": 0}
+    layers = as_dict(validation.get("layers"))
+    if list(layers) != list(daily_layers):
+        problems.append(f"layers {list(layers)}, daily {list(daily_layers)}")
+    for name, layer in daily_layers.items():
+        entry = as_dict(layers.get(name))
+        shares = {as_dict(day).get("date"): as_dict(day).get("calibrated_bullish_share")
+                  for day in as_dict(layer).get("days") or [] if as_dict(day).get("calibrated_bullish_share") is not None}
+        if (entry.get("date_from"), entry.get("date_to"), entry.get("n_days_with_share")) != \
+                (as_dict(layer).get("date_from"), as_dict(layer).get("date_to"), len(shares)):
+            problems.append(f"{name}: period {entry.get('date_from')} to {entry.get('date_to')}, days with a share "
+                            f"{entry.get('n_days_with_share')!r} ({len(shares)})")
+        for key, other in (("fear_greed", values or {}), ("next_day_change", following)):
+            pairs = [(share, other[day]) for day, share in shares.items() if day in other]
+            expected = rank_correlation(pairs, switches["VALIDATION_MIN_DAYS"])
+            found = as_dict(entry.get(key))
+            value = found.get("spearman")
+            close = (value is None and expected is None) or (is_number(value) and expected is not None
+                                                             and -1 <= value <= 1
+                                                             and abs(value - expected) <= CORRELATION_TOLERANCE)
+            if found.get("n_days") != len(pairs) or not close:
+                problems.append(f"{name} {key}: {found.get('n_days')!r} days, {value!r} (recomputed {len(pairs)} days, "
+                                f"{expected!r})")
+            checked[key] += value is not None and close
+    if price.get("source") == "not_obtained" and any(as_dict(as_dict(entry).get("next_day_change")) !=
+                                                     {"n_days": 0, "spearman": None} for entry in layers.values()):
+        problems.append("prices not obtained, but a layer has days or a coefficient against the next day's change")
+    if index.get("source") == "not_obtained" and any(as_dict(as_dict(entry).get("fear_greed")) !=
+                                                     {"n_days": 0, "spearman": None} for entry in layers.values()):
+        problems.append("index not obtained, but a layer has days or a coefficient against it")
+    report.check(not problems, f"{label}: validation, recomputed by the check (average ranks, Pearson of the ranks) from "
+                 "the shares of daily and the files the run read: every layer's period and days with a share, and for the "
+                 "index and the next day's change the days that take part and the coefficient (within "
+                 f"{CORRELATION_TOLERANCE}, in [-1, 1], null below VALIDATION_MIN_DAYS or for a single value); "
+                 f"{checked['fear_greed']} coefficients against the index and {checked['next_day_change']} against the next "
+                 "day's change were not null and agree", "; ".join(problems[:5]))
+    return checked["fear_greed"], checked["next_day_change"]
+
+
+def stable_layers_validation(brief):
+    """What two runs with the same switches must agree on: the overlap, the labelled headlines, where the price and the
+    index come from and which days they cover."""
+    layers, validation = as_dict(as_dict(brief).get("layers")), as_dict(as_dict(brief).get("validation"))
+    recognition = as_dict(layers.get("media_recognition"))
+    keep = ("source", "address", "reason", "requested_from", "requested_to", "date_from", "date_to", "n_days", "fetched_on")
+    return {
+        "layers": {key: layers.get(key) for key in ("compared", "date_from", "date_to", "n_days", "gap")},
+        "days": [as_dict(day).get("date") for day in layers.get("days") or []],
+        "labelled": {key: recognition.get(key) for key in ("n_labelled_bullish", "n_labelled_bearish", "label_rule")},
+        "period": {key: validation.get(key) for key in ("date_from", "date_to", "min_days")},
+        "price": {key: as_dict(validation.get("price")).get(key) for key in keep},
+        "index": {key: as_dict(validation.get("fear_greed")).get(key) for key in keep},
+    }
+
+
+def compare_layers_validation(report, first, again):
+    """Two runs with the default switches: the same overlap, labelled headlines, price and index sources and days."""
+    left, right = stable_layers_validation(first), stable_layers_validation(again)
+    report.check(bool(as_dict(first).get("layers")) and left == right,
+                 "default switches run twice: the same period of layers and its days, the same headlines labelled bullish "
+                 "and bearish, and the price and the index from the same place covering the same days",
+                 "" if left == right else "differing parts: " + ", ".join(key for key in left if left[key] != right[key]))
+
+
+def price_none_run(report, defaults, overrides, rules=None, built_in=None):
+    """One more run of the quick check without prices (PRICE_SOURCE "none"): the notebook runs to the end, the prices
+    are not obtained with a reason, every coefficient against the next day's change is null with 0 days, and the index
+    half is still computed (a too-few bar of 1 gives it days to pair)."""
+    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE, **DATED_SAMPLE_SETTINGS,
+                  **VALIDATION_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-price-none", **overrides,
+                  **PRICE_NONE_SETTINGS}
+    parameters = panel_settings(report, PRICE_NONE_LABEL, parameters, overrides)
+    switches = {**defaults, **parameters}
+    report.info(f"{PRICE_NONE_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
+    kept = [name for name in PRICE_NONE_SETTINGS if name in overrides]
+    if kept:
+        report.info(f"{PRICE_NONE_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    check_offline_sources(report, PRICE_NONE_LABEL, parameters, defaults)
+    brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
+    brief_path.unlink(missing_ok=True)  # a stale brief must never pass
+    ok, _, _ = run_notebook(report, PRICE_NONE_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    brief = read_brief(report, PRICE_NONE_LABEL, brief_path) if ok else None
+    if brief is None:
+        return
+    check_daily(report, PRICE_NONE_LABEL, brief, switches)
+    check_layers(report, PRICE_NONE_LABEL, brief, switches)
+    index_coefficients, _ = check_validation(report, PRICE_NONE_LABEL, brief, switches)
+    check_format(report, PRICE_NONE_LABEL, brief, rules)
+    check_panel_output(report, PRICE_NONE_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    validation = as_dict(brief.get("validation"))
+    price, layers = as_dict(validation.get("price")), as_dict(validation.get("layers"))
+    report.check(price.get("source") == "not_obtained" and bool(str(price.get("reason") or "").strip())
+                 and bool(layers) and all(as_dict(entry.get("next_day_change")) == {"n_days": 0, "spearman": None}
+                                          for entry in layers.values())
+                 and as_dict(validation.get("fear_greed")).get("source") == "local_file"
+                 and any(as_dict(entry.get("fear_greed")).get("n_days", 0) > 0 for entry in layers.values())
+                 and index_coefficients > 0,
+                 f"{PRICE_NONE_LABEL}: the notebook ran to the end; the prices are not obtained with a reason, every "
+                 "layer's correlation with the next day's change is null with 0 days, and the index half is computed "
+                 f"({index_coefficients} coefficients against the index not null)",
+                 f"price {price.get('source')!r} ({price.get('reason')!r}); layers "
+                 + "; ".join(f"{name}: {entry.get('fear_greed')}, {entry.get('next_day_change')}" for name, entry in layers.items()))
+
+
+def print_layers(brief):
+    """Print chapter 14's numbers (full run)."""
+    layers = as_dict(brief.get("layers"))
+    if not layers:
+        return
+    recognition = as_dict(layers.get("media_recognition"))
+    print("\nTwo layers (full run)")
+    print(f"  compared:                      {layers.get('compared')}; lean bullish at or above "
+          f"{layers.get('bullish_at_or_above')}, bearish at or below {layers.get('bearish_at_or_below')} (gap {layers.get('gap')})")
+    print(f"  period both cover:             {layers.get('date_from')} to {layers.get('date_to')} ({layers.get('n_days')} days)")
+    print(f"  days with a share:             {layers.get('n_days_with_share')}")
+    print(f"  days both take part:           {layers.get('n_days_both')}")
+    print(f"  days leaning opposite ways:    {layers.get('n_days_opposite')}")
+    for day in layers.get("days") or []:
+        if day.get("opposite"):
+            print(f"    {day.get('date')}: {day.get('calibrated_bullish_share')}")
+    print(f"  model on news headlines:       media {recognition.get('date_from')} to {recognition.get('date_to')}, label rule "
+          f"{recognition.get('label_rule')}, text {recognition.get('text_column')}")
+    print(f"    true bullish rate:           {recognition.get('true_bullish_rate')} ({recognition.get('n_bullish_called_bullish')} "
+          f"of {recognition.get('n_labelled_bullish')} labelled bullish); on StockTwits {recognition.get('stocktwits_true_bullish_rate')}")
+    print(f"    false bullish rate:          {recognition.get('false_bullish_rate')} ({recognition.get('n_bearish_called_bullish')} "
+          f"of {recognition.get('n_labelled_bearish')} labelled bearish); on StockTwits {recognition.get('stocktwits_false_bullish_rate')}")
+    print(f"    bullish share:               by the readers' labels {recognition.get('label_bullish_share')}, counted at 0.5 "
+          f"{recognition.get('half_bullish_share')}, calibrated with the StockTwits rates {recognition.get('calibrated_bullish_share')}")
+
+
+def print_validation(brief):
+    """Print chapter 15's numbers (full run)."""
+    validation = as_dict(brief.get("validation"))
+    if not validation:
+        return
+    price, index = as_dict(validation.get("price")), as_dict(validation.get("fear_greed"))
+    print("\nAgainst the market (full run)")
+    print(f"  period:                        {validation.get('date_from')} to {validation.get('date_to')}; at least "
+          f"{validation.get('min_days')} days for a coefficient")
+    print(f"  price source:                  {price.get('source')} ({price.get('address')}); reason {price.get('reason')}; "
+          f"fetched on {price.get('fetched_on')}, from the cache {price.get('from_cache')}")
+    for item in price.get("failed") or []:
+        print(f"    tried, not obtained:         {item.get('source')}: {item.get('reason')}")
+    print(f"  price days:                    needed {price.get('requested_from')} to {price.get('requested_to')}, covered "
+          f"{price.get('date_from')} to {price.get('date_to')} ({price.get('n_days')} days); {price.get('day_boundary')}")
+    print(f"  fear and greed index:          {index.get('source')} ({index.get('address')}); reason {index.get('reason')}; "
+          f"fetched on {index.get('fetched_on')}, from the cache {index.get('from_cache')}")
+    print(f"  index days:                    needed {index.get('requested_from')} to {index.get('requested_to')}, covered "
+          f"{index.get('date_from')} to {index.get('date_to')} ({index.get('n_days')} days); {index.get('attribution')}")
+    for name, entry in as_dict(validation.get("layers")).items():
+        print(f"  layer {name}: {entry.get('date_from')} to {entry.get('date_to')}, {entry.get('n_days_with_share')} days "
+              f"with a share; against the index: {as_dict(entry.get('fear_greed')).get('spearman')} "
+              f"({as_dict(entry.get('fear_greed')).get('n_days')} days); against the next day's change: "
+              f"{as_dict(entry.get('next_day_change')).get('spearman')} ({as_dict(entry.get('next_day_change')).get('n_days')} days)")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -5104,15 +5803,17 @@ def compare_topics(report, first, again):
 
 def quick(report, defaults, others, overrides, rules=None, built_in=None):
     runs = [("default switches", {}, "quick-default"),
-            ("other switches", dict(others), "quick-other"),
+            ("other switches", {**dict(others), **OTHER_RUN_SOURCES}, "quick-other"),
             (REPEAT_LABEL, {}, "quick-default-again")]
     briefs = {}
     for label, flipped, folder in runs:
         parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
-                      **DATED_SAMPLE_SETTINGS, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
+                      **DATED_SAMPLE_SETTINGS, **VALIDATION_SAMPLE_SETTINGS, "WORK_DIR": f"data/checks/{folder}", **flipped,
+                      **overrides}
         parameters = panel_settings(report, label, parameters, overrides)
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
+        check_offline_sources(report, label, parameters, defaults)
         brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
         brief_path.unlink(missing_ok=True)  # a stale brief must never pass
         ok, _, _ = run_notebook(report, label, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -5130,6 +5831,8 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             check_dated_data(report, label, brief, switches, quick_default=not flipped)
             check_daily(report, label, brief, switches)
             check_new_words(report, label, brief, switches)
+            check_layers(report, label, brief, switches)
+            check_validation(report, label, brief, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -5143,8 +5846,10 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     compare_emotions(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_dated(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL), briefs.get("other switches"))
     compare_daily(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    compare_layers_validation(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
     spike_run(report, defaults, overrides, rules, built_in)
+    price_none_run(report, defaults, overrides, rules, built_in)
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
@@ -5181,6 +5886,8 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     check_dated_data(report, "full run", brief, switches)
     check_daily(report, "full run", brief, switches)
     check_new_words(report, "full run", brief, switches)
+    check_layers(report, "full run", brief, switches)
+    check_validation(report, "full run", brief, switches)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -5210,6 +5917,8 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     print_dated(brief, brief_path)
     print_daily(brief)
     print_new_words(brief)
+    print_layers(brief)
+    print_validation(brief)
     print("\nTimes (full run)")
     for line in daily_lines(REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb"):
         print(f"  {line}")
@@ -5255,6 +5964,9 @@ def main():
     check_dated_chapter(report)
     check_dated_probes(report)
     check_daily_switches(report, defaults, others)
+    check_validation_switches(report, defaults, others)
+    check_validation_chapters(report)
+    check_validation_probes(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
