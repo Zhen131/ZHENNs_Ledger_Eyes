@@ -44,6 +44,8 @@ BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step
 TOPIC_SCOPE = "btc"  # default: "btc" (every post that mentions bitcoin or btc); two-state, other: "all" (posts about all coins)
 TOPIC_MAX_POSTS = 100000  # default: 100000; or any positive integer (most posts in the topic table of chapter 9; above it, a random draw with RANDOM_SEED)
 N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer only when the table has fewer distinct post vectors)
+DRAWER_WORDS_FILE = ""  # default: "" (the built-in drawer word list v1 of chapter 9); or the path of a local JSON file with the same shape (version and drawers)
+N_OTHER_GROUPS = 8  # default: 8; or any positive integer (groups chapter 9 makes from the posts in no drawer; fewer only when those posts have fewer distinct vectors)
 BULLISH_THRESHOLD = 0.7  # default: 0.7; or any number from 0 to 1, not below BEARISH_THRESHOLD (chapter 10: a probability of bullish at or above it counts as bullish)
 BEARISH_THRESHOLD = 0.3  # default: 0.3; or any number from 0 to 1, not above BULLISH_THRESHOLD (chapter 10: at or below it counts as bearish; in between is unsure)
 MIN_TOPIC_POSTS = 200  # default: 200; or any positive integer (chapter 10 marks a topic with fewer posts than this as too small)
@@ -157,6 +159,10 @@ if isinstance(MIN_RATE_GAP, bool) or not isinstance(MIN_RATE_GAP, (int, float)) 
     raise ValueError(f"MIN_RATE_GAP must be a number from 0 to 1, got {MIN_RATE_GAP!r}")
 if isinstance(MIN_BULLISH_BEARISH_POSTS, bool) or not isinstance(MIN_BULLISH_BEARISH_POSTS, int) or MIN_BULLISH_BEARISH_POSTS < 1:
     raise ValueError(f"MIN_BULLISH_BEARISH_POSTS must be a positive integer, got {MIN_BULLISH_BEARISH_POSTS!r}")
+if not isinstance(DRAWER_WORDS_FILE, str):
+    raise ValueError(f'DRAWER_WORDS_FILE must be "" or the path of a JSON file, got {DRAWER_WORDS_FILE!r}')
+if isinstance(N_OTHER_GROUPS, bool) or not isinstance(N_OTHER_GROUPS, int) or N_OTHER_GROUPS < 1:
+    raise ValueError(f"N_OTHER_GROUPS must be a positive integer, got {N_OTHER_GROUPS!r}")
 print("Switches look fine.")
 
 # %% [markdown]
@@ -1961,6 +1967,311 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
     print(f"Topic {topic}: {item['name']}  ({item['n_posts']:,} posts, {item['share']:.1%})")
     for quote in item["quotes"]:
         print(f"    [{LABEL_NAMES[quote['label']]}, {quote['post_id']}] {quote['text']}")
+
+# %% [markdown]
+# ### Layer 1: drawers chosen by a person
+#
+# **Why more than the topics above.** KMeans finds its groups by itself, but it leaves one large catch-all topic that holds most of the posts and says little about them (the largest topic in the table above). Word lists written by hand, on the other hand, would miss new subjects that nobody thought of. So the topics are organised in three layers:
+#
+# 1. **Drawers** (this section): about ten broad subjects fixed by a person, such as regulation or mining. Each drawer has a list of general words; a post that contains one of them goes into the drawer. The drawers do not change from run to run, so results can be compared drawer by drawer.
+# 2. **The rest** (the section "Layer 2" below): the posts that went into no drawer are grouped automatically, with the same method as the topics above, to show whether a new drawer may be needed.
+# 3. **Single events** (not in this notebook): finding words that suddenly become frequent on one day, and naming the event behind them, needs dated posts, and this dataset has no dates.
+#
+# The automatic topics above stay as they are, as the comparison: they show the limit of the simple method, and the drawers are the step beyond it.
+#
+# **What the word lists hold.** Only general words and phrases (hack, scam, exploit, inflation, rate hike, ...), never the name of one particular event, project, company, exchange, person or country: such a name would be a guess about what will happen, and the list would grow old with it. Coin names appear only in the drawer "other coins". Stock market indices and index funds (nasdaq, dow jones, spy, ...) count as general words, because they stand for the stock market as a whole; government bodies (sec, fed, nato, ...) count as the usual names of their subject. A post can go into several drawers at once, or into none.
+#
+# **Version, and how to change the list.** The built-in list in the next cell is version v1. Whenever a word changes, the version goes up (v2, v3, ...), so that every result can say which list produced it. To use another list without editing the notebook, write it as a JSON file with the same shape as the next cell (`version` and `drawers`; every drawer with `drawer`, `name`, `words` and `exclude`) and set the switch `DRAWER_WORDS_FILE` to its path; the default `""` keeps the built-in list. The brief records the version, where the list came from and its fingerprint (explained below).
+#
+# ***
+#
+# ### 第 1 层：由人定的大抽屉
+#
+# **为什么上面的话题还不够。** KMeans 自己找堆，却会留下一个装了大部分帖子、又说明不了什么的大杂烩（上表里最大的那个话题）。反过来，只用人手写的词表，又会漏掉谁都没想到的新话题。所以话题分成三层：
+#
+# 1. **大抽屉**（本节）：由人定的十来个大方向，比如监管、挖矿。每个抽屉有一张通用词表，帖子里出现表里的词，就放进这个抽屉。抽屉不会随运行而变，所以不同运行的结果可以按抽屉逐个比较。
+# 2. **剩下的帖子**（下面「第 2 层」一节）：一个抽屉都没进的帖子，用和上面话题同样的方法自动分堆，提醒人是不是该加一个新抽屉。
+# 3. **具体事件**（不在这个笔记本里）：找出某一天突然变多的词、再给背后的事件起名，需要带日期的帖子，而这份数据没有日期。
+#
+# 上面自动分出的话题原样保留，作为对照：它们说明简单方法的局限，抽屉是在它之上的改进。
+#
+# **词表里放什么。** 只放通用的词和词组（hack、scam、exploit、inflation、rate hike……），不放某一件具体事件、某个项目、公司、交易所、人或国家的名字：这类名字等于提前猜会发生什么，词表也会跟着过时。币名只出现在「别的币」这一个抽屉里。股市指数和指数基金的代码（nasdaq、dow jones、spy……）算通用词，因为它们指的是整个股市；政府机构的名字（sec、fed、nato……）算这个大方向的通常叫法。一条帖子可以同时进好几个抽屉，也可以一个都不进。
+#
+# **版本号，以及怎么换词表。** 下一格内置的词表是 v1 版。改一个词，版本号就升一次（v2、v3……），这样每个结果都说得清是哪一版词表算出来的。想不改笔记本就换一张词表：把它写成一个 JSON 文件，形状和下一格一样（`version` 和 `drawers`；每个抽屉有 `drawer`、`name`、`words`、`exclude`），再把开关 `DRAWER_WORDS_FILE` 设成这个文件的路径；默认的 `""` 用内置词表。简报会记下词表的版本号、来源和指纹（指纹的意思见下文）。
+
+# %%
+# The built-in drawer word list, version v1: for every drawer its id, English name, words and excluded phrases.
+# The switch DRAWER_WORDS_FILE replaces it with a JSON file of the same shape.
+DRAWER_WORDS_V1 = {
+    "version": "v1",
+    "drawers": [
+        {
+            "drawer": "regulation",
+            "name": "Regulation, law and tax",
+            "words": [
+                "regulation", "regulations", "regulator", "regulators", "regulatory", "regulate", "regulated", "sec",
+                "etf", "etfs", "ban", "bans", "banned", "banning", "congress", "senate", "senator", "senators",
+                "lawmaker", "lawmakers", "legislation", "law", "laws", "lawsuit", "lawsuits", "legal", "illegal",
+                "court", "sue", "sues", "sued", "suing", "tax", "taxes", "taxed", "taxation", "irs", "government",
+                "governments", "gov", "govt", "cbdc", "kyc", "aml", "crackdown"
+            ],
+            "exclude": ["a sec", "one sec", "wait a sec", "1 sec", "few sec", "sec ago", "shadow ban"],
+        },
+        {
+            "drawer": "central_banks",
+            "name": "Central banks, interest rates and inflation",
+            "words": [
+                "fed", "fomc", "federal reserve", "central bank", "central banks", "interest rate", "interest rates",
+                "rate hike", "rate hikes", "rate cut", "rate cuts", "inflation", "inflationary", "deflation", "cpi",
+                "ppi", "recession", "stimulus", "money printer", "money printing", "printing money",
+                "quantitative easing", "qe", "qt", "tightening", "treasury", "treasuries", "bond", "bonds", "yields",
+                "dxy", "dollar index", "unemployment", "jobs report", "gdp"
+            ],
+            "exclude": ["fed up", "well fed", "james bond", "staking yields"],
+        },
+        {
+            "drawer": "war_geopolitics",
+            "name": "War, sanctions and geopolitics",
+            "words": [
+                "war", "wars", "warfare", "invasion", "invade", "invaded", "invading", "military", "troops", "missile",
+                "missiles", "nuclear", "sanction", "sanctions", "sanctioned", "geopolitical", "geopolitics", "conflict",
+                "conflicts", "ceasefire", "nato", "refugees"
+            ],
+            "exclude": [
+                "price war", "star wars", "war chest", "conflict of interest", "nuclear energy", "nuclear power"
+            ],
+        },
+        {
+            "drawer": "hacks_scams",
+            "name": "Hacks, scams and collapses",
+            "words": [
+                "hack", "hacks", "hacked", "hacker", "hackers", "hacking", "exploit", "exploits", "exploited", "stolen",
+                "steal", "stealing", "theft", "scam", "scams", "scammer", "scammers", "scammed", "rug", "rugged",
+                "rug pull", "rugpull", "rugpulled", "ponzi", "pyramid scheme", "fraud", "frauds", "fraudulent",
+                "bankrupt", "bankruptcy", "insolvent", "insolvency", "depeg", "depegged", "depegging", "phishing",
+                "drained"
+            ],
+            "exclude": ["a steal", "what a steal", "such a steal", "life hack"],
+        },
+        {
+            "drawer": "exchanges",
+            "name": "Exchanges, withdrawals and custody",
+            "words": [
+                "exchange", "exchanges", "cex", "dex", "withdraw", "withdrawal", "withdrawals", "withdrawing",
+                "deposit", "deposits", "deposited", "listing", "delist", "delisted", "delisting", "custody",
+                "custodial", "custodian", "self custody", "cold storage", "cold wallet", "hardware wallet",
+                "not your keys", "proof of reserves"
+            ],
+            "exclude": ["exchange rate", "exchange rates", "in exchange for"],
+        },
+        {
+            "drawer": "institutions",
+            "name": "Institutions, whales and adoption",
+            "words": [
+                "institution", "institutions", "institutional", "institutionals", "whale", "whales", "hedge fund",
+                "hedge funds", "pension fund", "pension funds", "fund manager", "fund managers", "wall street",
+                "wallstreet", "billionaire", "billionaires", "smart money", "big money", "corporate", "corporations",
+                "balance sheet", "adoption", "mass adoption", "adopt", "adopted", "adopting", "legal tender"
+            ],
+            "exclude": [],
+        },
+        {
+            "drawer": "mining",
+            "name": "Mining, hash rate and halving",
+            "words": [
+                "mining", "miner", "miners", "hashrate", "hash rate", "hash power", "halving", "halvening",
+                "difficulty adjustment", "asic", "asics", "proof of work", "electricity", "energy use",
+                "energy consumption", "power consumption", "carbon", "renewable", "renewables"
+            ],
+            "exclude": ["data mining"],
+        },
+        {
+            "drawer": "charts",
+            "name": "Charts and technical analysis",
+            "words": [
+                "support", "supports", "resistance", "rsi", "macd", "chart", "charts", "charting", "breakout",
+                "breakdown", "ath", "all time high", "all-time high", "bottom", "bottomed", "bottoming", "trend",
+                "trends", "trendline", "uptrend", "downtrend", "candle", "candles", "candlestick", "ema", "sma",
+                "moving average", "fib", "fibonacci", "pattern", "wedge", "triangle", "head and shoulders",
+                "double bottom", "double top", "golden cross", "death cross", "oversold", "overbought", "divergence",
+                "retest", "consolidation", "consolidating", "volume"
+            ],
+            "exclude": ["customer support", "tech support", "support team", "thanks for the support", "bottom line"],
+        },
+        {
+            "drawer": "leverage",
+            "name": "Leverage, liquidations and derivatives",
+            "words": [
+                "liquidation", "liquidations", "liquidated", "liquidate", "leverage", "leveraged", "futures", "perp",
+                "perps", "perpetual", "perpetuals", "margin", "margin call", "funding rate", "funding rates",
+                "open interest", "short squeeze", "squeeze", "squeezed", "longs", "shorts", "shorting", "shorted",
+                "shorters", "short sellers", "go long", "going long", "went long", "go short", "going short",
+                "went short", "long position", "long positions", "short position", "short positions", "options expiry",
+                "options expiration", "call options", "put options", "opex"
+            ],
+            "exclude": ["profit margin", "margin of error"],
+        },
+        {
+            "drawer": "other_coins",
+            "name": "Other coins",
+            "words": [
+                "eth", "ethereum", "ether", "altcoin", "altcoins", "alts", "alt season", "altseason", "doge",
+                "dogecoin", "shib", "shiba", "ada", "cardano", "sol", "solana", "xrp", "bnb", "ltc", "litecoin",
+                "polkadot", "avax", "matic", "chainlink", "stablecoin", "stablecoins"
+            ],
+            "exclude": [],
+        },
+        {
+            "drawer": "stock_market",
+            "name": "Stock market and commodities",
+            "words": [
+                "stock market", "stocks", "equities", "nasdaq", "sp500", "spx", "spy", "qqq", "dow jones", "gold",
+                "silver", "oil", "commodities", "commodity", "correlation", "correlated"
+            ],
+            "exclude": ["digital gold", "silver lining", "snake oil"],
+        },
+    ],
+}
+print(f"Built-in word list {DRAWER_WORDS_V1['version']}: {len(DRAWER_WORDS_V1['drawers'])} drawers")
+
+# %% [markdown]
+# ### Matching posts to drawers
+#
+# **The rule.** For every drawer, first the drawer's **excluded phrases** are replaced by a space in the post, then the drawer's words are looked for; one of them is enough. Words and phrases are matched as **whole words**, ignoring case, in the same way as "mentions Bitcoin" in chapter 1 (a regular expression `\b…\b`): "eth" is found in "$ETH.X" but not in "method". A space inside a phrase matches any run of whitespace. The excluded phrases guard against the other meanings of a word: the "sec" in "wait a sec" is not the US Securities and Exchange Commission, and "fed up" has nothing to do with the Federal Reserve. A drawer's excluded phrases apply to that drawer only. An empty text goes into no drawer.
+#
+# **The original text, not `clean_text`.** Matching reads the column `text`. Cleaning removes stop words and reduces words to their base form, which breaks phrases apart: "all time high" comes out of cleaning as "time high" and would no longer match.
+#
+# **`drawer_matches(text)`** returns the drawers of one text, each with the words found in it, in the order of the word list. The cell ends with a few examples.
+#
+# **The fingerprint.** The drawers (id, name, words and excluded phrases, in order) are written as compact JSON in plain ASCII, and the first 16 hexadecimal digits of the SHA-256 hash of that text are the list's fingerprint. The same list always has the same fingerprint, and one changed word gives another one. The repository's checks pin the fingerprint of every released version of the built-in list, so a word cannot change without a new version.
+#
+# **A list that does not fit** stops the notebook here with a list of the problems: the list needs a version and at least one drawer; every drawer needs an id made of lower-case letters, digits and `_` (it becomes a column name), a name and at least one word; words and excluded phrases are lower-case ASCII text.
+#
+# ***
+#
+# ### 把帖子放进抽屉
+#
+# **规则。** 对每个抽屉，先把帖子里这个抽屉的**排除写法**换成空格，再找这个抽屉的词，找到一个就够了。词和词组都按**整词**认、不分大小写，和第 1 章认「提到比特币」是同一种认法（正则 `\b…\b`）：「$ETH.X」里认得出 eth，「method」里认不出。词组中间的空格可以对上任意多个空白。排除写法用来挡住一个词的别的意思：「wait a sec」（等一秒）里的 sec 不是美国证监会，「fed up」（受够了）和美联储没有关系。一个抽屉的排除写法只管这个抽屉。空文本不进任何抽屉。
+#
+# **用原文，不用 `clean_text`。** 认词读的是 `text` 列。清洗会删停用词、把词还原成原形，词组就被拆散了：「all time high」洗完变成「time high」，再也对不上。
+#
+# **`drawer_matches(text)`** 给出一条文本进了哪些抽屉，以及在每个抽屉里认出了哪些词，按词表的顺序排。这一格最后附几个例子。
+#
+# **指纹。** 把各个抽屉（编号、名字、词、排除写法，按原来的顺序）写成紧凑的纯 ASCII 的 JSON 文本，取这段文本的 SHA-256 哈希值的前 16 位十六进制数，就是词表的指纹。同一张词表的指纹永远相同，改一个词指纹就变。仓库的检查命令给内置词表的每一个发布过的版本钉住了指纹，所以不升版本号就改不了词。
+#
+# **词表的形状不对**，笔记本会在这里停下并列出问题：词表要有版本号和至少一个抽屉；每个抽屉要有编号（只用小写字母、数字和 `_`，它会成为列名）、名字和至少一个词；词和排除写法都是小写的 ASCII 文本。
+
+# %%
+# Read the drawer word list (built-in, or the file in DRAWER_WORDS_FILE), check its shape, and match texts to drawers.
+import hashlib  # standard library: the fingerprint of the word list
+import json  # standard library: reading a word list file
+import re  # standard library: regular expressions
+
+DRAWER_ID = re.compile(r"[a-z][a-z0-9_]*")  # a drawer id is also a column name of drawer_hits
+DRAWER_RESERVED = {"post_id", "n_drawers", "other_group"}  # the other columns of drawer_hits
+
+
+def drawer_word_list_problems(word_list):
+    """Every way in which a drawer word list does not fit the expected shape, one line each (empty when it fits)."""
+    if not isinstance(word_list, dict) or set(word_list) != {"version", "drawers"}:
+        return ["the word list must be an object with exactly the fields version and drawers"]
+    problems = []
+    if not isinstance(word_list["version"], str) or not word_list["version"].strip():
+        problems.append("version must be a non-empty text")
+    drawers = word_list["drawers"]
+    if not isinstance(drawers, list) or not drawers:
+        return problems + ["drawers must be a list with at least one drawer"]
+    seen = set()
+    for index, drawer in enumerate(drawers):
+        where = f"drawers[{index}]"
+        if not isinstance(drawer, dict) or set(drawer) != {"drawer", "name", "words", "exclude"}:
+            problems.append(f"{where} must be an object with exactly the fields drawer, name, words and exclude")
+            continue
+        drawer_id = drawer["drawer"]
+        if not isinstance(drawer_id, str) or not DRAWER_ID.fullmatch(drawer_id) or drawer_id in DRAWER_RESERVED:
+            problems.append(f"{where}.drawer must be lower-case letters, digits and _ starting with a letter, "
+                            f"and not one of {sorted(DRAWER_RESERVED)}; got {drawer_id!r}")
+        elif drawer_id in seen:
+            problems.append(f"{where}.drawer {drawer_id!r} appears twice")
+        else:
+            seen.add(drawer_id)
+        if not isinstance(drawer["name"], str) or not drawer["name"].strip():
+            problems.append(f"{where}.name must be a non-empty text")
+        for key in ("words", "exclude"):
+            items = drawer[key]
+            if not isinstance(items, list) or (key == "words" and not items):
+                problems.append(f"{where}.{key} must be a list" + (" with at least one word" if key == "words" else ""))
+                continue
+            wrong = [item for item in items if not isinstance(item, str) or not item.strip() or item != item.strip()
+                     or item != item.lower() or not item.isascii()]
+            if wrong:
+                problems.append(f"{where}.{key}: every entry must be lower-case ASCII text, not empty and without "
+                                f"spaces at either end; got {wrong[:3]!r}")
+    return problems
+
+
+def read_drawer_words(path):
+    """A drawer word list read from a local JSON file."""
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def drawer_fingerprint(drawers):
+    """First 16 hexadecimal digits of the SHA-256 of [[drawer, name, words, exclude], ...] as compact ASCII JSON."""
+    canonical = json.dumps([[drawer["drawer"], drawer["name"], drawer["words"], drawer["exclude"]] for drawer in drawers],
+                           ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()[:16]
+
+
+def phrase_pattern(phrases):
+    """One regular expression for whole words and phrases, ignoring case; a space in a phrase matches any whitespace.
+
+    Longer phrases come first, so where two phrases start at the same place the longer one is taken.
+    """
+    parts = [r"\s+".join(re.escape(piece) for piece in phrase.split())
+             for phrase in sorted(phrases, key=len, reverse=True)]
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b", re.IGNORECASE)
+
+
+DRAWER_WORD_LIST = read_drawer_words(DRAWER_WORDS_FILE) if DRAWER_WORDS_FILE else DRAWER_WORDS_V1
+word_list_problems = drawer_word_list_problems(DRAWER_WORD_LIST)
+if word_list_problems:
+    raise ValueError(f"The drawer word list ({DRAWER_WORDS_FILE or 'built-in'}) does not fit:\n"
+                     + "\n".join(f"- {problem}" for problem in word_list_problems))
+DRAWERS = DRAWER_WORD_LIST["drawers"]  # the drawers in word-list order
+DRAWER_WORDS_VERSION = DRAWER_WORD_LIST["version"]
+DRAWER_WORDS_SOURCE = DRAWER_WORDS_FILE or "built-in"
+DRAWER_WORDS_FINGERPRINT = drawer_fingerprint(DRAWERS)
+DRAWER_PATTERNS = [{  # compiled once: excluded phrases, any word of the drawer, and every word on its own
+    "drawer": drawer["drawer"],
+    "exclude": phrase_pattern(drawer["exclude"]) if drawer["exclude"] else None,
+    "any_word": phrase_pattern(drawer["words"]),
+    "each_word": [(word, phrase_pattern([word])) for word in drawer["words"]],
+} for drawer in DRAWERS]
+
+
+def drawer_matches(text):
+    """The drawers a post's original text goes into: {drawer: [words found, in word-list order]}.
+
+    For every drawer, the drawer's excluded phrases are first replaced by a space; the post goes into the drawer
+    when one of its words is still there (whole words, ignoring case). An empty text goes into no drawer.
+    """
+    found = {}
+    if not isinstance(text, str) or not text:
+        return found
+    for pattern in DRAWER_PATTERNS:
+        left = pattern["exclude"].sub(" ", text) if pattern["exclude"] else text  # excluded phrases blanked out
+        if pattern["any_word"].search(left):
+            found[pattern["drawer"]] = [word for word, single in pattern["each_word"] if single.search(left)]
+    return found
+
+
+print(f"Drawer word list {DRAWER_WORDS_VERSION} ({DRAWER_WORDS_SOURCE}), fingerprint {DRAWER_WORDS_FINGERPRINT}: "
+      f"{len(DRAWERS)} drawers, {sum(len(drawer['words']) for drawer in DRAWERS)} words and phrases, "
+      f"{sum(len(drawer['exclude']) for drawer in DRAWERS)} excluded phrases")
+for example in ["SEC sues another exchange", "wait a sec, btc is pumping", "The Fed will hike again",
+                "I'm fed up with this chop", "exchange got hacked, withdrawals frozen"]:
+    print(f"    {example!r} -> {drawer_matches(example)}")
 
 # %% [markdown]
 # ## 10. Why: which topics lean bullish, which lean bearish?

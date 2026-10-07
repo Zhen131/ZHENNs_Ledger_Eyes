@@ -78,6 +78,37 @@ CALIBRATION_SWITCHES = ["MIN_RATE_GAP", "MIN_BULLISH_BEARISH_POSTS"]
 HALF_CALLS = ["bullish", "bearish"]  # the calls at 0.5: every post on one side
 CALIBRATION_STATUSES = ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]
 RATE_SUBSETS = {"btc": "test_mentions_btc", "all": "all_test"}  # TOPIC_SCOPE -> evaluation subset of the rates
+# Chapter 9's drawers: the word list, the rule that puts posts into drawers, and the drawers in the brief.
+DRAWER_SWITCHES = ["DRAWER_WORDS_FILE", "N_OTHER_GROUPS"]
+BUILT_IN_SOURCE = "built-in"  # drawers.word_list_source when DRAWER_WORDS_FILE is ""
+# Locked: names of single events that the built-in word list must never contain, as a whole word anywhere.
+DRAWER_BANNED_NAMES = ["luna", "terra", "ust", "celsius", "3ac", "ftx"]
+# Locked: the fingerprint of every released version of the built-in word list. A new version adds a line and no
+# line ever changes, so a word of a released version cannot change without a new version number.
+DRAWER_FINGERPRINTS = {
+    "v1": "610a3dbfa89f30af",
+}
+# Locked (only add): sentences and the drawers they must go into with the built-in word list.
+DRAWER_PROBES = [
+    ("SEC sues another exchange", ["regulation", "exchanges"]),
+    ("wait a sec, btc is pumping", []),
+    ("The Fed will hike again", ["central_banks"]),
+    ("I'm fed up with this chop", []),
+    ("$ETH.X looking strong", ["other_coins"]),
+    ("my method works every time", []),
+    ("what a steal at this price", []),
+    ("exchange got hacked, withdrawals frozen", ["hacks_scams", "exchanges"]),
+    ("new all time high incoming", ["charts"]),
+    ("customer support never answers", []),
+    ("new  all\ttime   high", ["charts"]),  # a space in a phrase matches any whitespace
+    ("RUG PULL", ["hacks_scams"]),  # case is ignored
+    ("STAR WARS marathon tonight", []),  # an excluded phrase, in capitals
+    ("", []),  # an empty text goes into no drawer
+]
+# A small word list read through DRAWER_WORDS_FILE, and the drawers its sentences must go into.
+DRAWER_FILE_PROBE = {"version": "probe-1", "drawers": [
+    {"drawer": "moon", "name": "Moon shots", "words": ["moon shot"], "exclude": ["no moon shot"]}]}
+DRAWER_FILE_PROBES = [("moon shot soon", ["moon"]), ("no moon shot today", [])]
 # Chapter 11: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
@@ -1491,6 +1522,147 @@ def print_calibration(brief):
               f"{pp(part.get('half_minus_label_pp')):>7} {pp(part.get('calibrated_minus_label_pp')):>7}")
 
 
+# ---------------------------------------------------------------- drawers (chapters 9 and 10)
+
+def check_drawer_switches(report, defaults, others):
+    absent = [name for name in DRAWER_SWITCHES if name not in defaults]
+    groups = defaults.get("N_OTHER_GROUPS")
+    report.check(not absent and defaults.get("DRAWER_WORDS_FILE") == "" and is_count(groups) and groups >= 1
+                 and not set(DRAWER_SWITCHES) & set(others),
+                 "switches of the drawers are present (DRAWER_WORDS_FILE defaults to \"\", the built-in word list; "
+                 "N_OTHER_GROUPS is a positive integer; neither is two-state)",
+                 f"missing {absent}; DRAWER_WORDS_FILE {defaults.get('DRAWER_WORDS_FILE')!r}, N_OTHER_GROUPS {groups!r}, "
+                 f"two-state: {sorted(set(DRAWER_SWITCHES) & set(others))}")
+
+
+def drawer_fingerprint_of(drawers):
+    """The documented fingerprint: SHA-256 of [[drawer, name, words, exclude], ...] as compact ASCII JSON, 16 digits."""
+    text = json.dumps([[item.get("drawer"), item.get("name"), item.get("words"), item.get("exclude")] for item in drawers],
+                      ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("ascii")).hexdigest()[:16]
+
+
+def phrase_regex(phrases):
+    """Whole words and phrases, ignoring case, a space matching any whitespace, longer phrases first."""
+    parts = [r"\s+".join(re.escape(piece) for piece in phrase.split()) for phrase in sorted(phrases, key=len, reverse=True)]
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b", re.IGNORECASE)
+
+
+def rule_matches(text, words, excluded):
+    """The words of one drawer found in a text by the documented rule, in word-list order (written apart from the
+    notebook): the drawer's excluded phrases are blanked out first, then every word is looked for on its own."""
+    if not isinstance(text, str) or not text:
+        return []
+    left = phrase_regex(excluded).sub(" ", text) if excluded else text
+    return [word for word in words if phrase_regex([word]).search(left)]
+
+
+def load_drawer_cells(extra):
+    """Run the notebook's built-in word list cell and the cell defining drawer_matches; (namespace, problems)."""
+    namespace, problems = {"__name__": "notebook_cells", **extra}, []
+    for name in ("DRAWER_WORDS_V1", "drawer_matches"):
+        source = cell_defining(name)
+        if source is None:
+            problems.append(f"no cell defines {name}")
+            continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, f"cell defining {name}", "exec"), namespace)
+        except Exception as exc:  # the cell itself is broken
+            problems.append(f"cell defining {name}: {type(exc).__name__}: {exc}")
+    return namespace, problems
+
+
+def word_list_rule_problems(word_list):
+    """Problems of the built-in word list with the drafting rules (written apart from the notebook's own check)."""
+    problems = []
+    if not isinstance(word_list, dict) or not isinstance(word_list.get("version"), str) or not word_list["version"].strip():
+        problems.append("the version is missing or empty")
+    drawers = as_dict(word_list).get("drawers")
+    if not isinstance(drawers, list) or not drawers:
+        return problems + ["no drawers"]
+    ids, owner = [], {}
+    for index, item in enumerate(drawers):
+        if not isinstance(item, dict) or sorted(item) != ["drawer", "exclude", "name", "words"]:
+            problems.append(f"drawer {index}: fields {sorted(item) if isinstance(item, dict) else item!r}")
+            continue
+        ids.append(item["drawer"])
+        if not (isinstance(item["words"], list) and item["words"]):
+            problems.append(f"{item['drawer']}: no word")
+        for key in ("words", "exclude"):
+            for entry in item[key] if isinstance(item[key], list) else [item[key]]:
+                if not (isinstance(entry, str) and entry and entry == entry.lower() and entry.isascii()
+                        and entry == entry.strip()):
+                    problems.append(f"{item['drawer']}.{key}: {entry!r} is not lower-case ASCII")
+        for word in item["words"] if isinstance(item["words"], list) else []:
+            if word in owner and owner[word] != item["drawer"]:
+                problems.append(f"{word!r} is in two drawers ({owner[word]}, {item['drawer']})")
+            owner.setdefault(word, item["drawer"])
+    duplicates = sorted({drawer for drawer in ids if ids.count(drawer) > 1})
+    if duplicates:
+        problems.append(f"drawer ids used twice: {duplicates}")
+    if not all(isinstance(drawer, str) and re.fullmatch(r"[a-z][a-z0-9_]*", drawer) for drawer in ids):
+        problems.append(f"drawer ids {ids}")
+    return problems
+
+
+def check_drawer_words(report):
+    """The built-in word list follows the rules and its pinned fingerprint; drawer_matches follows the rule on fixed
+    sentences, also with a word list read from a file. Returns the built-in word list, or None."""
+    namespace, problems = load_drawer_cells({"DRAWER_WORDS_FILE": ""})
+    if not report.check(not problems, "the notebook's drawer word list and drawer_matches load from its source",
+                        "; ".join(problems)):
+        return None
+    word_list = namespace.get("DRAWER_WORDS_V1")
+    rule_problems = word_list_rule_problems(word_list)
+    report.check(not rule_problems, "built-in drawer word list: a version, unique drawer ids, at least one word per "
+                 "drawer, words and excluded phrases in lower-case ASCII, no word in two drawers", "; ".join(rule_problems[:5]))
+    if rule_problems:
+        return None
+    drawers = word_list["drawers"]
+    banned = [f"{item['drawer']}: {entry!r}" for item in drawers for entry in item["words"] + item["exclude"]
+              if any(re.search(rf"\b{re.escape(name)}\b", entry) for name in DRAWER_BANNED_NAMES)]
+    report.check(not banned, f"built-in drawer word list holds none of the event names {DRAWER_BANNED_NAMES} (as a whole "
+                 "word, also inside phrases and excluded phrases)", "; ".join(banned[:5]))
+    version, fingerprint = word_list["version"], drawer_fingerprint_of(drawers)
+    report.check(DRAWER_FINGERPRINTS.get(version) == fingerprint and namespace.get("DRAWER_WORDS_FINGERPRINT") == fingerprint
+                 and namespace.get("DRAWER_WORDS_VERSION") == version and namespace.get("DRAWER_WORDS_SOURCE") == BUILT_IN_SOURCE,
+                 f"built-in drawer word list {version}: its fingerprint is the one pinned for this version (a changed "
+                 "word needs a new version and a new pinned fingerprint)",
+                 f"computed {fingerprint}, notebook {namespace.get('DRAWER_WORDS_FINGERPRINT')!r}, pinned "
+                 f"{DRAWER_FINGERPRINTS.get(version)!r}")
+    report.info(f"built-in drawer word list {version}: {len(drawers)} drawers, fingerprint {fingerprint}")
+
+    def probe(matches, cases, items):
+        wrong = []
+        for sentence, expected in cases:
+            got = matches(sentence)
+            rule = {item["drawer"]: rule_matches(sentence, item["words"], item["exclude"]) for item in items}
+            rule = {drawer: words for drawer, words in rule.items() if words}
+            if not isinstance(got, dict) or sorted(got) != sorted(expected) or got != rule:
+                wrong.append(f"{sentence!r}: got {got!r}, expected drawers {expected}, rule {rule!r}")
+        return wrong
+
+    wrong = probe(namespace["drawer_matches"], DRAWER_PROBES, drawers)
+    report.check(not wrong, f"drawer_matches puts {len(DRAWER_PROBES)} fixed sentences into the expected drawers, with the "
+                 "words the rule finds", "; ".join(wrong[:5]))
+
+    folder = REPO_DIR / "data" / "checks" / "drawer-probe"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    probe_file = folder / "word-list.json"
+    probe_file.write_text(json.dumps(DRAWER_FILE_PROBE), encoding="utf-8")
+    from_file, problems = load_drawer_cells({"DRAWER_WORDS_FILE": str(probe_file)})
+    wrong = problems or probe(from_file["drawer_matches"], DRAWER_FILE_PROBES, DRAWER_FILE_PROBE["drawers"])
+    report.check(not wrong and from_file.get("DRAWER_WORDS_VERSION") == DRAWER_FILE_PROBE["version"]
+                 and from_file.get("DRAWER_WORDS_SOURCE") == str(probe_file)
+                 and from_file.get("DRAWER_WORDS_FINGERPRINT") == drawer_fingerprint_of(DRAWER_FILE_PROBE["drawers"]),
+                 "a word list read through DRAWER_WORDS_FILE replaces the built-in one (version, source, fingerprint) and "
+                 "follows the same rule", "; ".join(wrong[:3]))
+    shutil.rmtree(folder, ignore_errors=True)
+    return word_list
+
+
 # ---------------------------------------------------------------- the brief's format and the panel (chapter 11)
 
 def code_cells():
@@ -2216,9 +2388,11 @@ def main():
     check_topic_switches(report, defaults)
     check_why_switches(report, defaults)
     check_calibration_switches(report, defaults)
+    check_drawer_switches(report, defaults, others)
     check_numbering_rules(report)
     check_text(report)
     rules = load_format_rules(report)
+    built_in_drawers = check_drawer_words(report)
     check_panel_source(report, defaults, others)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
