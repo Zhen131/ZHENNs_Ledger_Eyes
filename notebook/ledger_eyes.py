@@ -47,6 +47,7 @@ N_TOPICS = 8  # default: 8; or any positive integer (topics of chapter 9; fewer 
 BULLISH_THRESHOLD = 0.7  # default: 0.7; or any number from 0 to 1, not below BEARISH_THRESHOLD (chapter 10: a probability of bullish at or above it counts as bullish)
 BEARISH_THRESHOLD = 0.3  # default: 0.3; or any number from 0 to 1, not above BULLISH_THRESHOLD (chapter 10: at or below it counts as bearish; in between is unsure)
 MIN_TOPIC_POSTS = 200  # default: 200; or any positive integer (chapter 10 marks a topic with fewer posts than this as too small)
+MIN_RATE_GAP = 0.2  # default: 0.2; or any number from 0 to 1 (chapter 10 calibrates the bullish share only when the bullish recall plus the bearish recall of chapter 8, minus 1, is at least this and above 0)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -151,6 +152,8 @@ if BEARISH_THRESHOLD > BULLISH_THRESHOLD:
     raise ValueError(f"BEARISH_THRESHOLD ({BEARISH_THRESHOLD!r}) must not be above BULLISH_THRESHOLD ({BULLISH_THRESHOLD!r})")
 if isinstance(MIN_TOPIC_POSTS, bool) or not isinstance(MIN_TOPIC_POSTS, int) or MIN_TOPIC_POSTS < 1:
     raise ValueError(f"MIN_TOPIC_POSTS must be a positive integer, got {MIN_TOPIC_POSTS!r}")
+if isinstance(MIN_RATE_GAP, bool) or not isinstance(MIN_RATE_GAP, (int, float)) or not 0 <= MIN_RATE_GAP <= 1:
+    raise ValueError(f"MIN_RATE_GAP must be a number from 0 to 1, got {MIN_RATE_GAP!r}")
 print("Switches look fine.")
 
 # %% [markdown]
