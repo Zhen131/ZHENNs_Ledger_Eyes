@@ -7765,9 +7765,19 @@ print(f"[brief] saved {brief_path}: format {brief['format_version']}, passed the
 # %% [markdown]
 # ### The panel
 #
-# A small web page, built with Gradio, that shows the saved brief on four tabs: what the brief covers, the evaluation table of chapter 8, the topic table of chapter 9 and the topic × bullish table of chapter 10. A value that cannot be computed is shown as "—".
+# A small web page, built with Gradio, that shows the saved brief on eleven tabs. The first four: what the brief covers, the evaluation table of chapter 8, the topic table of chapter 9 and the topic × bullish table of chapter 10. Then seven more:
 #
-# **It reads only the saved file.** `panel_tables(brief_path)` reads `brief.json` and turns it into the four tables; `build_panel(brief_path)` puts them on the page. Neither function uses any other variable of this notebook, so the panel shows exactly what another program reading the file would see.
+# - **Calibrated** (chapter 10): the bullish share by label, counted at 0.5 and calibrated, overall and per topic, for the whole row and for the fair comparison, with the two recognition rates used, where they come from and whether the calibration was applied. Only the columns of the fair comparison compare the model with the labels: a whole row also holds neutral posts, which the labels leave out and the model does not.
+# - **Drawers** (chapters 9 and 10): every drawer with its posts, its share of the topic posts and the same three bullish shares, then the posts in no drawer.
+# - **Emotions** (chapter 11): the share of every emotion overall and per drawer, one column per emotion the network actually learned.
+# - **By day** (chapter 13): a chart of the bullish share of every UTC day, counted at 0.5 and calibrated, one panel per layer.
+# - **New words** (chapter 13): every new word with its day, its layer, its count, its past daily mean, the ratio and one example post.
+# - **Two layers** (chapter 14): a chart of the calibrated share of the media and the retail layer on the days both cover, the days they lean opposite ways marked.
+# - **Market** (chapter 15): every layer's correlations with the Fear and Greed Index of alternative.me and with the next day's change of the BTC close, and where the prices and the index came from.
+#
+# A value that cannot be computed is shown as "—"; in a chart, a day without a value is left out (the line breaks), never drawn as 0.
+#
+# **It reads only the saved file.** `panel_tables(brief_path)` reads `brief.json` and turns it into the tables; `panel_charts(brief_path)` reads it as well and draws the two charts with Matplotlib, in memory, without writing a file; `build_panel(brief_path)` puts tables and charts on the page. None of them uses any other variable of this notebook, so the panel shows exactly what another program reading the file would see. The charts are pictures, not interactive; Gradio keeps a copy of each in its own temporary folder to serve it.
 #
 # **Nothing leaves this machine.** Gradio's usage statistics and version checks were switched off in the setup cell at the top, before Gradio could be imported; the cell below switches them off once more right before its import, and builds the page with `analytics_enabled=False` as well. The panel never asks for a public link (`share=False`) and only listens on this machine (`127.0.0.1`).
 #
@@ -7775,21 +7785,37 @@ print(f"[brief] saved {brief_path}: format {brief['format_version']}, passed the
 #
 # ### 面板
 #
-# 一个用 Gradio 搭的小网页，分四个标签页显示已保存的简报：简报覆盖什么、第 8 章的评估表、第 9 章的话题表、第 10 章的「话题 × 多空」表。算不出的值显示为「—」。
+# 一个用 Gradio 搭的小网页，分十一个标签页显示已保存的简报。前四个：简报覆盖什么、第 8 章的评估表、第 9 章的话题表、第 10 章的「话题 × 多空」表。后面七个：
 #
-# **它只读保存下来的文件。** `panel_tables(brief_path)` 读 `brief.json`，把它变成四张表；`build_panel(brief_path)` 把表放到网页上。两个函数都不用这个笔记本里的任何其他变量，所以面板显示的，正是别的程序读这个文件时看到的内容。
+# - **Calibrated**（第 10 章）：整体和每个话题的看多比例，按标签、按 0.5 分直接数、校正后三种，整行和公平比较各一套；外加校正用的两个认出率、它们来自哪一行、校正有没有做。只有公平比较那几列才能拿模型和标签比：整行里还有中性帖，标签不算它们，模型却要把它们分成看多或看空。
+# - **Drawers**（第 9、10 章）：每个抽屉的帖子数、占话题帖子的比例和同样三种看多比例，最后一行是一个抽屉都没进的帖子。
+# - **Emotions**（第 11 章）：整体和每个抽屉里每种情绪的占比，情绪模型实际学了哪几类就有哪几列。
+# - **By day**（第 13 章）：每个 UTC 日的看多比例图，直接数和校正后两条线，每层一张小图。
+# - **New words**（第 13 章）：每个新词一行：日期、层、当天条数、过去日均、倍数和一条例句。
+# - **Two layers**（第 14 章）：媒体层和散户层在两层都覆盖的日子里的校正后比例图，唱反调的日子标出来。
+# - **Market**（第 15 章）：每层对 alternative.me 恐惧贪婪指数、对 BTC 第二天涨跌的相关系数，以及价格和指数从哪来。
+#
+# 算不出的值显示为「—」；图里某天没有值就不画（线在那里断开），不画成 0。
+#
+# **它只读保存下来的文件。** `panel_tables(brief_path)` 读 `brief.json`，把它变成表；`panel_charts(brief_path)` 也读这个文件，用 Matplotlib 在内存里画出两张图，不写任何文件；`build_panel(brief_path)` 把表和图放到网页上。这几个函数都不用这个笔记本里的任何其他变量，所以面板显示的，正是别的程序读这个文件时看到的内容。图是图片，不能交互；Gradio 会把每张图复制一份放在它自己的临时文件夹里，好让网页显示。
 #
 # **什么都不往外发。** Gradio 的使用统计和版本查询，在最上面的准备格里就已关掉，那时 Gradio 还不可能被 import；下面这一格在 import 之前再关一次，搭网页时还明确传了 `analytics_enabled=False`。面板从不申请公开链接（`share=False`），只在本机（`127.0.0.1`）上监听。
 
 # %%
-# The panel: the saved brief file as four tables on a small Gradio page. Uses nothing else from this notebook.
+# The panel: the saved brief file as tables and two charts on a small Gradio page. Uses nothing else from this notebook.
 import json  # standard library: JSON
 import os  # standard library: environment variables
+from datetime import date, datetime, timedelta  # standard library: calendar days on the charts
 from pathlib import Path  # standard library: file paths
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # once more, right before the import: no usage statistics or version checks
 import gradio as gr  # small web pages
 import pandas as pd  # tables
+import numpy as np  # the charts' values and pixels
+import matplotlib.dates as mdates  # date ticks on the charts
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # draws a chart into memory, never on the screen
+from matplotlib.figure import Figure  # a chart without pyplot, so the notebook itself shows nothing
+from matplotlib.patches import Patch  # a legend entry for the marked days
 
 NOT_COMPUTED = "—"  # shown where the brief has null
 PANEL_TABS = {  # table name -> (tab title, note above the table)
@@ -7799,6 +7825,44 @@ PANEL_TABS = {  # table name -> (tab title, note above the table)
     "topics": ("Topics", "Chapter 9: the topics, largest first, with a few posts in their own words."),
     "why": ("Why", "Chapter 10: the row \"all\", then every topic from the most bullish to the most bearish by label; "
                    "shares are bullish ÷ (bullish + bearish), differences are in percentage points."),
+}
+PANEL_MORE_TABS = [  # after the first four tabs: (tab title, note above, the tables and charts on the tab, in order)
+    ("Calibrated", "Chapter 10: the model's bullish share counted at 0.5, then calibrated with the two recognition rates "
+                   "measured on the test posts in chapter 8. **Compare the model with the labels only in the columns of "
+                   "the fair comparison** (\"fair ...\": posts the model never saw, bearish or bullish by label). The share "
+                   "at 0.5 and the calibrated share of a whole row also count its neutral posts, which the label share "
+                   "leaves out, so they are not comparable with the label share of that row. Shares are bullish ÷ "
+                   "(bullish + bearish); differences are in percentage points.", ["calibration", "calibrated"]),
+    ("Drawers", "Chapters 9 and 10: every drawer of the word list with its posts, its share of the topic posts and its "
+                "three bullish shares, then the posts in no drawer. A post can be in several drawers, so the drawers add "
+                "up to more than all topic posts. As on the tab \"Calibrated\", the share at 0.5 and the calibrated share "
+                "also count neutral posts and are not comparable with the label share.", ["drawers"]),
+    ("Emotions", "Chapter 11: the emotion the chosen network gives every topic post, as a share of the row's posts "
+                 "(posts in brackets), overall and per drawer; one column per emotion the network learned. It learned "
+                 "from silver labels given by a language model, not by a person.", ["emotions"]),
+    ("By day", "Chapter 13: the bullish share of every UTC day, counted at 0.5 and calibrated, one panel per layer. A day "
+               "with too few posts has no share and the line breaks there; a share with no neighbour is a dot.",
+     ["daily_chart"]),
+    ("New words", "Chapter 13: the words that appear in many more posts of a layer on a day than on the days before, "
+                  "by day, with one example post each.", ["new_words"]),
+    ("Two layers", "Chapter 14: the calibrated bullish share of the media and the retail layer on the days both cover; "
+                   "grey bands mark the days on which they lean opposite ways, dashed lines the bars of a lean. A day on "
+                   "which a layer has no share takes no part.", ["layers_chart"]),
+    ("Market", "Chapter 15: every layer's daily calibrated share against the Fear and Greed Index of alternative.me and "
+               "against the next day's change of the BTC close, as Spearman rank correlations with the days that took "
+               "part. They describe the past only: no test and no forecast. Below, where the prices and the index came "
+               "from.", ["validation", "sources"]),
+]
+PANEL_TABLE_TITLES = {  # heading above a table on a tab that holds more than one item
+    "calibration": "The recognition rates used", "calibrated": "Bullish shares overall and per topic",
+    "validation": "Correlations per layer", "sources": "Where the prices and the index came from",
+}
+PANEL_CHART_TITLES = {"daily_chart": "Bullish share by day", "layers_chart": "The two layers side by side"}
+PANEL_NEW_WORD_COLUMNS = ["date", "layer", "word", "posts that day", "past daily mean", "ratio", "example"]
+PANEL_COLOURS = {  # chart colours: series, marked days, reference lines, grid, text and background
+    "counted": "#2a78d6", "calibrated": "#eb6834", "media": "#4a3aa7", "retail": "#008300",
+    "opposite": "#d9d8d2", "reference": "#8a8984", "grid": "#e8e7e1", "text": "#0b0b0b", "muted": "#52514e",
+    "surface": "#fcfcfb",
 }
 
 
@@ -7838,8 +7902,131 @@ def panel_why_line(row, topic, name, too_few, versus_all):
     }
 
 
+def panel_text(value):
+    """A text field; null as a dash."""
+    return NOT_COMPUTED if value is None else str(value)
+
+
+def panel_flag(value):
+    """A true or false field as yes or no."""
+    return "yes" if value else "no"
+
+
+def panel_rho(value):
+    """A correlation with a sign and three decimals; null as a dash."""
+    return NOT_COMPUTED if value is None else f"{value:+.3f}"
+
+
+def panel_calibration_line(used_for, calibration):
+    """One line of the calibration table: the two recognition rates, where they come from, and the status."""
+    return {
+        "used for": used_for, "status": calibration["status"],
+        "true bullish rate": panel_share(calibration["true_bullish_rate"]),
+        "false bullish rate": panel_share(calibration["false_bullish_rate"]),
+        "rate gap": panel_share(calibration["rate_gap"]), "smallest gap": panel_share(calibration["min_rate_gap"]),
+        "rates from model": calibration["rates_from"]["model"],
+        "rates from test posts": calibration["rates_from"]["subset"],
+        "bearish test posts": panel_count(calibration["rate_posts"]["0"]),
+        "bullish test posts": panel_count(calibration["rate_posts"]["2"]),
+    }
+
+
+def panel_calibrated_line(row, topic, name):
+    """One line of the table of calibrated shares: the three bullish shares of the whole row and of its fair part."""
+    fair = row["fair"]
+    return {
+        "topic": topic, "name": name, "posts": panel_count(row["n_posts"]),
+        "few bullish + bearish": panel_flag(row["too_few_bullish_bearish"]),
+        "label share": panel_share(row["label_bullish_share"]), "share at 0.5": panel_share(row["half_bullish_share"]),
+        "calibrated share": panel_share(row["calibrated_bullish_share"]),
+        "fair posts": panel_count(fair["n_posts"]), "fair label": panel_share(fair["label_bullish_share"]),
+        "fair at 0.5": panel_share(fair["half_bullish_share"]),
+        "fair calibrated": panel_share(fair["calibrated_bullish_share"]),
+        "fair at 0.5 − label (pp)": panel_points(fair["half_minus_label_pp"]),
+        "fair calibrated − label (pp)": panel_points(fair["calibrated_minus_label_pp"]),
+    }
+
+
+def panel_drawer_line(drawer, name, posts, share, row):
+    """One line of the drawer table: posts, share of the topic posts and the three bullish shares."""
+    return {
+        "drawer": drawer, "name": name, "posts": panel_count(posts), "share of topic posts": panel_share(share),
+        "few bullish + bearish": panel_flag(row["too_few_bullish_bearish"]),
+        "label share": panel_share(row["label_bullish_share"]), "share at 0.5": panel_share(row["half_bullish_share"]),
+        "calibrated share": panel_share(row["calibrated_bullish_share"]),
+    }
+
+
+def panel_emotion_line(row, name, group, classes):
+    """One line of the emotion table: the share of every class learned, with its posts in brackets."""
+    line = {"row": row, "name": name, "posts": panel_count(group["n_posts"])}
+    for label in classes:
+        share = group["shares"][label]
+        line[label] = NOT_COMPUTED if share is None else f"{share:.3f} ({panel_count(group['counts'][label])})"
+    return line
+
+
+def panel_source_line(data, block, credit):
+    """One line of the table of sources: where the prices or the index came from and which days they cover."""
+    tried = "; ".join(f"{item['source']}: {item['reason']}" for item in block.get("failed", []))
+    return {
+        "data": data, "source": "not obtained" if block["source"] == "not_obtained" else block["source"],
+        "address": panel_text(block["address"]), "first day": panel_text(block["date_from"]),
+        "last day": panel_text(block["date_to"]), "days": panel_count(block["n_days"]),
+        "fetched on": panel_text(block["fetched_on"]), "from cache": panel_flag(block["from_cache"]),
+        "why not obtained": panel_text(block["reason"]), "sources tried first": tried, "credit": credit,
+    }
+
+
+def panel_more_tables(content):
+    """The tables after the first four (DataFrames of text), in the order of PANEL_MORE_TABS."""
+    why, drawers, emotions = content["why"], content["drawers"], content["emotions"]
+    daily, new_words, validation = content["daily"], content["new_words"], content["validation"]
+    calibration_rows = [panel_calibration_line("topics and drawers (chapter 10)", why["calibration"]),
+                        panel_calibration_line("days (chapter 13)", daily["calibration"])]
+    calibrated_rows = [panel_calibrated_line(why["overall"], "all", "all topic posts")] + [
+        panel_calibrated_line(row, row["topic"], row["name"]) for row in why["topics"]]
+    why_drawers = {row["drawer"]: row for row in why["drawers"]}
+    drawer_rows = [panel_drawer_line(item["drawer"], item["name"], item["n_posts"], item["share"],
+                                     why_drawers[item["drawer"]]) for item in drawers["drawers"]]
+    drawer_rows.append(panel_drawer_line("", "in no drawer", drawers["n_in_no_drawer"], drawers["share_in_no_drawer"],
+                                         why["no_drawer"]))
+    classes = emotions["classes"]
+    emotion_rows = [panel_emotion_line("all", "all topic posts", emotions["overall"], classes)] + [
+        panel_emotion_line(item["drawer"], item["name"], item, classes) for item in emotions["drawers"]]
+    layer_order = list(new_words["layers"])
+    word_rows = [{
+        "date": day["date"], "layer": layer, "word": item["word"], "posts that day": panel_count(item["n_posts"]),
+        "past daily mean": f"{item['past_daily_mean']:.2f}",
+        "ratio": NOT_COMPUTED if item["ratio"] is None else f"{item['ratio']:.1f}",
+        "example": item["quotes"][0]["text"] if item["quotes"] else "",
+    } for layer, record in new_words["layers"].items() for day in record["days"] for item in day["new_words"]]
+    word_rows.sort(key=lambda line: (line["date"], layer_order.index(line["layer"])))  # stable: a day keeps its order
+    validation_rows = [{
+        "layer": layer, "first day": item["date_from"], "last day": item["date_to"],
+        "days with a share": panel_count(item["n_days_with_share"]),
+        "Fear and Greed Index (alternative.me): Spearman": panel_rho(item["fear_greed"]["spearman"]),
+        "Fear and Greed Index: days": panel_count(item["fear_greed"]["n_days"]),
+        "next day's BTC change: Spearman": panel_rho(item["next_day_change"]["spearman"]),
+        "next day's BTC change: days": panel_count(item["next_day_change"]["n_days"]),
+    } for layer, item in validation["layers"].items()]
+    source_rows = [panel_source_line("BTC daily close", validation["price"], ""),
+                   panel_source_line("Fear and Greed Index", validation["fear_greed"],
+                                     validation["fear_greed"]["attribution"])]
+    return {
+        "calibration": panel_text_table(calibration_rows),
+        "calibrated": panel_text_table(calibrated_rows),
+        "drawers": panel_text_table(drawer_rows),
+        "emotions": panel_text_table(emotion_rows),
+        "new_words": pd.DataFrame(word_rows, columns=PANEL_NEW_WORD_COLUMNS).astype(str),  # headers even when empty
+        "validation": panel_text_table(validation_rows),
+        "sources": panel_text_table(source_rows),
+    }
+
+
 def panel_tables(brief_path):
-    """Read the brief file and return the panel's four tables (DataFrames of text), keyed as in PANEL_TABS."""
+    """Read the brief file and return the panel's tables (DataFrames of text): the first four keyed as in PANEL_TABS,
+    then the tables of panel_more_tables."""
     content = json.loads(Path(brief_path).read_text(encoding="utf-8"))
     scope, dataset = content["scope"], content["dataset"]
     sentiment, topics, why = content["sentiment"], content["topics"], content["why"]
@@ -7889,12 +8076,143 @@ def panel_tables(brief_path):
         "evaluation": panel_text_table(evaluation_rows),
         "topics": panel_text_table(topic_rows),
         "why": panel_text_table(why_rows),
+        **panel_more_tables(content),  # the tables after the first four
     }
 
 
+def panel_series(days, field, layer=None):
+    """The dates of a list of days and their values as floats, NaN where the brief has null (a line breaks there)."""
+    dates = [date.fromisoformat(day["date"]) for day in days]
+    values = [day[field] if layer is None else day[field][layer] for day in days]
+    return dates, np.array([np.nan if value is None else value for value in values], dtype=float)
+
+
+def panel_line(axis, dates, values, colour, label):
+    """A line that breaks at NaN, with a dot for every value without a neighbour; returns the days with a value."""
+    axis.plot(dates, values, color=colour, linewidth=1.4, solid_capstyle="round", label=label)
+    if not dates:
+        return 0
+    known = ~np.isnan(values)
+    alone = known & ~np.concatenate([[False], known[:-1]]) & ~np.concatenate([known[1:], [False]])
+    axis.plot([day for day, single in zip(dates, alone) if single], values[alone], linestyle="none", marker="o",
+              markersize=3.5, color=colour)
+    return int(known.sum())
+
+
+def panel_axis_style(axis, first, last):
+    """The charts' common look: shares from 0 to 1, a light grid, dates below, a line at 0.5."""
+    axis.set_ylim(-0.02, 1.02)  # a little room, so that a share of 0 or 1 is not hidden by the frame
+    axis.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1])
+    axis.set_xlim(first - timedelta(days=1), last + timedelta(days=1))
+    axis.set_facecolor(PANEL_COLOURS["surface"])
+    axis.grid(True, color=PANEL_COLOURS["grid"], linewidth=0.8)
+    axis.set_axisbelow(True)
+    for side in ("top", "right"):
+        axis.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        axis.spines[side].set_color(PANEL_COLOURS["reference"])
+    axis.tick_params(colors=PANEL_COLOURS["muted"], labelsize=9)
+    locator = mdates.AutoDateLocator()
+    axis.xaxis.set_major_locator(locator)
+    axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    axis.axhline(0.5, color=PANEL_COLOURS["reference"], linewidth=0.8, zorder=1)
+    axis.set_ylabel("bullish share", color=PANEL_COLOURS["muted"], fontsize=9)
+
+
+def panel_note(axis, text):
+    """A short grey note in the middle of a chart."""
+    axis.text(0.5, 0.5, text, transform=axis.transAxes, ha="center", va="center", fontsize=10,
+              color=PANEL_COLOURS["muted"], bbox={"facecolor": PANEL_COLOURS["surface"], "edgecolor": "none"})
+
+
+def panel_pixels(figure):
+    """A chart as an array of RGB pixels, drawn in memory: no file is written and nothing is shown."""
+    canvas = FigureCanvasAgg(figure)
+    canvas.draw()
+    return np.asarray(canvas.buffer_rgba())[:, :, :3].copy()
+
+
+def panel_daily_chart(content):
+    """The bullish share of every UTC day, counted at 0.5 and calibrated, one panel per layer (section daily)."""
+    daily = content["daily"]
+    layers = list(daily["layers"].items())
+    figure = Figure(figsize=(11, 1.2 + 2.8 * max(len(layers), 1)), dpi=100, facecolor=PANEL_COLOURS["surface"],
+                    layout="constrained")
+    figure.suptitle(f"Bullish share per UTC day (calibration: {daily['calibration']['status']}; a day with fewer "
+                    f"than {daily['min_posts']:,} posts has no share)", x=0.01, ha="left", fontsize=11,
+                    color=PANEL_COLOURS["text"])
+    if not layers:
+        panel_note(figure.add_subplot(), "the brief has no layer")
+        return panel_pixels(figure)
+    axes = figure.subplots(len(layers), 1, squeeze=False)[:, 0]
+    bounds = [date.fromisoformat(record[key]) for _, record in layers for key in ("date_from", "date_to")]
+    for axis, (layer, record) in zip(axes, layers):
+        dates, counted = panel_series(record["days"], "half_bullish_share")
+        _, calibrated = panel_series(record["days"], "calibrated_bullish_share")
+        n_counted = panel_line(axis, dates, counted, PANEL_COLOURS["counted"], "counted at 0.5")
+        n_calibrated = panel_line(axis, dates, calibrated, PANEL_COLOURS["calibrated"], "calibrated")
+        panel_axis_style(axis, min(bounds), max(bounds))
+        axis.set_title(f"{layer}: {record['date_from']} to {record['date_to']}, {len(dates):,} days; a share on "
+                       f"{n_counted:,} (counted) and {n_calibrated:,} (calibrated)", loc="left", fontsize=10,
+                       color=PANEL_COLOURS["text"])
+        if n_counted == 0 and n_calibrated == 0:
+            panel_note(axis, f"no day has a share: every day has fewer than {daily['min_posts']:,} posts")
+    handles, labels = axes[0].get_legend_handles_labels()
+    figure.legend(handles, labels, loc="outside upper right", fontsize=9, frameon=False, ncol=2)
+    return panel_pixels(figure)
+
+
+def panel_layers_chart(content):
+    """The calibrated share of the two layers on the days both cover, the opposite days marked (section layers)."""
+    layers = content["layers"]
+    figure = Figure(figsize=(11, 4.6), dpi=100, facecolor=PANEL_COLOURS["surface"], layout="constrained")
+    axis = figure.add_subplot()
+    if not layers["days"]:
+        axis.set_axis_off()
+        panel_note(axis, "the two layers cover no common day")
+        figure.suptitle("Calibrated bullish share of the two layers", x=0.01, ha="left", fontsize=11,
+                        color=PANEL_COLOURS["text"])
+        return panel_pixels(figure)
+    for day in layers["opposite_dates"]:
+        middle = datetime.combine(date.fromisoformat(day), datetime.min.time())
+        axis.axvspan(middle - timedelta(hours=12), middle + timedelta(hours=12), color=PANEL_COLOURS["opposite"],
+                     linewidth=0, zorder=0)
+    fallback = iter([PANEL_COLOURS["counted"], PANEL_COLOURS["calibrated"]])
+    for layer in layers["compared"]:
+        dates, values = panel_series(layers["days"], "calibrated_bullish_share", layer)
+        panel_line(axis, dates, values, PANEL_COLOURS.get(layer) or next(fallback),
+                   f"{layer} ({layers['n_days_with_share'][layer]:,} days with a share)")
+    for bar in (layers["bullish_at_or_above"], layers["bearish_at_or_below"]):
+        axis.axhline(bar, color=PANEL_COLOURS["reference"], linewidth=0.8, linestyle="--", zorder=1)
+    panel_axis_style(axis, date.fromisoformat(layers["days"][0]["date"]),
+                     date.fromisoformat(layers["days"][-1]["date"]))
+    handles, _ = axis.get_legend_handles_labels()
+    handles.append(Patch(color=PANEL_COLOURS["opposite"],
+                         label=f"lean opposite ways ({layers['n_days_opposite']:,} days)"))
+    figure.legend(handles=handles, loc="outside upper right", fontsize=9, frameon=False, ncol=3)
+    if layers["n_days_both"] == 0:
+        panel_note(axis, "no day on which both layers have a calibrated share")
+    figure.suptitle("Calibrated bullish share of the two layers", x=0.01, ha="left", fontsize=11,
+                    color=PANEL_COLOURS["text"])
+    axis.set_title(f"{layers['date_from']} to {layers['date_to']} ({layers['n_days']:,} days); both have a share on "
+                   f"{layers['n_days_both']:,}; dashed: leaning bullish at or above "
+                   f"{layers['bullish_at_or_above']:g}, bearish at or below {layers['bearish_at_or_below']:g}",
+                   loc="left", fontsize=10, color=PANEL_COLOURS["text"])
+    return panel_pixels(figure)
+
+
+def panel_charts(brief_path):
+    """Read the brief file and draw the panel's two charts in memory (arrays of pixels), keyed as in
+    PANEL_CHART_TITLES."""
+    content = json.loads(Path(brief_path).read_text(encoding="utf-8"))
+    return {"daily_chart": panel_daily_chart(content), "layers_chart": panel_layers_chart(content)}
+
+
 def build_panel(brief_path):
-    """A Gradio page with the tables of panel_tables(brief_path), one tab each. Built, not started."""
+    """A Gradio page: the first four tables of panel_tables(brief_path), one tab each, then the tabs of PANEL_MORE_TABS
+    with the other tables and the two charts of panel_charts(brief_path). Built, not started."""
     tables = panel_tables(brief_path)
+    charts = panel_charts(brief_path)
     with gr.Blocks(title="Ledger Eyes: the brief", analytics_enabled=False) as page:
         gr.Markdown(f"# Ledger Eyes: the brief\nRead from the file `{Path(brief_path).name}`. "
                     f"\"{NOT_COMPUTED}\" marks a value that cannot be computed.")
@@ -7902,6 +8220,17 @@ def build_panel(brief_path):
             with gr.Tab(title):
                 gr.Markdown(note)
                 gr.Dataframe(value=tables[name], interactive=False, wrap=True)
+        for title, note, items in PANEL_MORE_TABS:
+            with gr.Tab(title):
+                gr.Markdown(note)
+                for name in items:
+                    if name in charts:
+                        gr.Image(value=charts[name], label=PANEL_CHART_TITLES[name], format="png", interactive=False,
+                                 buttons=["download", "fullscreen"])
+                        continue
+                    if len(items) > 1:
+                        gr.Markdown(f"#### {PANEL_TABLE_TITLES[name]}")
+                    gr.Dataframe(value=tables[name], interactive=False, wrap=True)
     return page
 
 # %% [markdown]
