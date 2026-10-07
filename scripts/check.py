@@ -19,10 +19,17 @@ quick: static checks, then the notebook runs three times on the bundled
        rules and its pinned fingerprint, and drawer_matches against fixed
        sentences; the drawers section and the drawer rows of every brief are
        checked, and the two default runs must give the same drawers.
+       The emotion pre-label script (scripts/prelabel_emotions.py) is checked
+       without Ollama: its interface and pinned prompt, its requests, that it
+       only talks to a loopback address, that it reads the sample like
+       chapter 1, and its labelling loop driven by a fake model; the label
+       files and the review table in the repository are checked statically.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
-       comparison. The drawers are checked and printed as well.
+       comparison. The drawers are checked and printed as well. The full
+       emotion label file is compared with the full dataset (ids and text
+       fingerprints) and its rows per label are printed.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -3171,6 +3178,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     brief_path.unlink(missing_ok=True)
     ok, seconds, _ = run_notebook(report, "full run", parameters, REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     brief = read_brief(report, "full run", brief_path) if ok else None
+    check_prelabel_full(report, switches)
     if brief is None:
         return
     check_brief(report, "full run", brief, switches)
@@ -3234,6 +3242,7 @@ def main():
     check_prelabel_script(report)
     check_prelabel_reading(report)
     check_prelabel_fake_model(report)
+    check_prelabel_files(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
