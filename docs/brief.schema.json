@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.1",
+  "title": "Ledger Eyes brief, format 1.2",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.1"},
+    "format_version": {"type": "string", "const": "1.2"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -458,12 +458,112 @@
         }
       }
     },
+    "drawers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "text", "match_rule", "word_list_version", "word_list_source", "word_list_fingerprint",
+                   "n_posts", "n_in_any_drawer", "n_in_no_drawer", "share_in_any_drawer", "share_in_no_drawer",
+                   "memberships_per_post", "quotes_per_drawer", "drawers", "other"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "text": {"type": "string"},
+        "match_rule": {"type": "string"},
+        "word_list_version": {"type": "string", "minLength": 1},
+        "word_list_source": {"type": "string", "minLength": 1},
+        "word_list_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "share_in_any_drawer": {"$ref": "#/$defs/share_or_null"},
+        "share_in_no_drawer": {"$ref": "#/$defs/share_or_null"},
+        "memberships_per_post": {
+          "type": "object",
+          "propertyNames": {"title": "n_drawers", "pattern": "^(0|[1-9][0-9]*)$"},
+          "required": ["0"],
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        },
+        "quotes_per_drawer": {"$ref": "#/$defs/positive"},
+        "drawers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["drawer", "name", "words", "excluded_phrases", "n_posts", "share", "quotes"],
+            "properties": {
+              "drawer": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "name": {"type": "string", "minLength": 1},
+              "words": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+              "excluded_phrases": {"type": "array", "items": {"type": "string", "minLength": 1}},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "share": {"$ref": "#/$defs/share_or_null"},
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["post_id", "label", "text", "matched_words"],
+                  "properties": {
+                    "post_id": {"type": "string"},
+                    "label": {"type": "integer", "enum": [0, 1, 2]},
+                    "text": {"type": "string"},
+                    "matched_words": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "other": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["n_posts", "method", "n_groups_requested", "n_distinct_vectors", "n_groups", "quotes_per_group",
+                       "groups"],
+          "properties": {
+            "n_posts": {"$ref": "#/$defs/count"},
+            "method": {"type": "string"},
+            "n_groups_requested": {"$ref": "#/$defs/positive"},
+            "n_distinct_vectors": {"$ref": "#/$defs/count"},
+            "n_groups": {"$ref": "#/$defs/count"},
+            "quotes_per_group": {"$ref": "#/$defs/positive"},
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["group", "name", "top_words", "n_posts", "share", "quotes"],
+                "properties": {
+                  "group": {"$ref": "#/$defs/count"},
+                  "name": {"type": "string"},
+                  "top_words": {"type": "array", "items": {"type": "string"}},
+                  "n_posts": {"$ref": "#/$defs/count"},
+                  "share": {"$ref": "#/$defs/share"},
+                  "quotes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["post_id", "label", "text"],
+                      "properties": {
+                        "post_id": {"type": "string"},
+                        "label": {"type": "integer", "enum": [0, 1, 2]},
+                        "text": {"type": "string"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "why": {
       "type": "object",
       "additionalProperties": false,
       "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts",
                    "min_bullish_bearish_posts", "bullish_share", "differences", "calibration", "fair_comparison", "order",
-                   "overall", "topics"],
+                   "overall", "topics", "drawers", "any_drawer", "no_drawer"],
       "properties": {
         "post_table": {"type": "string"},
         "topic_column": {"type": "string"},
@@ -574,7 +674,36 @@
               "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
             }
           }
-        }
+        },
+        "drawers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["drawer", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share",
+                         "too_few_bullish_bearish", "model_counts", "model_bullish_share", "model_unsure_share",
+                         "half_counts", "half_bullish_share", "calibrated_bullish_share", "fair", "label_vs_overall_pp"],
+            "properties": {
+              "drawer": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "name": {"type": "string"},
+              "too_few_posts": {"type": "boolean"},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "label_counts": {"$ref": "#/$defs/label_counts"},
+              "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "too_few_bullish_bearish": {"type": "boolean"},
+              "model_counts": {"$ref": "#/$defs/model_calls"},
+              "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+              "half_counts": {"$ref": "#/$defs/half_calls"},
+              "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "fair": {"$ref": "#/$defs/fair"},
+              "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
+            }
+          }
+        },
+        "any_drawer": {"$ref": "#/$defs/why_row"},
+        "no_drawer": {"$ref": "#/$defs/why_row"}
       }
     }
   },
@@ -636,6 +765,26 @@
       "additionalProperties": false,
       "required": ["0", "2"],
       "properties": {"0": {"$ref": "#/$defs/count"}, "2": {"$ref": "#/$defs/count"}}
+    },
+    "why_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "label_counts", "label_bullish_share", "too_few_bullish_bearish", "model_counts",
+                   "model_bullish_share", "model_unsure_share", "half_counts", "half_bullish_share",
+                   "calibrated_bullish_share", "fair"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "label_counts": {"$ref": "#/$defs/label_counts"},
+        "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_bullish_bearish": {"type": "boolean"},
+        "model_counts": {"$ref": "#/$defs/model_calls"},
+        "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "fair": {"$ref": "#/$defs/fair"}
+      }
     },
     "fair": {
       "type": "object",

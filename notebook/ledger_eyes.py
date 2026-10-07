@@ -168,18 +168,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 11 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics` and `why`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 11 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 11 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers` and `why`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 11 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 11 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`why`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 11 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 11 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 11 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.1",  # the format of chapter 11's rules (docs/brief-format.md in the repository)
+    "format_version": "1.2",  # the format of chapter 11's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -190,6 +190,7 @@ brief = {
     "dataset": None,  # chapters 0 to 3
     "sentiment": None,
     "topics": None,
+    "drawers": None,
     "why": None,
 }
 list(brief)  # show the top-level fields
@@ -2313,6 +2314,150 @@ for example in ["SEC sues another exchange", "wait a sec, btc is pumping", "The 
     print(f"    {example!r} -> {drawer_matches(example)}")
 
 # %% [markdown]
+# ### Which posts go into which drawer
+#
+# Every post of `topic_posts` (the same posts as the topics above) is matched with `drawer_matches`. The result goes into a table of its own, `drawer_hits`, one row per post in the same order: `post_id`, one True/False column per drawer (in word-list order), `n_drawers` (how many drawers the post went into) and, after "Layer 2" below, `other_group`. `topic_posts` itself is not changed.
+#
+# The table gives every drawer's posts and their share of the topic posts. **A post can sit in several drawers, so the drawer sizes add up to more than the number of posts**, and the shares to more than 1. The lines above the table count the posts in at least one drawer and in none, and how many posts went into 0, 1, 2, ... drawers. Nothing here depends on a model: the same posts and the same word list always give the same drawers.
+#
+# ***
+#
+# ### 哪些帖子进了哪个抽屉
+#
+# `topic_posts` 里的每条帖子（和上面的话题是同一批帖子）都用 `drawer_matches` 认一遍。结果放进一张单独的表 `drawer_hits`，一行对一条帖子，顺序不变：`post_id`；每个抽屉一列真假值（按词表的顺序）；`n_drawers`（这条帖子进了几个抽屉）；做完下面的「第 2 层」之后还有 `other_group`。`topic_posts` 本身不改。
+#
+# 下表是每个抽屉的帖子数，以及占话题帖子的比例。**一条帖子可以同时在好几个抽屉里，所以各抽屉的条数加起来会超过帖子总数**，比例加起来也会超过 1。表上方几行数的是至少进了一个抽屉的帖子、一个都没进的帖子，以及进了 0 个、1 个、2 个……抽屉的帖子各有多少。这里没有任何东西依赖模型：同样的帖子、同样的词表，放进抽屉的结果永远一样。
+
+# %%
+# Put every topic post into its drawers (original text), count the drawers, and start the brief's drawers section.
+DRAWER_IDS = [drawer["drawer"] for drawer in DRAWERS]  # word-list order
+DRAWER_QUOTES = 5  # spot-check posts per drawer (next cell)
+
+matching_started = time.perf_counter()
+post_drawers = [drawer_matches(text) for text in topic_posts["text"]]  # {drawer: words found} for every post
+matching_seconds = time.perf_counter() - matching_started
+
+drawer_hits = topic_posts[["post_id"]].copy()  # a table of its own; topic_posts stays unchanged
+for drawer in DRAWER_IDS:
+    drawer_hits[drawer] = [drawer in found for found in post_drawers]
+drawer_hits["n_drawers"] = drawer_hits[DRAWER_IDS].sum(axis=1).astype("int64")
+
+n_in_any_drawer = int((drawer_hits["n_drawers"] > 0).sum())
+n_in_no_drawer = len(drawer_hits) - n_in_any_drawer
+memberships = drawer_hits["n_drawers"].value_counts()
+most_drawers = int(drawer_hits["n_drawers"].max()) if len(drawer_hits) else 0
+brief["drawers"] = {
+    "post_table": "topic_posts",
+    "text": "text",
+    "match_rule": "for every drawer, its excluded phrases are blanked out first; then one of its words or phrases, "
+                  "found as a whole word and ignoring case in the original text, puts the post into the drawer; a space "
+                  "in a phrase matches any whitespace; a post can go into several drawers or into none",
+    "word_list_version": DRAWER_WORDS_VERSION,
+    "word_list_source": DRAWER_WORDS_SOURCE,
+    "word_list_fingerprint": DRAWER_WORDS_FINGERPRINT,
+    "n_posts": int(len(drawer_hits)),
+    "n_in_any_drawer": n_in_any_drawer,
+    "n_in_no_drawer": n_in_no_drawer,
+    "share_in_any_drawer": safe_ratio(n_in_any_drawer, len(drawer_hits)),
+    "share_in_no_drawer": safe_ratio(n_in_no_drawer, len(drawer_hits)),
+    "memberships_per_post": {str(count): int(memberships.get(count, 0)) for count in range(most_drawers + 1)},
+    "quotes_per_drawer": DRAWER_QUOTES,
+    "drawers": [{
+        "drawer": drawer["drawer"],
+        "name": drawer["name"],
+        "words": list(drawer["words"]),
+        "excluded_phrases": list(drawer["exclude"]),
+        "n_posts": int(drawer_hits[drawer["drawer"]].sum()),
+        "share": safe_ratio(int(drawer_hits[drawer["drawer"]].sum()), len(drawer_hits)),
+    } for drawer in DRAWERS],
+}
+print(f"Matched {len(drawer_hits):,} topic posts in {matching_seconds:.1f} s with word list {DRAWER_WORDS_VERSION}: "
+      f"{n_in_any_drawer:,} in at least one drawer ({brief['drawers']['share_in_any_drawer'] or 0:.1%}), "
+      f"{n_in_no_drawer:,} in none")
+print("Posts by number of drawers:", brief["drawers"]["memberships_per_post"])
+pd.DataFrame([{"drawer": item["drawer"], "name": item["name"], "posts": item["n_posts"], "share": item["share"]}
+              for item in brief["drawers"]["drawers"]]).set_index("drawer")
+
+# %% [markdown]
+# ### Spot checks: a few posts from every drawer
+#
+# A word list can put a post into the wrong drawer. To make that easy to see, every drawer shows `DRAWER_QUOTES` (5) of its posts in their original words, drawn **at random** with `RANDOM_SEED` (a text already shown is skipped), each with its label and the words that put it into the drawer (`matched_words`, in word-list order). They are drawn at random on purpose, not picked as the most typical ones: a person reading them should see what the drawer really catches, mistakes included. A word that keeps putting posts into the wrong drawer is a reason for a new version of the word list.
+#
+# ***
+#
+# ### 抽查：每个抽屉几条原话
+#
+# 词表可能把帖子放错抽屉。为了一眼看出来，每个抽屉给出 `DRAWER_QUOTES`（5）条帖子的原文，用 `RANDOM_SEED` **随机**抽（已经出现过的文字跳过），每条附上标签，以及让它进这个抽屉的那几个词（`matched_words`，按词表的顺序）。特意随机抽，而不是挑最典型的：读的人要看到抽屉实际装进了什么，包括放错的。某个词总是把帖子放错抽屉，就是给词表出新版本的理由。
+
+# %%
+# Draw DRAWER_QUOTES posts of every drawer at random with RANDOM_SEED, with the words that put them there.
+for item in brief["drawers"]["drawers"]:
+    members = topic_posts.loc[drawer_hits[item["drawer"]].to_numpy(), ["post_id", "label", "text"]]
+    quotes, seen_texts = [], set()
+    for post in members.sample(frac=1, random_state=RANDOM_SEED).itertuples(index=False):  # a random order
+        if post.text in seen_texts:
+            continue
+        seen_texts.add(post.text)
+        quotes.append({"post_id": post.post_id, "label": int(post.label), "text": post.text,
+                       "matched_words": drawer_matches(post.text)[item["drawer"]]})
+        if len(quotes) == DRAWER_QUOTES:
+            break
+    item["quotes"] = quotes
+    print(f"{item['drawer']}: {item['name']}  ({item['n_posts']:,} posts)")
+    for quote in quotes:
+        print(f"    [{LABEL_NAMES[quote['label']]}, {quote['post_id']}; {', '.join(quote['matched_words'])}] {quote['text']}")
+
+# %% [markdown]
+# ### Layer 2: the posts in no drawer
+#
+# The posts that went into no drawer are grouped automatically, with the same steps as the topics above: `topic_vectors` learns a TF-IDF vocabulary on these posts only (same settings, same left-out words), `group_vectors` runs KMeans in a single thread, and `describe_groups` names every group after the largest values of its centre and quotes the posts closest to it. Only the input is different. `N_OTHER_GROUPS` (default 8, for the same reason as the 8 topics) sets the number of groups; there are fewer only when these posts have fewer distinct vectors, and none when every post went into a drawer. The column `other_group` of `drawer_hits` gets the group of each of these posts, and −1 for the posts in a drawer.
+#
+# **These groups are only a hint.** A large group with clear words may point to a subject that deserves a drawer of its own. Whether to add a drawer, what to call it and which words it gets is decided by a person, by writing a new version of the word list; the program never adds a drawer or changes a word list by itself.
+#
+# ***
+#
+# ### 第 2 层：一个抽屉都没进的帖子
+#
+# 一个抽屉都没进的帖子，用和上面话题同样的几步自动分堆：`topic_vectors` 只在这些帖子上学 TF-IDF 词表（同样的设置、同样不收的词），`group_vectors` 用单线程跑 KMeans，`describe_groups` 用中心里数值最大的几个词给每堆起名，并给出离中心最近的几条原话。换的只是输入。堆数由 `N_OTHER_GROUPS` 定（默认 8，理由和 8 个话题一样）；只有这些帖子里不同的向量更少时才会少于它，所有帖子都进了抽屉时就一堆都没有。`drawer_hits` 的 `other_group` 列记下这些帖子各在哪一堆，进了抽屉的帖子写 −1。
+#
+# **这些堆只是提醒。** 一个大、代表词又清楚的堆，可能说明这个话题值得单独开一个抽屉。要不要加抽屉、叫什么名字、放哪些词，由人来定，做法是写一版新的词表；程序自己永远不会加抽屉，也不会改词表。
+
+# %%
+# Group the posts in no drawer with this chapter's own steps; a hint for new drawers, never a new drawer.
+in_no_drawer = (drawer_hits["n_drawers"] == 0).to_numpy()
+other_posts = topic_posts.loc[in_no_drawer, ["post_id", "label", "text", "clean_text"]].reset_index(drop=True)
+other_vectorizer, X_other, other_words = topic_vectors(other_posts["clean_text"])  # learns on these posts only
+other_model, other_group_of_post, other_centres, n_other_distinct, n_other_groups = group_vectors(X_other, N_OTHER_GROUPS)
+drawer_hits["other_group"] = -1  # posts in a drawer
+drawer_hits.loc[in_no_drawer, "other_group"] = other_group_of_post
+
+other_group_items = []
+for group, described in enumerate(describe_groups(X_other, other_words, other_group_of_post, other_centres, other_posts)):
+    other_group_items.append({
+        "group": group,
+        "name": " / ".join(described["top_words"]),
+        "top_words": described["top_words"],
+        "n_posts": described["n_posts"],
+        "share": safe_ratio(described["n_posts"], len(other_posts)),  # of the posts in no drawer
+        "quotes": described["quotes"],
+    })
+brief["drawers"]["other"] = {
+    "n_posts": int(len(other_posts)),
+    "method": "kmeans",
+    "n_groups_requested": N_OTHER_GROUPS,
+    "n_distinct_vectors": int(n_other_distinct),
+    "n_groups": int(n_other_groups),
+    "quotes_per_group": TOPIC_QUOTES,
+    "groups": other_group_items,
+}
+print(f"{len(other_posts):,} posts in no drawer: {n_other_groups} groups (asked for {N_OTHER_GROUPS}; "
+      f"{n_other_distinct:,} distinct post vectors)")
+for item in sorted(other_group_items, key=lambda item: (-item["n_posts"], item["group"])):
+    print(f"Group {item['group']}: {item['name']}  ({item['n_posts']:,} posts, {item['share']:.1%} of them)")
+    for quote in item["quotes"]:
+        print(f"    [{LABEL_NAMES[quote['label']]}, {quote['post_id']}] {quote['text']}")
+
+# %% [markdown]
 # ## 10. Why: which topics lean bullish, which lean bearish?
 #
 # Chapters 4 to 8 tell bullish from bearish posts; chapter 9 sorts posts into topics. This chapter crosses the two: is each topic more bullish or more bearish than the posts as a whole? The answer is one table, from the most bullish topic to the most bearish one.
@@ -2750,6 +2895,67 @@ print(f"Calibration: rates from {calibration_rates['model']} / {calibration_rate
 why_table
 
 # %% [markdown]
+# ### Drawers × bullish
+#
+# The same table for the drawers of chapter 9. Every drawer's row comes from `why_row`, the same function as the topic rows above, so every drawer has the same **three bullish shares**:
+#
+# - **by label** (`label_bullish_share`): from the labels that come with the dataset;
+# - **at 0.5** (`half_bullish_share`): the model's calls split at 0.5 and counted as they are;
+# - **calibrated** (`calibrated_bullish_share`): the share at 0.5 calibrated with the two recognition rates of chapter 8; this is the model's share to use;
+#
+# together with the fair comparison, both too-few marks (fewer posts than `MIN_TOPIC_POSTS`, fewer bearish + bullish posts by label than `MIN_BULLISH_BEARISH_POSTS`) and the difference from the row all. Two more rows: **any drawer** (the posts in at least one drawer) and **no drawer** (the posts in none). These two together are exactly the row all, while the drawer rows overlap, because a post can sit in several drawers. On screen the drawers are sorted like the topics, by bullish share by label, highest first; the brief keeps them in word-list order, so that two runs can be compared drawer by drawer. The topic × bullish table above stays as it is, as the comparison.
+#
+# ***
+#
+# ### 「抽屉 × 多空」
+#
+# 对第 9 章的抽屉做同样的表。每个抽屉的那一行由 `why_row` 算出，和上面话题的行是同一个函数，所以每个抽屉都有同样的**三种看多比例**：
+#
+# - **按标签**（`label_bullish_share`）：用数据集自带的标签；
+# - **按 0.5 分**（`half_bullish_share`）：模型的判断按 0.5 分开后直接数出来；
+# - **校正后**（`calibrated_bullish_share`）：按 0.5 分的比例用第 8 章的两个认出率校正后的结果；模型给出的看多比例以它为准；
+#
+# 另外还有公平比较、两个「太少」标记（帖子数少于 `MIN_TOPIC_POSTS`；按标签的「看空 + 看多」少于 `MIN_BULLISH_BEARISH_POSTS`），以及和 all 那一行之差。再加两行：**any drawer**（至少进了一个抽屉的帖子）和 **no drawer**（一个都没进的帖子）。这两行合起来正好就是 all 那一行；而各抽屉的行彼此有重叠，因为一条帖子可以同时在好几个抽屉里。屏幕上的表和话题表一样，按「按标签」的看多比例从高到低排；简报里抽屉按词表的顺序排，这样两次运行的结果可以按抽屉逐个比较。上面的「话题 × 多空」表原样保留，作为对照。
+
+# %%
+# Drawers x bullish: one row per drawer, and the posts in at least one drawer and in none; record them in the brief.
+why_drawers = []
+for item in brief["drawers"]["drawers"]:  # word-list order
+    row = why_row(why_posts[drawer_hits[item["drawer"]].to_numpy()])
+    why_drawers.append({
+        "drawer": item["drawer"],
+        "name": item["name"],
+        "too_few_posts": row["n_posts"] < MIN_TOPIC_POSTS,
+        **row,
+        "label_vs_overall_pp": percentage_points(row["label_bullish_share"], why_overall["label_bullish_share"]),
+    })
+in_a_drawer = (drawer_hits["n_drawers"] > 0).to_numpy()
+why_any_drawer = why_row(why_posts[in_a_drawer])  # together with the next row: exactly the row all
+why_no_drawer = why_row(why_posts[~in_a_drawer])
+brief["why"]["drawers"] = why_drawers
+brief["why"]["any_drawer"] = why_any_drawer
+brief["why"]["no_drawer"] = why_no_drawer
+
+DRAWER_TABLE_COLUMNS = ["name", "posts", "too few", "too few b+b", "bearish", "neutral", "bullish", "label share",
+                        "vs all (pp)", "half share", "calibrated share", "fair posts", "fair label", "fair half",
+                        "fair calibrated", "calibrated − label (pp)"]
+# Most bullish first by label; a share that cannot be computed goes last; ties keep the word-list order.
+shown_drawers = sorted(why_drawers, key=lambda row: (row["label_bullish_share"] is None,
+                                                     -(row["label_bullish_share"] or 0.0), DRAWER_IDS.index(row["drawer"])))
+drawer_table = pd.DataFrame(
+    [table_row(why_overall, "all", "all topic posts", "", "")]
+    + [table_row(row, key, name, "", shown_points(percentage_points(row["label_bullish_share"],
+                                                                    why_overall["label_bullish_share"])))
+       for row, key, name in [(why_any_drawer, "any drawer", "in at least one drawer"),
+                              (why_no_drawer, "no drawer", "in no drawer")]]
+    + [table_row(row, row["drawer"], row["name"], "yes" if row["too_few_posts"] else "no",
+                 shown_points(row["label_vs_overall_pp"])) for row in shown_drawers]
+).set_index("topic").rename_axis("drawer")[DRAWER_TABLE_COLUMNS]
+print(f"Drawers x bullish with word list {DRAWER_WORDS_VERSION}; calibration status: {calibration_rates['status']}; "
+      f"too few below {MIN_TOPIC_POSTS} posts or {MIN_BULLISH_BEARISH_POSTS} bearish + bullish posts")
+drawer_table
+
+# %% [markdown]
 # ## 11. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
@@ -2791,13 +2997,13 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.1",
+  "title": "Ledger Eyes brief, format 1.2",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.1"},
+    "format_version": {"type": "string", "const": "1.2"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -3249,12 +3455,112 @@ BRIEF_SCHEMA_TEXT = r"""{
         }
       }
     },
+    "drawers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "text", "match_rule", "word_list_version", "word_list_source", "word_list_fingerprint",
+                   "n_posts", "n_in_any_drawer", "n_in_no_drawer", "share_in_any_drawer", "share_in_no_drawer",
+                   "memberships_per_post", "quotes_per_drawer", "drawers", "other"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "text": {"type": "string"},
+        "match_rule": {"type": "string"},
+        "word_list_version": {"type": "string", "minLength": 1},
+        "word_list_source": {"type": "string", "minLength": 1},
+        "word_list_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "share_in_any_drawer": {"$ref": "#/$defs/share_or_null"},
+        "share_in_no_drawer": {"$ref": "#/$defs/share_or_null"},
+        "memberships_per_post": {
+          "type": "object",
+          "propertyNames": {"title": "n_drawers", "pattern": "^(0|[1-9][0-9]*)$"},
+          "required": ["0"],
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        },
+        "quotes_per_drawer": {"$ref": "#/$defs/positive"},
+        "drawers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["drawer", "name", "words", "excluded_phrases", "n_posts", "share", "quotes"],
+            "properties": {
+              "drawer": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "name": {"type": "string", "minLength": 1},
+              "words": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+              "excluded_phrases": {"type": "array", "items": {"type": "string", "minLength": 1}},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "share": {"$ref": "#/$defs/share_or_null"},
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["post_id", "label", "text", "matched_words"],
+                  "properties": {
+                    "post_id": {"type": "string"},
+                    "label": {"type": "integer", "enum": [0, 1, 2]},
+                    "text": {"type": "string"},
+                    "matched_words": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "other": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["n_posts", "method", "n_groups_requested", "n_distinct_vectors", "n_groups", "quotes_per_group",
+                       "groups"],
+          "properties": {
+            "n_posts": {"$ref": "#/$defs/count"},
+            "method": {"type": "string"},
+            "n_groups_requested": {"$ref": "#/$defs/positive"},
+            "n_distinct_vectors": {"$ref": "#/$defs/count"},
+            "n_groups": {"$ref": "#/$defs/count"},
+            "quotes_per_group": {"$ref": "#/$defs/positive"},
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["group", "name", "top_words", "n_posts", "share", "quotes"],
+                "properties": {
+                  "group": {"$ref": "#/$defs/count"},
+                  "name": {"type": "string"},
+                  "top_words": {"type": "array", "items": {"type": "string"}},
+                  "n_posts": {"$ref": "#/$defs/count"},
+                  "share": {"$ref": "#/$defs/share"},
+                  "quotes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["post_id", "label", "text"],
+                      "properties": {
+                        "post_id": {"type": "string"},
+                        "label": {"type": "integer", "enum": [0, 1, 2]},
+                        "text": {"type": "string"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "why": {
       "type": "object",
       "additionalProperties": false,
       "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts",
                    "min_bullish_bearish_posts", "bullish_share", "differences", "calibration", "fair_comparison", "order",
-                   "overall", "topics"],
+                   "overall", "topics", "drawers", "any_drawer", "no_drawer"],
       "properties": {
         "post_table": {"type": "string"},
         "topic_column": {"type": "string"},
@@ -3365,7 +3671,36 @@ BRIEF_SCHEMA_TEXT = r"""{
               "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
             }
           }
-        }
+        },
+        "drawers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["drawer", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share",
+                         "too_few_bullish_bearish", "model_counts", "model_bullish_share", "model_unsure_share",
+                         "half_counts", "half_bullish_share", "calibrated_bullish_share", "fair", "label_vs_overall_pp"],
+            "properties": {
+              "drawer": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "name": {"type": "string"},
+              "too_few_posts": {"type": "boolean"},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "label_counts": {"$ref": "#/$defs/label_counts"},
+              "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "too_few_bullish_bearish": {"type": "boolean"},
+              "model_counts": {"$ref": "#/$defs/model_calls"},
+              "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+              "half_counts": {"$ref": "#/$defs/half_calls"},
+              "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "fair": {"$ref": "#/$defs/fair"},
+              "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
+            }
+          }
+        },
+        "any_drawer": {"$ref": "#/$defs/why_row"},
+        "no_drawer": {"$ref": "#/$defs/why_row"}
       }
     }
   },
@@ -3427,6 +3762,26 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": false,
       "required": ["0", "2"],
       "properties": {"0": {"$ref": "#/$defs/count"}, "2": {"$ref": "#/$defs/count"}}
+    },
+    "why_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "label_counts", "label_bullish_share", "too_few_bullish_bearish", "model_counts",
+                   "model_bullish_share", "model_unsure_share", "half_counts", "half_bullish_share",
+                   "calibrated_bullish_share", "fair"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "label_counts": {"$ref": "#/$defs/label_counts"},
+        "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_bullish_bearish": {"type": "boolean"},
+        "model_counts": {"$ref": "#/$defs/model_calls"},
+        "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "fair": {"$ref": "#/$defs/fair"}
+      }
     },
     "fair": {
       "type": "object",

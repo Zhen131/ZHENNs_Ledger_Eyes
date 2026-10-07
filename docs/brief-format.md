@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.1** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.2** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -19,7 +19,7 @@ How to read the tables:
 
 | Column | Meaning |
 | --- | --- |
-| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>` and `<sheet>` stand for every key of an object whose keys vary (described in the row of that object). |
+| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>` and `<n_drawers>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
 | Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
@@ -35,7 +35,8 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `dataset` | Every post of the data source; then the working sample drawn from them. | `dataset.n_posts`; `dataset.sample` |
 | `sentiment` | The working sample (with the default switches: posts about all coins, bearish and bullish only, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that mention Bitcoin. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
 | `topics` | The topic post table, taken from every post of the data source, not from the working sample, with all three classes in their natural shares. With the default switches: every post that mentions Bitcoin. | `topics.scope`; `topics.n_posts`; `topics.sampled`; `topics.class_counts` |
-| `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from` |
+| `drawers` | The same posts as `topics`, put into drawers by a word list (a post can be in several drawers or in none); the posts in no drawer are grouped in `drawers.other`. | `drawers.post_table`; `drawers.n_posts`; `drawers.word_list_version`; `drawers.other.n_posts` |
+| `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. The drawer rows use the drawers of `drawers`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from`; `why.any_drawer.n_posts` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -335,9 +336,68 @@ Chapter 9: posts sorted into topics by meaning.
 | `topics.topics[].quotes[].label` | integer | yes | no | The post's label: 0, 1 or 2. |
 | `topics.topics[].quotes[].text` | string | yes | no | The post's original text, before cleaning. |
 
+### drawers
+
+Chapter 9, after the topics: the same posts put into drawers, broad subjects fixed by a person through a word list; the posts in no drawer are grouped automatically, as a hint for new drawers. With the built-in word list, two runs on the same data give the same section, so results can be compared drawer by drawer.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `drawers` | object | yes | no | The drawers and the posts in them. |
+| `drawers.post_table` | string | yes | no | `"topic_posts"`: the same posts as `topics`. |
+| `drawers.text` | string | yes | no | `"text"`: words are matched in the original text, not in the cleaned text. |
+| `drawers.match_rule` | string | yes | no | Description of how a post goes into a drawer. |
+| `drawers.word_list_version` | string | yes | no | Version of the word list (`"v1"` for the built-in list); it goes up whenever a word changes. |
+| `drawers.word_list_source` | string | yes | no | `"built-in"`, or the path given in the switch `DRAWER_WORDS_FILE`. |
+| `drawers.word_list_fingerprint` | string | yes | no | First 16 hexadecimal digits of the SHA-256 of the drawers (`[[drawer, name, words, exclude], ...]` as compact ASCII JSON); the same list always gives the same fingerprint. |
+| `drawers.n_posts` | integer | yes | no | Posts matched: equal to `topics.n_posts`. |
+| `drawers.n_in_any_drawer` | integer | yes | no | Posts in at least one drawer. |
+| `drawers.n_in_no_drawer` | integer | yes | no | Posts in no drawer; with `n_in_any_drawer` it adds up to `n_posts`. |
+| `drawers.share_in_any_drawer` | number | yes | yes | `n_in_any_drawer` ÷ `n_posts`; `null` when there are no posts. |
+| `drawers.share_in_no_drawer` | number | yes | yes | `n_in_no_drawer` ÷ `n_posts`; `null` when there are no posts. |
+| `drawers.memberships_per_post` | object | yes | no | Posts by the number of drawers they went into, keyed `"0"`, `"1"`, `"2"`, ... up to the largest number found; the counts add up to `n_posts`. |
+| `drawers.memberships_per_post.<n_drawers>` | integer | — | no | Posts in exactly that many drawers; `"0"` is always there and equals `n_in_no_drawer`. |
+| `drawers.quotes_per_drawer` | integer | yes | no | Most spot-check quotes per drawer. |
+| `drawers.drawers` | array | yes | no | One entry per drawer, in the word list's order (at least one). A post can be in several drawers, so the sizes add up to more than `n_posts`: the sum of `n_posts` over the drawers equals the sum of k × `memberships_per_post.k`. |
+| `drawers.drawers[]` | object | — | no | One drawer. |
+| `drawers.drawers[].drawer` | string | yes | no | Drawer id: lower-case letters, digits and `_`, starting with a letter (also the column name in `drawer_hits`). |
+| `drawers.drawers[].name` | string | yes | no | English name of the drawer. |
+| `drawers.drawers[].words` | array | yes | no | The drawer's words and phrases, in the word list's order (at least one). |
+| `drawers.drawers[].words[]` | string | — | no | A word or phrase, lower case. |
+| `drawers.drawers[].excluded_phrases` | array | yes | no | Phrases blanked out before the drawer's words are looked for (the word list's `exclude`); may be empty. |
+| `drawers.drawers[].excluded_phrases[]` | string | — | no | A phrase, lower case. |
+| `drawers.drawers[].n_posts` | integer | yes | no | Posts in the drawer. |
+| `drawers.drawers[].share` | number | yes | yes | `n_posts` ÷ `drawers.n_posts`; `null` when there are no posts. |
+| `drawers.drawers[].quotes` | array | yes | no | Spot checks: up to `quotes_per_drawer` posts of the drawer drawn at random with the seed, different posts with different texts; empty only when the drawer has no posts. |
+| `drawers.drawers[].quotes[]` | object | — | no | One quote. |
+| `drawers.drawers[].quotes[].post_id` | string | yes | no | The post's `post_id`. |
+| `drawers.drawers[].quotes[].label` | integer | yes | no | The post's label: 0, 1 or 2. |
+| `drawers.drawers[].quotes[].text` | string | yes | no | The post's original text. |
+| `drawers.drawers[].quotes[].matched_words` | array | yes | no | The drawer's words found in the text after its excluded phrases were blanked out, in the word list's order (at least one). |
+| `drawers.drawers[].quotes[].matched_words[]` | string | — | no | A word or phrase of the drawer. |
+| `drawers.other` | object | yes | no | The posts in no drawer, grouped with the same method as `topics` (a hint for new drawers; never a drawer). |
+| `drawers.other.n_posts` | integer | yes | no | Posts in no drawer: equal to `n_in_no_drawer`. |
+| `drawers.other.method` | string | yes | no | `"kmeans"`, the same steps and settings as `topics`, learned on these posts only. |
+| `drawers.other.n_groups_requested` | integer | yes | no | Groups asked for (`N_OTHER_GROUPS`). |
+| `drawers.other.n_distinct_vectors` | integer | yes | no | Distinct post vectors among these posts. |
+| `drawers.other.n_groups` | integer | yes | no | Groups made: `n_groups_requested`, or fewer when there are fewer distinct vectors; 0 when every post is in a drawer. |
+| `drawers.other.quotes_per_group` | integer | yes | no | Most quotes per group. |
+| `drawers.other.groups` | array | yes | no | One entry per group, in group-number order; their sizes add up to `n_posts`. |
+| `drawers.other.groups[]` | object | — | no | One group. |
+| `drawers.other.groups[].group` | integer | yes | no | Group number, from 0. |
+| `drawers.other.groups[].name` | string | yes | no | The top words joined with `" / "`, made by the program like a topic name. |
+| `drawers.other.groups[].top_words` | array | yes | no | The words of the name, strongest first. |
+| `drawers.other.groups[].top_words[]` | string | — | no | A word. |
+| `drawers.other.groups[].n_posts` | integer | yes | no | Posts in the group. |
+| `drawers.other.groups[].share` | number | yes | no | Its share of the posts in no drawer. |
+| `drawers.other.groups[].quotes` | array | yes | no | Original texts of the posts closest to the group's centre (different posts, different texts). |
+| `drawers.other.groups[].quotes[]` | object | — | no | One quote. |
+| `drawers.other.groups[].quotes[].post_id` | string | yes | no | The post's `post_id`. |
+| `drawers.other.groups[].quotes[].label` | integer | yes | no | The post's label: 0, 1 or 2. |
+| `drawers.other.groups[].quotes[].text` | string | yes | no | The post's original text. |
+
 ### why
 
-Chapter 10: which topics lean bullish and which lean bearish, by the dataset's labels and by the chosen model.
+Chapter 10: which topics and which drawers lean bullish and which lean bearish, by the dataset's labels and by the chosen model.
 
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
@@ -462,6 +522,125 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.topics[].fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
 | `why.topics[].fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
 | `why.topics[].label_vs_overall_pp` | number | yes | yes | The topic's bullish share by label minus that of `overall`, in percentage points (positive: more bullish than all topic posts); `null` when either share is `null`. |
+| `why.drawers` | array | yes | no | One row per drawer of `drawers.drawers`, in the same order (the word list's order), with the same fields as a row of `topics` and `drawer` in place of `topic`. A post can be in several drawers, so the rows overlap and do not add up to `overall`. |
+| `why.drawers[]` | object | — | no | One drawer. |
+| `why.drawers[].drawer` | string | yes | no | Drawer id, as in `drawers.drawers[].drawer`. |
+| `why.drawers[].name` | string | yes | no | Drawer name, as in `drawers.drawers[].name`. |
+| `why.drawers[].too_few_posts` | boolean | yes | no | Whether the drawer has fewer posts than `min_topic_posts`. |
+| `why.drawers[].n_posts` | integer | yes | no | Posts. |
+| `why.drawers[].label_counts` | object | yes | no | Posts per label. |
+| `why.drawers[].label_counts.0` | integer | yes | no | Bearish. |
+| `why.drawers[].label_counts.1` | integer | yes | no | Neutral. |
+| `why.drawers[].label_counts.2` | integer | yes | no | Bullish. |
+| `why.drawers[].label_bullish_share` | number | yes | yes | Bullish share by label; `null` when the drawer has no bearish or bullish post. |
+| `why.drawers[].too_few_bullish_bearish` | boolean | yes | no | Whether the drawer's bearish + bullish posts by label are fewer than `min_bullish_bearish_posts`. The mark changes no number. |
+| `why.drawers[].model_counts` | object | yes | no | The model's calls. |
+| `why.drawers[].model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.drawers[].model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.drawers[].model_counts.unsure` | integer | yes | no | Unsure. |
+| `why.drawers[].model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
+| `why.drawers[].model_unsure_share` | number | yes | yes | Unsure posts ÷ the drawer's posts; `null` when the drawer has no posts. |
+| `why.drawers[].half_counts` | object | yes | no | The model's calls at 0.5 (see `calibration.half_rule`); they add up to `n_posts`. |
+| `why.drawers[].half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.drawers[].half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.drawers[].half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when there are no posts. Neutral posts are split as well, so it is not comparable with `label_bullish_share`. |
+| `why.drawers[].calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated (see `calibration.formula`); `null` when that is `null` or `calibration.status` is not `"applied"`. It covers neutral posts too; it is compared with the labels only in `fair`. |
+| `why.drawers[].fair` | object | yes | no | The fair comparison inside the drawer. |
+| `why.drawers[].fair.n_posts` | integer | yes | no | Posts in it. |
+| `why.drawers[].fair.label_counts` | object | yes | no | Its posts per label (bearish and bullish only). |
+| `why.drawers[].fair.label_counts.0` | integer | yes | no | Bearish. |
+| `why.drawers[].fair.label_counts.2` | integer | yes | no | Bullish. |
+| `why.drawers[].fair.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when the comparison is empty. |
+| `why.drawers[].fair.model_counts` | object | yes | no | The model's calls on these posts. |
+| `why.drawers[].fair.model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.drawers[].fair.model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.drawers[].fair.model_counts.unsure` | integer | yes | no | Unsure. |
+| `why.drawers[].fair.model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
+| `why.drawers[].fair.model_minus_label_pp` | number | yes | yes | Model minus labels, in percentage points; `null` when either share is `null`. |
+| `why.drawers[].fair.half_counts` | object | yes | no | The model's calls at 0.5 on these posts. |
+| `why.drawers[].fair.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.drawers[].fair.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.drawers[].fair.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when the comparison is empty. |
+| `why.drawers[].fair.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated; `null` when that is `null` or `calibration.status` is not `"applied"`. The model's bullish share to use; `model_bullish_share` (with the thresholds) stays as a comparison. |
+| `why.drawers[].fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
+| `why.drawers[].fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
+| `why.drawers[].label_vs_overall_pp` | number | yes | yes | The drawer's bullish share by label minus that of `overall`, in percentage points (positive: more bullish than all topic posts); `null` when either share is `null`. |
+| `why.any_drawer` | object | yes | no | The posts in at least one drawer (`drawers.n_in_any_drawer` of them), with the same fields as `overall`. Together with `no_drawer` it adds up to `overall`: every count of the two rows, fair comparison included, adds up to the count of `overall`. |
+| `why.any_drawer.n_posts` | integer | yes | no | Posts. |
+| `why.any_drawer.label_counts` | object | yes | no | Posts per label. |
+| `why.any_drawer.label_counts.0` | integer | yes | no | Bearish. |
+| `why.any_drawer.label_counts.1` | integer | yes | no | Neutral. |
+| `why.any_drawer.label_counts.2` | integer | yes | no | Bullish. |
+| `why.any_drawer.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when there is no bearish or bullish post. |
+| `why.any_drawer.too_few_bullish_bearish` | boolean | yes | no | Whether its bearish + bullish posts by label are fewer than `min_bullish_bearish_posts`. The mark changes no number. |
+| `why.any_drawer.model_counts` | object | yes | no | The model's calls. |
+| `why.any_drawer.model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.any_drawer.model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.any_drawer.model_counts.unsure` | integer | yes | no | Unsure (between the thresholds). |
+| `why.any_drawer.model_bullish_share` | number | yes | yes | Bullish share by model (unsure left out); `null` when nothing was called bullish or bearish. |
+| `why.any_drawer.model_unsure_share` | number | yes | yes | Unsure posts ÷ these posts; `null` when there are no posts. |
+| `why.any_drawer.half_counts` | object | yes | no | The model's calls at 0.5 (see `calibration.half_rule`); they add up to `n_posts`. |
+| `why.any_drawer.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.any_drawer.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.any_drawer.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when there are no posts. Neutral posts are split as well, so it is not comparable with `label_bullish_share`. |
+| `why.any_drawer.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated (see `calibration.formula`); `null` when that is `null` or `calibration.status` is not `"applied"`. It covers neutral posts too; it is compared with the labels only in `fair`. |
+| `why.any_drawer.fair` | object | yes | no | The fair comparison over these posts. |
+| `why.any_drawer.fair.n_posts` | integer | yes | no | Posts in it. |
+| `why.any_drawer.fair.label_counts` | object | yes | no | Its posts per label (bearish and bullish only). |
+| `why.any_drawer.fair.label_counts.0` | integer | yes | no | Bearish. |
+| `why.any_drawer.fair.label_counts.2` | integer | yes | no | Bullish. |
+| `why.any_drawer.fair.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when the comparison is empty. |
+| `why.any_drawer.fair.model_counts` | object | yes | no | The model's calls on these posts. |
+| `why.any_drawer.fair.model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.any_drawer.fair.model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.any_drawer.fair.model_counts.unsure` | integer | yes | no | Unsure. |
+| `why.any_drawer.fair.model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
+| `why.any_drawer.fair.model_minus_label_pp` | number | yes | yes | Model minus labels, in percentage points (positive: the model is more bullish); `null` when either share is `null`. |
+| `why.any_drawer.fair.half_counts` | object | yes | no | The model's calls at 0.5 on these posts. |
+| `why.any_drawer.fair.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.any_drawer.fair.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.any_drawer.fair.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when the comparison is empty. |
+| `why.any_drawer.fair.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated; `null` when that is `null` or `calibration.status` is not `"applied"`. The model's bullish share to use; `model_bullish_share` (with the thresholds) stays as a comparison. |
+| `why.any_drawer.fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
+| `why.any_drawer.fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
+| `why.no_drawer` | object | yes | no | The posts in no drawer (`drawers.n_in_no_drawer` of them), with the same fields as `overall`. |
+| `why.no_drawer.n_posts` | integer | yes | no | Posts. |
+| `why.no_drawer.label_counts` | object | yes | no | Posts per label. |
+| `why.no_drawer.label_counts.0` | integer | yes | no | Bearish. |
+| `why.no_drawer.label_counts.1` | integer | yes | no | Neutral. |
+| `why.no_drawer.label_counts.2` | integer | yes | no | Bullish. |
+| `why.no_drawer.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when there is no bearish or bullish post. |
+| `why.no_drawer.too_few_bullish_bearish` | boolean | yes | no | Whether its bearish + bullish posts by label are fewer than `min_bullish_bearish_posts`. The mark changes no number. |
+| `why.no_drawer.model_counts` | object | yes | no | The model's calls. |
+| `why.no_drawer.model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.no_drawer.model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.no_drawer.model_counts.unsure` | integer | yes | no | Unsure (between the thresholds). |
+| `why.no_drawer.model_bullish_share` | number | yes | yes | Bullish share by model (unsure left out); `null` when nothing was called bullish or bearish. |
+| `why.no_drawer.model_unsure_share` | number | yes | yes | Unsure posts ÷ these posts; `null` when there are no posts. |
+| `why.no_drawer.half_counts` | object | yes | no | The model's calls at 0.5 (see `calibration.half_rule`); they add up to `n_posts`. |
+| `why.no_drawer.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.no_drawer.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.no_drawer.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when there are no posts. Neutral posts are split as well, so it is not comparable with `label_bullish_share`. |
+| `why.no_drawer.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated (see `calibration.formula`); `null` when that is `null` or `calibration.status` is not `"applied"`. It covers neutral posts too; it is compared with the labels only in `fair`. |
+| `why.no_drawer.fair` | object | yes | no | The fair comparison over these posts. |
+| `why.no_drawer.fair.n_posts` | integer | yes | no | Posts in it. |
+| `why.no_drawer.fair.label_counts` | object | yes | no | Its posts per label (bearish and bullish only). |
+| `why.no_drawer.fair.label_counts.0` | integer | yes | no | Bearish. |
+| `why.no_drawer.fair.label_counts.2` | integer | yes | no | Bullish. |
+| `why.no_drawer.fair.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when the comparison is empty. |
+| `why.no_drawer.fair.model_counts` | object | yes | no | The model's calls on these posts. |
+| `why.no_drawer.fair.model_counts.bullish` | integer | yes | no | Called bullish. |
+| `why.no_drawer.fair.model_counts.bearish` | integer | yes | no | Called bearish. |
+| `why.no_drawer.fair.model_counts.unsure` | integer | yes | no | Unsure. |
+| `why.no_drawer.fair.model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
+| `why.no_drawer.fair.model_minus_label_pp` | number | yes | yes | Model minus labels, in percentage points (positive: the model is more bullish); `null` when either share is `null`. |
+| `why.no_drawer.fair.half_counts` | object | yes | no | The model's calls at 0.5 on these posts. |
+| `why.no_drawer.fair.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.no_drawer.fair.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.no_drawer.fair.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when the comparison is empty. |
+| `why.no_drawer.fair.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated; `null` when that is `null` or `calibration.status` is not `"applied"`. The model's bullish share to use; `model_bullish_share` (with the thresholds) stays as a comparison. |
+| `why.no_drawer.fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
+| `why.no_drawer.fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
 
 A hand-written example of a fair comparison with no posts, as it appears in a small topic:
 
@@ -505,6 +684,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | --- | --- |
 | 1.0 | First fixed format. |
 | 1.1 | Chapter 10 counts the model's calls at 0.5 and calibrates the bullish share with the recognition rates of chapter 8, and marks rows with too few bullish or bearish posts. New: `why.min_bullish_bearish_posts` and `why.calibration`; in `why.overall` and every `why.topics[]` row `too_few_bullish_bearish`, `half_counts`, `half_bullish_share` and `calibrated_bullish_share`; in every `fair` block `half_counts`, `half_bullish_share`, `calibrated_bullish_share`, `half_minus_label_pp` and `calibrated_minus_label_pp`. Additions only: no field of 1.0 changed. |
+| 1.2 | Chapter 9 puts the topic posts into drawers chosen by a person through a versioned word list and groups the posts in no drawer; chapter 10 gives every drawer the same row as a topic. New: the top-level section `drawers`; in `why` the fields `drawers` (one row per drawer), `any_drawer` and `no_drawer`. Additions only: no field of 1.1 changed. |
 
 ## Reading a brief
 
