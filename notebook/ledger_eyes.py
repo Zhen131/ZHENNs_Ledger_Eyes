@@ -3134,6 +3134,368 @@ pd.DataFrame({"posts": file_label_counts,
               "share": file_label_counts / len(emotion_labels) if len(emotion_labels) else None}).rename_axis("label")
 
 # %% [markdown]
+# ### Which posts the networks learn from
+#
+# Not every labelled post can be learned from. Four steps leave posts out, in this order, and the brief records how many posts each step left out and which labels:
+#
+# 1. `unparsed`: the labelling model gave no usable answer.
+# 2. `none`, only when `EMOTION_KEEP_NONE` is `False` (eight classes). With the default `True` the networks also learn `none` (nine classes), so that later data full of small talk, such as comments, has a place for posts that show none of the emotions.
+# 3. Emotions not listed in `EMOTION_NAMES`.
+# 4. Emotions with fewer than `EMOTION_MIN_CLASS_POSTS` (10) posts left after the steps above: an emotion needs at least 10 posts so that the training, validation and test parts each get some of them (the same rule as in chapter 5). Such an emotion is left out as a whole.
+#
+# The posts that are left are the **emotion data**. The emotions that are left are the classes the networks learn, in the order of `EMOTION_NAMES` with `none` last; at least two must be left, otherwise the notebook stops. The texts come from `df_all` by `post_id` and are cleaned with `clean_texts`, exactly like the working sample.
+#
+# ***
+#
+# ### 网络从哪些帖子学
+#
+# 不是每条贴了标签的帖子都能拿来学。按下面的顺序分四步去掉帖子，每一步去掉了几条、去掉了哪些标签，都记进简报：
+#
+# 1. `unparsed`：贴标签的模型没给出能用的回答。
+# 2. `none`，只在 `EMOTION_KEEP_NONE` 为 `False`（八分类）时去掉。默认 `True` 时网络也学 `none`（九分类），这样以后碰到闲聊多的数据（例如评论），不像任何一种情绪的帖子就有地方放。
+# 3. 不在 `EMOTION_NAMES` 里的情绪。
+# 4. 经过上面几步后剩下不到 `EMOTION_MIN_CLASS_POSTS`（10）条的情绪：一种情绪至少要有 10 条，训练、验证、测试三份才都分得到（和第 5 章同一条规矩）。这样的情绪整类去掉。
+#
+# 剩下的帖子叫**情绪数据**。剩下的情绪就是网络要学的类别，顺序同 `EMOTION_NAMES`，`none` 排最后；至少要剩两类，否则笔记本停下。原文按 `post_id` 从 `df_all` 取，用 `clean_texts` 清洗，和工作样本完全一样。
+
+# %%
+# Leave out, step by step, the posts the networks cannot learn from, then clean the texts of the emotion data.
+def leave_out(rows, step, rule, labels):
+    """Drop the rows whose emotion is in labels; record the step, its rule, its labels and the posts it left out."""
+    out = rows["emotion"].isin(labels)
+    emotion_dropped.append({"step": step, "rule": rule, "labels": list(labels), "n_posts": int(out.sum())})
+    return rows[~out]
+
+
+emotion_dropped = []  # the steps, in order
+kept = emotion_labels[["post_id", "emotion"]]
+kept = leave_out(kept, "unparsed", "the labelling model gave no usable answer", [EMOTION_UNPARSED])
+kept = leave_out(kept, "none", "posts labelled none; left out only when EMOTION_KEEP_NONE is False",
+                 [] if EMOTION_KEEP_NONE else ["none"])
+kept = leave_out(kept, "not_in_emotion_names", "emotions not listed in EMOTION_NAMES",
+                 [label for label in EMOTION_FILE_LABELS if label != "none" and label not in EMOTION_NAMES])
+candidate_classes = list(EMOTION_NAMES) + (["none"] if EMOTION_KEEP_NONE else [])  # EMOTION_NAMES order, none last
+left_counts = kept["emotion"].value_counts().reindex(candidate_classes, fill_value=0)
+kept = leave_out(kept, "too_few_posts", "emotions with fewer than EMOTION_MIN_CLASS_POSTS posts after the steps above",
+                 [label for label in candidate_classes if left_counts[label] < EMOTION_MIN_CLASS_POSTS])
+emotion_classes = [label for label in candidate_classes if left_counts[label] >= EMOTION_MIN_CLASS_POSTS]
+if len(emotion_classes) < 2:
+    raise ValueError(f"Only {len(emotion_classes)} emotion(s) left to learn ({emotion_classes}); at least two are needed. "
+                     f"Posts left per emotion before the last step: {left_counts.to_dict()}; EMOTION_MIN_CLASS_POSTS = "
+                     f"{EMOTION_MIN_CLASS_POSTS}. Use a pre-label file with more posts or more emotions.")
+
+emotion_data = kept.merge(df_all[["post_id", "text"]], on="post_id", how="left", validate="one_to_one")  # file order
+emotion_data["clean_text"] = clean_texts(emotion_data["text"]).to_numpy()
+emotion_class_counts = emotion_data["emotion"].value_counts().reindex(emotion_classes, fill_value=0)
+brief["emotions"].update({
+    "emotion_names": list(EMOTION_NAMES),
+    "keep_none": EMOTION_KEEP_NONE,
+    "min_class_posts": EMOTION_MIN_CLASS_POSTS,
+    "dropped": emotion_dropped,
+    "classes": emotion_classes,
+    "n_posts": int(len(emotion_data)),
+    "class_counts": {label: int(count) for label, count in emotion_class_counts.items()},
+})
+for step in emotion_dropped:
+    print(f"Left out ({step['step']}): {step['n_posts']:,} posts; labels {step['labels']}")
+print(f"Emotion data: {len(emotion_data):,} posts in {len(emotion_classes)} classes: {emotion_classes}")
+pd.DataFrame({"posts": emotion_class_counts,
+              "share": emotion_class_counts / len(emotion_data)}).rename_axis("emotion")
+
+# %% [markdown]
+# ### Training, validation and test parts
+#
+# As in chapter 5, the emotion data is split 80 / 20 and the 20% part then half and half, both times stratified by emotion and with `RANDOM_SEED`:
+#
+# - the **emotion training part** (80%): the only part the vectorizers and the networks learn from;
+# - the **emotion validation part** (10%): watched during training and used once to choose a network;
+# - the **emotion test part** (10%): used only for the evaluation further down.
+#
+# With at least 10 posts per emotion, every part gets every emotion; the cell checks this.
+#
+# ***
+#
+# ### 训练、验证、测试三份
+#
+# 和第 5 章一样，情绪数据先按 80 / 20 切，再把 20% 那份对半切，两次都按情绪分层，都用 `RANDOM_SEED`：
+#
+# - **情绪训练集**（80%）：向量化器和网络只从这一份学；
+# - **情绪验证集**（10%）：训练时盯着看，最后用一次来选网络；
+# - **情绪测试集**（10%）：只在后面的评估里用。
+#
+# 每种情绪至少 10 条，所以每一份都分得到每一种情绪；这一格会核对。
+
+# %%
+# Split the emotion data 80 / 10 / 10, stratified by emotion, and record the parts in the brief.
+emotion_train_df, emotion_rest_df = train_test_split(emotion_data, test_size=0.2, random_state=RANDOM_SEED,
+                                                     stratify=emotion_data["emotion"])  # 80 / 20
+emotion_val_df, emotion_test_df = train_test_split(emotion_rest_df, test_size=0.5, random_state=RANDOM_SEED,
+                                                   stratify=emotion_rest_df["emotion"])  # the 20% part, half and half
+emotion_parts = {"train": emotion_train_df, "validation": emotion_val_df, "test": emotion_test_df}
+emotion_split_counts = pd.DataFrame({name: part["emotion"].value_counts().reindex(emotion_classes, fill_value=0)
+                                     for name, part in emotion_parts.items()}).T  # one row per part
+missing_parts = [(name, label) for name in emotion_parts for label in emotion_classes
+                 if emotion_split_counts.loc[name, label] == 0]
+if missing_parts:
+    raise AssertionError(f"Some parts got no post of an emotion: {missing_parts}")
+brief["emotions"]["split"] = {
+    "seed": RANDOM_SEED,
+    "fractions": SPLIT_FRACTIONS,
+    "stratified_by": "emotion",
+    "n_posts": {name: int(len(part)) for name, part in emotion_parts.items()},
+    "class_counts": {name: {label: int(emotion_split_counts.loc[name, label]) for label in emotion_classes}
+                     for name in emotion_parts},
+}
+print(f"Emotion training part: {len(emotion_train_df):,} posts; validation part: {len(emotion_val_df):,}; "
+      f"test part: {len(emotion_test_df):,}")
+emotion_split_counts.assign(posts=[len(part) for part in emotion_parts.values()])
+
+# %% [markdown]
+# ### Word counts and TF-IDF for the emotions
+#
+# The same two kinds of vectors as in chapter 6: word counts (`CountVectorizer`) and TF-IDF (`TfidfVectorizer`), each keeping the `VOCAB_SIZE` most frequent words, stored as sparse matrices of 32-bit floats. They are new vectorizers, not chapter 6's: **they learn their vocabulary (and the TF-IDF weights) from the emotion training part only** and only transform the validation and test parts.
+#
+# ***
+#
+# ### 给情绪用的词数统计和 TF-IDF
+#
+# 和第 6 章同样的两种向量：词数统计（`CountVectorizer`）和 TF-IDF（`TfidfVectorizer`），都只留最常见的 `VOCAB_SIZE` 个词，存成 32 位浮点的稀疏矩阵。它们是新建的向量化器，不是第 6 章那两个：**只在情绪训练集上学词表（TF-IDF 还要学词的权重）**，验证集和测试集只做转换。
+
+# %%
+# Learn both vocabularies on the emotion training part, then transform all three parts.
+emotion_vectorizers = {
+    "count": CountVectorizer(max_features=VOCAB_SIZE, dtype=np.float32),  # word counts
+    "tfidf": TfidfVectorizer(max_features=VOCAB_SIZE, dtype=np.float32),  # TF-IDF weights
+}
+emotion_features = {}  # vectors -> part -> sparse matrix
+for name, vectorizer in emotion_vectorizers.items():
+    emotion_features[name] = {
+        "train": vectorizer.fit_transform(emotion_train_df["clean_text"]),  # learns: emotion training part only
+        "validation": vectorizer.transform(emotion_val_df["clean_text"]),  # transform only
+        "test": vectorizer.transform(emotion_test_df["clean_text"]),  # transform only
+    }
+    for matrix in emotion_features[name].values():
+        matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
+brief["emotions"]["vectorizers"] = {
+    "vocab_size_requested": VOCAB_SIZE,
+    "fitted_on": "emotion training part",
+    "fitted_on_n_posts": int(len(emotion_train_df)),
+    "text": "clean_text",
+    "storage": "sparse float32",
+    **{name: {"vocab_size": len(vectorizer.vocabulary_)} for name, vectorizer in emotion_vectorizers.items()},
+}
+pd.DataFrame([{"vectors": name, "vocabulary": len(vectorizer.vocabulary_),
+               "training shape": emotion_features[name]["train"].shape}
+              for name, vectorizer in emotion_vectorizers.items()]).set_index("vectors")
+
+# %% [markdown]
+# ### One-layer networks with one output per emotion
+#
+# Chapter 7's network has a single sigmoid unit when there are two classes, and its helper functions follow the bullish and bearish classes (`CLASS_LABELS`). This chapter therefore has helpers of its own that take the list of classes as an argument. The network is the same kind as in chapter 7: a single dense layer, here with **one softmax unit per emotion**, sparse categorical cross-entropy, the Adam optimiser, the same `EPOCHS` and `BATCH_SIZE`, and `RANDOM_SEED` set before each network is built. Inside the network an emotion is its position in `emotion_classes`. One network learns from the word counts and one from the TF-IDF vectors.
+#
+# As in chapter 7, the validation part chooses one network by macro-F1 (a tie goes to the word-count network), and `emotion_proba(cleaned_texts)` gives the chosen network's probabilities for any cleaned texts: one row per text and one column per emotion in `emotion_classes`, every row adding up to 1.
+#
+# ***
+#
+# ### 每种情绪一个输出的一层网络
+#
+# 第 7 章的网络在两类时只有一个 sigmoid 单元，它的那些辅助函数也都跟着看多看空的类别（`CLASS_LABELS`）走。所以本章另写一套辅助函数，类别名单作为参数传进去。网络和第 7 章是同一种：只有一个全连接层，这里**每种情绪一个 softmax 单元**；损失函数是稀疏分类交叉熵，优化器 Adam，`EPOCHS` 和 `BATCH_SIZE` 都一样，每搭一个网络之前都先设 `RANDOM_SEED`。网络内部，一种情绪就是它在 `emotion_classes` 里的位置号。一个网络学词数统计，一个学 TF-IDF。
+#
+# 和第 7 章一样，用验证集上的 macro-F1 选一个网络（相等时选词数统计那个）。`emotion_proba(cleaned_texts)` 用选中的网络给任意一批清洗后的文字算概率：每条文字一行，`emotion_classes` 里每种情绪一列，每行加起来等于 1。
+
+# %%
+# Helpers for the emotion networks: every one takes the list of classes as an argument.
+def emotion_targets(labels, classes):
+    """What the network learns: the position of every label in classes."""
+    position = {label: index for index, label in enumerate(classes)}
+    return np.array([position[label] for label in labels], dtype="int64")
+
+
+def build_emotion_network(n_features, n_classes):
+    """One dense layer with one softmax unit per class."""
+    model = tf.keras.Sequential([
+        tf.keras.Input(shape=(n_features,)),  # one input per vocabulary word
+        tf.keras.layers.Dense(n_classes, activation="softmax"),
+    ])
+    model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    return model
+
+
+def emotion_class_proba(model, matrix, classes):
+    """Probabilities, one column per class in classes; an empty input gives shape (0, number of classes)."""
+    if matrix.shape[0] == 0:
+        return np.empty((0, len(classes)), dtype=np.float32)
+    if hasattr(matrix, "has_sorted_indices") and not matrix.has_sorted_indices:
+        matrix = matrix.sorted_indices()  # TensorFlow needs the non-zero cells of every row in column order
+    return model.predict(matrix, batch_size=1024, verbose=0)
+
+
+def emotion_predict(model, matrix, classes):
+    """The class with the highest probability (a tie goes to the earlier class)."""
+    return np.asarray(classes, dtype=object)[emotion_class_proba(model, matrix, classes).argmax(axis=1)]
+
+
+def emotion_class_scores(true_labels, predicted_labels, classes):
+    """Per-class precision, recall, F1 and support for classes; NaN where a score cannot be computed."""
+    return precision_recall_fscore_support(true_labels, predicted_labels, labels=classes, zero_division=np.nan)
+
+
+def emotion_macro_f1(true_labels, predicted_labels, classes):
+    """Mean of the per-class F1 scores that can be computed; NaN when none can."""
+    f1 = emotion_class_scores(true_labels, predicted_labels, classes)[2]
+    return float(np.nanmean(f1)) if np.isfinite(f1).any() else float("nan")
+
+
+def emotion_evaluate(true_labels, predicted_labels, classes):
+    """Accuracy, per-class precision / recall / F1 / support and macro-F1; NaN where a score cannot be computed."""
+    precision, recall, f1, support = emotion_class_scores(true_labels, predicted_labels, classes)
+    return {
+        "n": int(len(true_labels)),
+        "accuracy": float(np.mean(true_labels == predicted_labels)) if len(true_labels) else float("nan"),
+        "per_class": {label: {"precision": float(precision[position]), "recall": float(recall[position]),
+                              "f1": float(f1[position]), "support": int(support[position])}
+                      for position, label in enumerate(classes)},
+        "macro_f1": emotion_macro_f1(true_labels, predicted_labels, classes),
+    }
+
+# %%
+# Train one emotion network on the word counts and one on the TF-IDF vectors.
+emotion_models = {}  # model name -> fitted network, the vectors it reads and its history
+for name, vectors in [("count_network", "count"), ("tfidf_network", "tfidf")]:
+    print(f"--- {name}")
+    tf.keras.utils.set_random_seed(RANDOM_SEED)  # fixes Python, NumPy and TensorFlow random numbers
+    network = build_emotion_network(emotion_features[vectors]["train"].shape[1], len(emotion_classes))
+    history = network.fit(emotion_features[vectors]["train"], emotion_targets(emotion_train_df["emotion"], emotion_classes),
+                          epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=2,
+                          validation_data=(emotion_features[vectors]["validation"],
+                                           emotion_targets(emotion_val_df["emotion"], emotion_classes)))
+    emotion_models[name] = {"model": network, "vectors": vectors, "history": history}
+
+# %%
+# Choose one emotion network by macro-F1 on the validation part; define the scoring function emotion_proba.
+emotion_validation_macro_f1 = {
+    name: emotion_macro_f1(emotion_val_df["emotion"].to_numpy(dtype=object),
+                           emotion_predict(entry["model"], emotion_features[entry["vectors"]]["validation"],
+                                           emotion_classes), emotion_classes)
+    for name, entry in emotion_models.items()
+}
+selected_emotion_model_name = max(emotion_validation_macro_f1,
+                                  key=lambda name: np.nan_to_num(emotion_validation_macro_f1[name], nan=-1.0))
+selected_emotion_model = emotion_models[selected_emotion_model_name]["model"]
+selected_emotion_vectorizer = emotion_vectorizers[emotion_models[selected_emotion_model_name]["vectors"]]
+
+
+def emotion_proba(cleaned_texts, model=selected_emotion_model, vectorizer=selected_emotion_vectorizer):
+    """Emotion probabilities from the chosen network; shape (number of texts, number of classes in emotion_classes).
+
+    Input: cleaned texts (for example the output of clean_texts); a missing value counts as "".
+    """
+    texts = ["" if not isinstance(text, str) and pd.isna(text) else str(text) for text in cleaned_texts]
+    return emotion_class_proba(model, vectorizer.transform(texts), emotion_classes)
+
+
+brief["emotions"]["models"] = list(emotion_models)
+brief["emotions"]["training"] = {
+    "epochs": EPOCHS,
+    "batch_size": BATCH_SIZE,
+    "optimizer": "adam",
+    "seed": RANDOM_SEED,
+    "output_layer": f"{len(emotion_classes)} units, softmax",
+    "loss": "sparse_categorical_crossentropy",
+    "target_of_class": {label: position for position, label in enumerate(emotion_classes)},
+    "history": {name: {key: [float(value) for value in values] for key, values in entry["history"].history.items()}
+                for name, entry in emotion_models.items()},
+}
+brief["emotions"]["selection"] = {
+    "by": "macro-F1 on the emotion validation part",
+    "validation_macro_f1": emotion_validation_macro_f1,
+    "selected": selected_emotion_model_name,
+}
+print("Validation macro-F1:", {name: round(score, 4) for name, score in emotion_validation_macro_f1.items()})
+print("Chosen emotion network:", selected_emotion_model_name)
+
+# %% [markdown]
+# ### Evaluation on the emotion test part
+#
+# The measures and baselines of chapter 8, on the emotion test part only: accuracy; precision, recall, F1 and support for every emotion; macro-F1 (the plain mean of the per-emotion F1 scores, so that rare emotions count as much as common ones); one confusion matrix per network, with the true emotions as rows and the predicted ones as columns. The baselines guess without reading the text: **always majority** always guesses the most frequent emotion of the training part (on a tie, scikit-learn takes the first in alphabetical order), and **uniform random** picks an emotion at random with equal chances, with `RANDOM_SEED`. A score that cannot be computed is "—" in the tables and `null` in the brief.
+#
+# **The bar:** each network's macro-F1 on the emotion test part must be higher than that of both baselines. Remember what the scores measure: how well a network learned the silver labels, not how well it recognises emotions.
+#
+# ***
+#
+# ### 在情绪测试集上评估
+#
+# 用第 8 章的指标和对照线，只在情绪测试集上算：准确率；每种情绪的 precision、recall、F1 和条数（support）；macro-F1（各情绪 F1 的简单平均，少见的情绪和常见的一样算数）；每个网络一张混淆矩阵，行是真实的情绪，列是判出的情绪。对照线不看文字就猜：**永远猜多数**永远猜训练集里最多的那种情绪（一样多时，scikit-learn 取字母顺序最靠前的那种）；**随机乱猜**每条都从各种情绪里等概率随便挑一个，用 `RANDOM_SEED`。算不出来的分数，表里显示「—」，简报里写 `null`。
+#
+# **过线标准：** 每个网络在情绪测试集上的 macro-F1，必须同时高于两条对照线。别忘了分数量的是什么：网络学没学会银标签，不是它认情绪认得准不准。
+
+# %%
+# Label the emotion test part with both networks and both baselines, and build the evaluation table.
+EMOTION_BASELINES = ["always_majority", "uniform_random"]
+emotion_y_test = emotion_test_df["emotion"].to_numpy(dtype=object)
+no_text_emotion_train = np.zeros((len(emotion_train_df), 1))  # the baselines ignore the text
+no_text_emotion_test = np.zeros((len(emotion_test_df), 1))
+emotion_always_majority = DummyClassifier(strategy="most_frequent").fit(no_text_emotion_train, emotion_train_df["emotion"])
+emotion_uniform_random = DummyClassifier(strategy="uniform", random_state=RANDOM_SEED).fit(no_text_emotion_train,
+                                                                                          emotion_train_df["emotion"])
+emotion_test_predictions = {name: emotion_predict(entry["model"], emotion_features[entry["vectors"]]["test"],
+                                                  emotion_classes)
+                            for name, entry in emotion_models.items()}  # model name -> predicted emotions
+emotion_test_predictions["always_majority"] = np.asarray(emotion_always_majority.predict(no_text_emotion_test), dtype=object)
+emotion_test_predictions["uniform_random"] = np.asarray(emotion_uniform_random.predict(no_text_emotion_test), dtype=object)
+emotion_majority_label = str(emotion_always_majority.classes_[np.argmax(emotion_always_majority.class_prior_)])
+training_counts = emotion_train_df["emotion"].value_counts()
+if training_counts[emotion_majority_label] != training_counts.max() or \
+        not (emotion_test_predictions["always_majority"] == emotion_majority_label).all():
+    raise AssertionError("the majority baseline does not guess the most frequent emotion of the training part")
+
+emotion_evaluation_rows = [
+    {"model": name, "kind": "baseline" if name in EMOTION_BASELINES else "model",
+     **emotion_evaluate(emotion_y_test, predicted, emotion_classes)}
+    for name, predicted in emotion_test_predictions.items()
+]
+brief["emotions"]["evaluation"] = {
+    "baselines": EMOTION_BASELINES,
+    "majority_label": emotion_majority_label,
+    "rows": emotion_evaluation_rows,
+}
+print(f"Emotion test part: {len(emotion_test_df):,} posts; most frequent emotion of the training part: "
+      f"{emotion_majority_label}")
+for row in emotion_evaluation_rows:
+    print(f"{row['model']:16} accuracy {blank_if_nan(row['accuracy'])}, macro-F1 {blank_if_nan(row['macro_f1'])}")
+pd.DataFrame([{"model": row["model"], "emotion": label, **{measure: scores[measure] for measure in
+                                                            ("precision", "recall", "f1", "support")}}
+              for row in emotion_evaluation_rows for label, scores in row["per_class"].items()]
+             ).set_index(["model", "emotion"]).map(blank_if_nan)
+
+# %%
+# Compare each emotion network's macro-F1 on the emotion test part with both baselines.
+emotion_macro = {row["model"]: row["macro_f1"] for row in emotion_evaluation_rows}
+emotion_beats_baselines = {name: bool(all(emotion_macro[name] > emotion_macro[baseline] for baseline in EMOTION_BASELINES))
+                           for name in emotion_models}  # False when a score is missing
+brief["emotions"]["beats_baselines"] = emotion_beats_baselines
+pd.DataFrame([{"model": name, "macro-F1": emotion_macro[name],
+               **{baseline: emotion_macro[baseline] for baseline in EMOTION_BASELINES},
+               "beats both": emotion_beats_baselines[name]} for name in emotion_models]).set_index("model").map(blank_if_nan)
+
+# %%
+# Draw a confusion matrix for each emotion network and record the counts.
+figure, axes = plt.subplots(1, len(emotion_models), figsize=(7 * len(emotion_models), 6))
+emotion_confusion_matrices = {}
+for axis, name in zip(np.atleast_1d(axes), emotion_models):
+    counts = confusion_matrix(emotion_y_test, emotion_test_predictions[name], labels=emotion_classes)  # rows: true
+    emotion_confusion_matrices[name] = {"labels": list(emotion_classes), "rows": "true emotion",
+                                        "columns": "predicted emotion", "counts": counts.tolist(), "n": int(counts.sum())}
+    ConfusionMatrixDisplay(counts, display_labels=emotion_classes).plot(ax=axis, colorbar=False, values_format="d",
+                                                                        xticks_rotation=45)
+    axis.set_title(name)
+    axis.set_xlabel("predicted")
+    axis.set_ylabel("true")
+plt.tight_layout()
+plt.show()
+brief["emotions"]["confusion_matrices"] = emotion_confusion_matrices
+
+# %% [markdown]
 # ## 11. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
