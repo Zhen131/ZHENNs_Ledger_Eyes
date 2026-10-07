@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.5** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.6** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -43,6 +43,8 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `dated_data` | Not the StockTwits posts: the posts of two dated datasets (tweets as the `retail` layer, news headlines as the `media` layer) that are left after the date, language and Bitcoin steps and the daily cap, counted per layer and UTC day. It covers its own period, given in its own fields. | `dated_data.datasets.tweets.steps`; `dated_data.datasets.news.steps`; `dated_data.date_from`; `dated_data.date_to`; `dated_data.layers.<layer>.date_from`; `dated_data.layers.<layer>.date_to` |
 | `daily` | The same posts as `dated_data`, every post cleaned, scored by the sentiment model of `sentiment` (split at 0.5), given an emotion by the network of `emotions` and put into the drawers of `drawers`; counted per layer and UTC day, for the whole period and for every day, with the bullish shares calibrated by recognition rates read from `sentiment.evaluation`. It covers the same period as `dated_data`, given in its own fields. | `daily.post_table`; `daily.scoring.n_scored`; `daily.calibration.rates_from`; `daily.date_from`; `daily.date_to`; `daily.layers.<layer>.date_from`; `daily.layers.<layer>.date_to` |
 | `new_words` | The same posts as `dated_data`, by their cleaned texts: the words that suddenly appear in many more posts of a layer than on the days before. It covers the same period as `dated_data`, given in its own fields. | `new_words.post_table`; `new_words.date_from`; `new_words.date_to`; `new_words.layers.<layer>.date_from`; `new_words.layers.<layer>.date_to` |
+| `layers` | The days of `daily` that both the media and the retail layer cover (the overlap of their periods), with their calibrated bullish shares side by side; and, over the media layer's whole period, its news headlines with a bullish or bearish reader label, to measure the sentiment model on them. | `layers.compared`; `layers.date_from`; `layers.date_to`; `layers.media_recognition.date_from`; `layers.media_recognition.date_to`; `layers.media_recognition.label_rule` |
+| `validation` | The days of `daily` with a calibrated bullish share, every layer over its own period, against the BTC daily closes and the Fear and Greed Index of alternative.me (no daily price or index value is stored). | `validation.date_from`; `validation.date_to`; `validation.layers.<layer>.date_from`; `validation.layers.<layer>.date_to`; `validation.price.source`; `validation.fear_greed.source` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -56,7 +58,7 @@ For example, with the default switches `scope.coins` is `"all"`, because the mod
 | `generated_at` | string | yes | no | When the brief was saved: UTC time, ISO 8601, to the second, ending in `Z` (for example `2026-01-31T12:00:00Z`). |
 | `scope` | object | yes | no | What the brief as a whole covers. |
 | `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local spreadsheet. |
-| `scope.granularity` | string | yes | no | `"batch"`: every section computed from the data source (`DATA_SOURCE`) describes it at once; results per day sit in sections of their own that carry their own period (`dated_data`, `daily`, `new_words`). The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
+| `scope.granularity` | string | yes | no | `"batch"`: every section computed from the data source (`DATA_SOURCE`) describes it at once; results per day sit in sections of their own that carry their own period (`dated_data`, `daily`, `new_words`, `layers`, `validation`). The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
 | `scope.coins` | string | yes | no | Which posts the working sample holds: `"all"` (posts about all coins) or `"btc_only"` (only posts that mention Bitcoin). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
 | `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
 
@@ -1114,11 +1116,117 @@ Chapter 13: per layer and UTC day, the words that suddenly appear in many more p
 | `new_words.layers.<layer>.days[].new_words[].quotes[].post_id` | string | yes | no | The post's id in the dated post table. |
 | `new_words.layers.<layer>.days[].new_words[].quotes[].text` | string | yes | no | Its text, with account names and links replaced. |
 
+### layers
+
+Chapter 14: the two layers with data, the media layer (news headlines) and the retail layer (tweets), side by side, day by day, on the days that both cover; and the sentiment model measured on the news headlines that carry a reader label. Like `dated_data`, this section describes a period and carries its own `date_from` and `date_to`: the overlap of the two layers' periods. The shares are the calibrated bullish shares of `daily`, copied as they are.
+
+A layer **leans bullish** on a day when its calibrated share is at least `bullish_at_or_above` (0.5 + `gap`) and **leans bearish** when it is at most `bearish_at_or_below` (0.5 − `gap`). The two layers **lean opposite ways** on a day when one leans bullish and the other bearish. A day on which a layer's calibrated share is `null` (too few posts, or no calibration) takes no part. An object keyed by `<layer>` has one key per layer of `compared`.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `layers` | object | yes | no | Chapter 14: the media and the retail layer side by side, and the model on the news headlines. |
+| `layers.compared` | array | yes | no | The two layers compared, in this order: `media`, `retail`. |
+| `layers.compared[]` | string | — | no | One layer. |
+| `layers.share` | string | yes | no | Which share is compared, and which days take no part, as an English sentence. |
+| `layers.date_from` | string | yes | yes | The first day both layers cover (the later of the two layers' `date_from` in `daily`), `YYYY-MM-DD`; `null` when a layer has no posts or the two periods do not meet. |
+| `layers.date_to` | string | yes | yes | The last day both layers cover (the earlier of the two layers' `date_to`); `null` as above. |
+| `layers.gap` | number | yes | no | `LAYER_GAP`: how far from 0.5 a calibrated share must be for a lean, above 0 and at most 0.5. |
+| `layers.bullish_at_or_above` | number | yes | no | 0.5 + `gap`: a calibrated share at or above it leans bullish. |
+| `layers.bearish_at_or_below` | number | yes | no | 0.5 − `gap`: a calibrated share at or below it leans bearish. |
+| `layers.opposite_rule` | string | yes | no | When the two layers lean opposite ways, as an English sentence. |
+| `layers.n_days` | integer | yes | no | Calendar days from `date_from` to `date_to` (0 when they are `null`); equal to the length of `days`. |
+| `layers.n_days_with_share` | object | yes | no | Per layer of `compared`, keyed by `<layer>`: the days of `days` on which it has a calibrated share. |
+| `layers.n_days_with_share.<layer>` | integer | — | no | Days with a calibrated share of this layer. |
+| `layers.n_days_both` | integer | yes | no | Days of `days` on which both layers have a calibrated share, so that `opposite` is not `null`. |
+| `layers.n_days_opposite` | integer | yes | no | Days on which the two layers lean opposite ways; equal to the length of `opposite_dates`. |
+| `layers.opposite_dates` | array | yes | no | The days on which the two layers lean opposite ways, sorted. |
+| `layers.opposite_dates[]` | string | — | no | One day, `YYYY-MM-DD`. |
+| `layers.days` | array | yes | no | One entry per calendar day from `date_from` to `date_to`, sorted by date; empty when they are `null`. |
+| `layers.days[]` | object | — | no | One day. |
+| `layers.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
+| `layers.days[].calibrated_bullish_share` | object | yes | no | Per layer of `compared`, keyed by `<layer>`: that layer's calibrated bullish share of that day in `daily`. |
+| `layers.days[].calibrated_bullish_share.<layer>` | number | — | yes | The share; `null` when the layer takes no part that day. |
+| `layers.days[].opposite` | boolean | yes | yes | True when one layer leans bullish and the other bearish; `null` when a layer takes no part that day. |
+| `layers.media_recognition` | object | yes | no | The sentiment model on the news headlines of the media layer that carry a bullish or bearish reader label, over the media layer's whole period (not only the overlap). It describes news headlines and the readers' votes, not comments. |
+| `layers.media_recognition.layer` | string | yes | no | `media`. |
+| `layers.media_recognition.date_from` | string | yes | yes | The media layer's first day, as in `daily`; `null` when the layer has no posts. |
+| `layers.media_recognition.date_to` | string | yes | yes | The media layer's last day; `null` when the layer has no posts. |
+| `layers.media_recognition.label_rule` | string | yes | no | How the news labels were made, the same as `dated_data.datasets.news.label_rule`: `market_direction` or `votes`. |
+| `layers.media_recognition.text_column` | string | yes | no | The news text the model read, the same as `dated_data.datasets.news.text_column`: `title` or `text`. |
+| `layers.media_recognition.half_rule` | string | yes | no | How a headline is split at 0.5, as in `daily.half_rule`. |
+| `layers.media_recognition.n_labelled_bullish` | integer | yes | no | Headlines labelled bullish; equal to `dated_data.datasets.news.label_counts.2`. |
+| `layers.media_recognition.n_labelled_bearish` | integer | yes | no | Headlines labelled bearish; equal to `dated_data.datasets.news.label_counts.0`. |
+| `layers.media_recognition.n_bullish_called_bullish` | integer | yes | no | Of the headlines labelled bullish, those the model calls bullish at 0.5. |
+| `layers.media_recognition.n_bearish_called_bullish` | integer | yes | no | Of the headlines labelled bearish, those the model calls bullish at 0.5. |
+| `layers.media_recognition.true_bullish_rate` | number | yes | yes | `n_bullish_called_bullish` ÷ `n_labelled_bullish`; `null` when there is no headline labelled bullish. |
+| `layers.media_recognition.false_bullish_rate` | number | yes | yes | `n_bearish_called_bullish` ÷ `n_labelled_bearish`; `null` when there is no headline labelled bearish. |
+| `layers.media_recognition.stocktwits_true_bullish_rate` | number | yes | yes | For comparison: the true bullish rate measured on StockTwits test posts, `daily.calibration.true_bullish_rate`. |
+| `layers.media_recognition.stocktwits_false_bullish_rate` | number | yes | yes | For comparison: `daily.calibration.false_bullish_rate`. |
+| `layers.media_recognition.label_bullish_share` | number | yes | yes | Bullish share of the labelled headlines by the readers' labels: `n_labelled_bullish` ÷ (`n_labelled_bullish` + `n_labelled_bearish`); `null` when there are none. |
+| `layers.media_recognition.half_bullish_share` | number | yes | yes | Counted bullish share of the same headlines: (`n_bullish_called_bullish` + `n_bearish_called_bullish`) ÷ (`n_labelled_bullish` + `n_labelled_bearish`); `null` when there are none. |
+| `layers.media_recognition.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated with the StockTwits rates of `daily.calibration`, clipped to [0, 1]; `null` when the status there is not `applied` or the counted share is `null`. The news rates calibrate nothing. |
+
+### validation
+
+Chapter 15: every layer's daily calibrated bullish share (from `daily`) set against two things measured elsewhere, the BTC price and the Crypto Fear and Greed Index of alternative.me, as Spearman rank correlations with the number of days that took part. It describes the past only: no p-value, no test and no forecast. The section carries its own period, every layer's period together, and every layer its own. **No daily price or index value is stored in the brief**: the price sources do not say that their data may be passed on, and the brief is not a price table. An object keyed by `<layer>` has one key per layer of `daily.layers`.
+
+A day d takes part when the layer has a calibrated share that day; it is paired with the index of day d and with the **next day's change**, close of day d + 1 ÷ close of day d − 1 (UTC days). A day missing on either side takes no part.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `validation` | object | yes | no | Chapter 15: the daily shares against the BTC price and the Fear and Greed Index. |
+| `validation.day` | string | yes | no | The unit of every day in this section: `"UTC"`. |
+| `validation.date_from` | string | yes | no | The earliest first day of the layers in `daily`, `YYYY-MM-DD`. |
+| `validation.date_to` | string | yes | no | The latest last day of the layers in `daily`, `YYYY-MM-DD`. |
+| `validation.share` | string | yes | no | Which share is used, and which days take no part, as an English sentence. |
+| `validation.method` | string | yes | no | The correlation used, as an English sentence: Spearman's rank correlation, equal values at their average rank. |
+| `validation.alignment` | string | yes | no | How the days are paired, as an English sentence. |
+| `validation.min_days` | integer | yes | no | `VALIDATION_MIN_DAYS`: with fewer days taking part, a coefficient is `null`. |
+| `validation.price` | object | yes | no | The BTC daily closes: where they come from and which days they cover. |
+| `validation.price.source` | string | yes | no | The source used: `yfinance` (Yahoo Finance, `BTC-USD`), `coinbase` (Coinbase's public daily candles), `stooq` (Stooq's daily CSV), `local_file` (`PRICE_SOURCE` names a file) or `not_obtained`. |
+| `validation.price.address` | string | yes | yes | Where they were read: the source's address, or the local file's path; `null` when not obtained. |
+| `validation.price.reason` | string | yes | yes | Why the prices were not obtained (the reason of every source tried, or that `PRICE_SOURCE` is `"none"`); `null` when they were. |
+| `validation.price.failed` | array | yes | no | The web sources tried before the one used (or all three when none worked), in the order tried; empty when the first one worked, from a local file or with `"none"`. |
+| `validation.price.failed[]` | object | — | no | One source that was tried and gave nothing usable. |
+| `validation.price.failed[].source` | string | yes | no | `yfinance`, `coinbase` or `stooq`. |
+| `validation.price.failed[].reason` | string | yes | no | Why, as reported (for example an HTTP error, a web page instead of data, a request for a key, or missing days). |
+| `validation.price.requested_from` | string | yes | no | The first day needed: `validation.date_from`. |
+| `validation.price.requested_to` | string | yes | no | The last day needed: the day after `validation.date_to`, for the last day's change. |
+| `validation.price.day_boundary` | string | yes | yes | How the source cuts its days, as an English sentence; `null` when not obtained. |
+| `validation.price.fetched_on` | string | yes | yes | The UTC day the closes were fetched from the web, `YYYY-MM-DD` (also when they were read from the cache now); `null` for a local file or when not obtained. |
+| `validation.price.from_cache` | boolean | yes | no | True when this run read the closes from its cache in `WORK_DIR/cache/` and connected to nothing. |
+| `validation.price.date_from` | string | yes | yes | The first day with a close from `requested_from` to `requested_to`; `null` when there is none. |
+| `validation.price.date_to` | string | yes | yes | The last day with a close in that range; `null` when there is none. |
+| `validation.price.n_days` | integer | yes | no | Days with a close in that range (0 when not obtained). |
+| `validation.fear_greed` | object | yes | no | The Crypto Fear and Greed Index: where it comes from and which days it covers. Data from alternative.me, which asks to be named next to its data. |
+| `validation.fear_greed.source` | string | yes | no | `alternative.me` (its public address), `local_file` (`FEAR_GREED_SOURCE` names a file) or `not_obtained`. |
+| `validation.fear_greed.address` | string | yes | yes | The address or the local file's path; `null` when not obtained. |
+| `validation.fear_greed.reason` | string | yes | yes | Why the index was not obtained (or that `FEAR_GREED_SOURCE` is `"none"`); `null` when it was. |
+| `validation.fear_greed.requested_from` | string | yes | no | The first day needed: `validation.date_from`. |
+| `validation.fear_greed.requested_to` | string | yes | no | The last day needed: `validation.date_to`. |
+| `validation.fear_greed.fetched_on` | string | yes | yes | The UTC day the index was fetched from the web; `null` for a local file or when not obtained. |
+| `validation.fear_greed.from_cache` | boolean | yes | no | True when this run read the index from its cache and connected to nothing. |
+| `validation.fear_greed.attribution` | string | yes | no | The source to name next to the index: alternative.me, with the address of its page. |
+| `validation.fear_greed.date_from` | string | yes | yes | The first day with a value from `requested_from` to `requested_to`; `null` when there is none. |
+| `validation.fear_greed.date_to` | string | yes | yes | The last day with a value in that range; `null` when there is none. |
+| `validation.fear_greed.n_days` | integer | yes | no | Days with a value in that range (0 when not obtained). |
+| `validation.layers` | object | yes | no | Every layer of `daily.layers`, keyed by `<layer>`. |
+| `validation.layers.<layer>` | object | — | no | One layer. |
+| `validation.layers.<layer>.date_from` | string | yes | no | The layer's first day, as in `daily`. |
+| `validation.layers.<layer>.date_to` | string | yes | no | The layer's last day, as in `daily`. |
+| `validation.layers.<layer>.n_days_with_share` | integer | yes | no | The layer's days with a calibrated share in `daily`. |
+| `validation.layers.<layer>.fear_greed` | object | yes | no | The share against the index of the same day. |
+| `validation.layers.<layer>.fear_greed.n_days` | integer | yes | no | Days that took part: a share and an index value on the same day. |
+| `validation.layers.<layer>.fear_greed.spearman` | number | yes | yes | Spearman's rank correlation, from −1 to 1; `null` with fewer than `min_days` days or when either side has a single value. |
+| `validation.layers.<layer>.next_day_change` | object | yes | no | The share against the next day's change of the BTC close. |
+| `validation.layers.<layer>.next_day_change.n_days` | integer | yes | no | Days that took part: a share, a close on that day and a close on the next. |
+| `validation.layers.<layer>.next_day_change.spearman` | number | yes | yes | Spearman's rank correlation, from −1 to 1; `null` as above. |
+
 ## Daily results
 
 The StockTwits data has no dates, so the sections computed from it (`dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`) describe the whole data source at once, and `scope.granularity` is `"batch"`. Results per day come from dated data and are added in this way, so that no field of an earlier format changes its name, type or meaning:
 
-1. Results per day go into **sections of their own** (so far `dated_data`, `daily` and `new_words`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
+1. Results per day go into **sections of their own** (so far `dated_data`, `daily`, `new_words`, `layers` and `validation`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
 2. A list of days has one entry per calendar day from the first to the last day of its period, sorted by date, each with `date` (`YYYY-MM-DD`) and the section's counts for that day; a day without posts is still listed, with counts of 0 (and `null` for a share that cannot be computed).
 3. The sections computed from the StockTwits data stay results for the whole data source; they get no `days`.
 4. `scope.granularity` stays `"batch"` for such a brief, which is half whole-batch and half per day. `"daily"` is kept for a later brief whose every section is computed per day (for example from comments collected day by day); it is not allowed in the current format.
@@ -1142,6 +1250,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | 1.3 | Chapter 11 learns eight crypto emotions and `none` from silver labels (a pre-label file), evaluates two networks against two baselines and gives every topic post an emotion, overall and per drawer, with example posts and an interface for a person's review. New: the top-level section `emotions`. Additions only: no field of 1.2 changed. |
 | 1.4 | Chapter 12 reads two public datasets with dates, tweets as the `retail` layer and news headlines as the `media` layer, into one dated post table, and counts its posts per layer and UTC day. New: the top-level section `dated_data`, which carries its own period (`date_from`, `date_to`, per layer as well). `scope.granularity` stays `"batch"`; the rules for results per day are rewritten in [Daily results](#daily-results). Additions only: no field of 1.3 changed. |
 | 1.5 | Chapter 13 cleans and scores every dated post (bullish share at 0.5 and calibrated, emotion, drawers) and counts it per layer and UTC day, with example posts of chosen days, and finds the new words of every layer and day. New: the top-level sections `daily` and `new_words`, each carrying its own period like `dated_data`. The format check also refuses a day outside its layer's period. Additions only: no field of 1.4 changed. |
+| 1.6 | Chapter 14 puts the media and the retail layer side by side on the days both cover and lists the days they lean opposite ways, and measures the sentiment model on the news headlines with a reader label; chapter 15 sets every layer's daily share against the BTC daily closes and the Fear and Greed Index of alternative.me as Spearman rank correlations, with where the data came from. New: the top-level sections `layers` and `validation`, each carrying its own period. Additions only: no field of 1.5 changed. |
 
 ## Reading a brief
 

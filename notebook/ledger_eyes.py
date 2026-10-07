@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 Dated data · 13 Day by day · 14 The brief: format, check, save and panel.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 Dated data · 13 Day by day · 14 Two layers · 15 Against the market · 16 The brief: format, check, save and panel.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 带时间的数据 · 13 按天看 · 14 简报：格式、校验、保存和面板。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 带时间的数据 · 13 按天看 · 14 两层 · 15 和行情对照 · 16 简报：格式、校验、保存和面板。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -261,18 +261,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 14 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions`, `dated_data`, `daily` and `new_words`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 14 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 16 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions`, `dated_data`, `daily`, `new_words`, `layers` and `validation`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 16 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 14 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`、`daily`、`new_words`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 14 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 16 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`、`daily`、`new_words`、`layers`、`validation`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 16 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.5",  # the format of chapter 14's rules (docs/brief-format.md in the repository)
+    "format_version": "1.6",  # the format of chapter 16's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -289,6 +289,8 @@ brief = {
     "dated_data": None,  # chapter 12
     "daily": None,  # chapter 13
     "new_words": None,  # chapter 13
+    "layers": None,  # chapter 14
+    "validation": None,  # chapter 15
 }
 list(brief)  # show the top-level fields
 
@@ -5190,7 +5192,763 @@ for item in event_items:
                 print(f"    [{side} {quote['bullish_probability']:.2f}] {quote['text']}")
 
 # %% [markdown]
-# ## 14. The brief: format, check, save and panel
+# ## 14. Two layers: the media and the retail mood side by side
+#
+# Chapter 13 gave every layer a calibrated bullish share for every UTC day. This chapter puts the two layers that have data next to each other: the **media** layer (news headlines) and the **retail** layer (tweets). It has two parts:
+#
+# 1. **Side by side.** On the days that both layers cover, the two calibrated shares of every day in one table and one chart, and the days on which the two layers **lean opposite ways**: one bullish, the other bearish.
+# 2. **The model on news headlines.** The news carry a label made from reader votes. That makes it possible to measure, for once, how well the sentiment model of chapters 4 to 8 recognises bullish and bearish texts that are not StockTwits posts.
+#
+# The results go into the brief's `layers` section, which carries its own period; `scope` still says `"batch"`. The chapter only describes: it predicts nothing and gives no advice to buy or sell.
+#
+# ***
+#
+# ## 14. 两层：媒体和散户的情绪并排看
+#
+# 第 13 章给每一层的每个 UTC 日都算了校正后的看多比例。这一章把有数据的两层放在一起看：**媒体层**（新闻标题）和**散户层**（推文）。分两部分：
+#
+# 1. **并排看。** 在两层都覆盖的日子里，把每天两层的校正后比例放进一张表、一张图，并列出两层**唱反调**的日子：一层偏多，另一层偏空。
+# 2. **模型在新闻标题上认得准不准。** 新闻带着由读者投票得出的标签，所以这里难得可以量一下：第 4～8 章的多空模型，遇到不是 StockTwits 帖子的文字，认出看多、看空的本事怎么样。
+#
+# 结果写进简报的 `layers` 一节，这一节自带时段；`scope` 仍写 `"batch"`。这一章只陈述：不预测任何东西，也不给任何买卖建议。
+
+# %% [markdown]
+# ### Side by side, day by day
+#
+# - **The days compared.** Only the days that both layers cover: from the later of the two first days to the earlier of the two last days (with the default switches the tweets end in mid-2023, so the comparison ends there too). When the two periods do not meet, or a layer has no posts at all (the date switches of chapter 12 can do that), the period is `null`, there are no days and every count is 0; it is not an error.
+# - **The share.** The calibrated bullish share of chapter 13, copied as it is. A day that chapter 13 marked as having too few posts, or whose calibrated share is `null`, takes no part in any comparison.
+# - **Leaning.** On a day that takes part, a layer **leans bullish** when its calibrated share is at least 0.5 + `LAYER_GAP`, **leans bearish** when it is at most 0.5 − `LAYER_GAP`, and leans neither way in between. Why the default 0.1: a lean should be more than chance, and 0.1 is about the chance error of a share of 100 posts (2 × √(0.5 × 0.5 / 100) = 0.1), the bar `DAILY_MIN_POSTS` already uses.
+# - **Opposite.** The two layers **lean opposite ways** on a day when one leans bullish and the other bearish. When either layer takes no part that day, the question is not asked (`null`).
+# - **Why 0.5 as the middle, not each layer's own average.** It is simple and easy to explain. The two averages may well differ anyway: news headlines and tweets are written in a different tone, so a layer that is always a little more bullish than the other can make days look opposite partly because of its tone. Read the list of opposite days with that in mind.
+#
+# **The media layer is thin.** With the default switches the news have a few headlines a day, so with `DAILY_MIN_POSTS = 100` almost every media day is marked too few in chapter 13 and takes no part. Then there are few or no days on which both layers take part. A smaller `DAILY_MIN_POSTS` lets more media days take part, at the price of larger chance errors.
+#
+# ***
+#
+# ### 按天并排看
+#
+# - **比哪些天。** 只比两层都覆盖的日子：从两层第一天里晚的那个，到两层最后一天里早的那个（按默认开关，推文到 2023 年年中结束，所以比较也到那里为止）。两层的时段碰不到一起，或者某一层一条帖子都没有（第 12 章的起止日期开关一改就可能这样）时，时段写 `null`，没有日子，所有天数都是 0；这不算出错。
+# - **用哪个比例。** 第 13 章的校正后看多比例，原样照抄。第 13 章标了「不够」的日子，或者校正后比例是 `null` 的日子，不参加任何比较。
+# - **偏多、偏空。** 在参加比较的日子里，一层的校正后比例不低于 0.5 + `LAYER_GAP` 算**偏多**，不高于 0.5 − `LAYER_GAP` 算**偏空**，夹在中间算两头都不偏。默认 0.1 的理由：偏要偏得比偶然多，而 100 条帖子的比例光靠偶然就可能差 0.1 左右（2 × √(0.5 × 0.5 / 100) = 0.1），`DAILY_MIN_POSTS` 用的也是这条线。
+# - **唱反调。** 某一天一层偏多、另一层偏空，就是两层在**唱反调**。那天只要有一层不参加，就不判（写 `null`）。
+# - **为什么拿 0.5 当中线，不拿各层自己的平均。** 简单，讲得清。两层的平均本来就可能不一样：新闻标题和推文的口气不同，一层要是总比另一层偏多一点，有些日子看起来唱反调，一部分原因只是口气不同。看唱反调的日子时要记得这一点。
+#
+# **媒体层很薄。** 按默认开关，新闻每天只有几条标题，`DAILY_MIN_POSTS = 100` 时，媒体层几乎每一天在第 13 章都标了「不够」，不参加比较。这样两层都参加的日子就很少，甚至一天都没有。把 `DAILY_MIN_POSTS` 调小，能让更多媒体层的日子参加，代价是偶然误差更大。
+
+# %%
+# The two layers side by side on the days both cover: calibrated shares, leans and the days they lean opposite ways.
+LAYER_PAIR = ["media", "retail"]  # the two layers compared, in this order
+LEAN_BULLISH_AT = 0.5 + LAYER_GAP  # a calibrated share at or above this leans bullish
+LEAN_BEARISH_AT = 0.5 - LAYER_GAP  # a calibrated share at or below this leans bearish
+
+
+def lean(share):
+    """'bullish', 'bearish' or 'neither' for a calibrated share; None for a day that takes no part (share None)."""
+    if share is None:
+        return None
+    if share >= LEAN_BULLISH_AT:
+        return "bullish"
+    return "bearish" if share <= LEAN_BEARISH_AT else "neither"
+
+
+def opposite(shares):
+    """True when one layer leans bullish and the other bearish; None when a layer takes no part that day."""
+    leans = [lean(share) for share in shares]
+    if None in leans:
+        return None
+    return sorted(leans) == ["bearish", "bullish"]
+
+
+both_layers = all(layer in daily_layers for layer in LAYER_PAIR)
+overlap_from = max(daily_layers[layer]["date_from"] for layer in LAYER_PAIR) if both_layers else None
+overlap_to = min(daily_layers[layer]["date_to"] for layer in LAYER_PAIR) if both_layers else None
+if overlap_from is not None and overlap_from > overlap_to:  # the two periods do not meet
+    overlap_from = overlap_to = None
+overlap_days = [] if overlap_from is None else list(pd.date_range(overlap_from, overlap_to, freq="D").strftime("%Y-%m-%d"))
+day_shares = {layer: {day["date"]: day["calibrated_bullish_share"] for day in record["days"]}
+              for layer, record in daily_layers.items()}  # chapter 13's calibrated shares, None where too few
+layer_days = []
+for day in overlap_days:
+    shares = {layer: day_shares[layer][day] for layer in LAYER_PAIR}
+    layer_days.append({"date": day, "calibrated_bullish_share": shares, "opposite": opposite(list(shares.values()))})
+opposite_dates = [day["date"] for day in layer_days if day["opposite"]]
+brief["layers"] = {
+    "compared": list(LAYER_PAIR),
+    "share": "calibrated_bullish_share of the daily section; a day marked too_few_posts there, or whose calibrated "
+             "share is null, takes no part",
+    "date_from": overlap_from,
+    "date_to": overlap_to,
+    "gap": LAYER_GAP,
+    "bullish_at_or_above": LEAN_BULLISH_AT,
+    "bearish_at_or_below": LEAN_BEARISH_AT,
+    "opposite_rule": "a layer leans bullish at or above bullish_at_or_above and bearish at or below bearish_at_or_below; "
+                     "the two layers lean opposite ways when one leans bullish and the other bearish; null when a layer "
+                     "takes no part that day",
+    "n_days": len(layer_days),
+    "n_days_with_share": {layer: sum(day["calibrated_bullish_share"][layer] is not None for day in layer_days)
+                          for layer in LAYER_PAIR},
+    "n_days_both": sum(day["opposite"] is not None for day in layer_days),
+    "n_days_opposite": len(opposite_dates),
+    "opposite_dates": opposite_dates,
+    "days": layer_days,
+}
+print(f"Days both layers cover: {overlap_from or '—'} to {overlap_to or '—'} ({len(layer_days):,} days); days with a "
+      "share: " + ", ".join(f"{layer} {count:,}" for layer, count in brief["layers"]["n_days_with_share"].items())
+      + f"; both take part on {brief['layers']['n_days_both']:,} days; opposite on {len(opposite_dates):,} days "
+      f"(leaning bullish at or above {LEAN_BULLISH_AT:.2f}, bearish at or below {LEAN_BEARISH_AT:.2f})")
+pd.DataFrame([{"date": day["date"], **{f"{layer} calibrated": round(day["calibrated_bullish_share"][layer], 3)
+                                       for layer in LAYER_PAIR}}
+              for day in layer_days if day["opposite"]], columns=["date"] + [f"{layer} calibrated" for layer in LAYER_PAIR])
+
+# %% [markdown]
+# ### The two layers as a chart
+#
+# The calibrated bullish share of both layers on the days both cover, one point per day that takes part (a gap where a layer has too few posts). The dashed lines are the two lean bars, 0.5 ± `LAYER_GAP`; a red band marks every day on which the two layers lean opposite ways.
+#
+# ***
+#
+# ### 两层画成图
+#
+# 两层都覆盖的日子里，两层的校正后看多比例，每个参加比较的日子一个点（某层那天「不够」就空着）。两条虚线是偏多、偏空的两道线，即 0.5 ± `LAYER_GAP`；两层唱反调的日子用红色竖条标出来。
+
+# %%
+# The calibrated bullish share of both layers per UTC day; the days they lean opposite ways in red.
+if not layer_days:
+    print("The two layers have no day in common, so there is nothing to draw.")
+else:
+    dates = pd.to_datetime([day["date"] for day in layer_days])
+    figure, axis = plt.subplots(figsize=(11, 3.5))
+    for layer, color in zip(LAYER_PAIR, ["tab:purple", "tab:green"]):
+        values = [np.nan if day["calibrated_bullish_share"][layer] is None else day["calibrated_bullish_share"][layer]
+                  for day in layer_days]
+        axis.plot(dates, values, linewidth=0.8, marker="o", markersize=2, color=color,
+                  label=f"{layer} ({brief['layers']['n_days_with_share'][layer]:,} days with a share)")
+    for day in opposite_dates:
+        axis.axvline(pd.Timestamp(day), color="tab:red", alpha=0.3, linewidth=1.5)
+    axis.plot([], [], color="tab:red", alpha=0.3, linewidth=1.5, label=f"opposite ({len(opposite_dates):,} days)")
+    for bar in (LEAN_BULLISH_AT, LEAN_BEARISH_AT):
+        axis.axhline(bar, color="grey", linestyle="--", linewidth=0.8)
+    axis.set_ylim(0, 1)
+    axis.set_ylabel("calibrated bullish share")
+    axis.set_title(f"Media and retail, {overlap_from} to {overlap_to} (UTC days)")
+    axis.legend(loc="upper right", fontsize="small")
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
+# ### The model on news headlines
+#
+# Every news item carries a label made from the votes of CryptoPanic readers (chapter 12; with `NEWS_LABEL = "market_direction"` the dataset's own label, which the dataset's authors made from percentiles of the vote share: the lowest quarter bearish, the highest quarter bullish, the middle half neutral). Neutral news take no part here. The model never learned from a news item, so every headline is new to it.
+#
+# Every scored headline is split at 0.5 by chapter 10's `half_call` (bullish above 0.5, otherwise bearish, exactly 0.5 bearish), read from the score table of chapter 13. The same two recognition rates as in chapter 8, now on the headlines:
+#
+# - **true bullish rate** = headlines labelled bullish and called bullish ÷ headlines labelled bullish;
+# - **false bullish rate** = headlines labelled bearish but called bullish ÷ headlines labelled bearish (`null` when there are none).
+#
+# Next to them stand the two rates measured on StockTwits test posts, which calibrate every share of chapter 13. Then three bullish shares of the same labelled headlines, over the media layer's whole period: by the readers' labels (bullish ÷ (bullish + bearish)), counted (the model's bullish calls ÷ the headlines) and calibrated with the StockTwits rates. If the calibration carried over to news headlines, the calibrated share would be close to the readers' share. The news rates are only reported: they do not calibrate anything.
+#
+# **What this measures.** News headlines, and how readers voted on them. It says nothing about how well the model reads comments, tweets or other writing.
+#
+# ***
+#
+# ### 模型在新闻标题上认得准不准
+#
+# 每条新闻都带着由 CryptoPanic 读者投票得出的标签（第 12 章；`NEWS_LABEL = "market_direction"` 时用数据包自带的标签，数据包作者按票的占比的百分位标：最低的四分之一标看空，最高的四分之一标看多，中间一半标中性）。中性的新闻这里不参加。模型从没拿任何一条新闻训练过，所以每条标题对它来说都是没见过的。
+#
+# 每条打过分的标题，都用第 10 章的 `half_call` 按 0.5 分开（大于 0.5 算看多，否则算看空，正好 0.5 算看空），判断取自第 13 章的打分表。和第 8 章一样的两个认出率，这次在标题上量：
+#
+# - **看多帖被认出的比例** = 标看多又被判看多的标题 ÷ 标看多的标题；
+# - **看空帖被判成看多的比例** = 标看空却被判看多的标题 ÷ 标看空的标题（一条都没有时写 `null`）。
+#
+# 旁边并排放上在 StockTwits 测试帖上量的那两个认出率，第 13 章的每个比例都是拿它们校正的。再给出同一批带标签的标题在媒体层整个时段上的三种看多比例：按读者的标签（看多 ÷（看多 + 看空））、直接数（模型判看多的条数 ÷ 标题条数）、用 StockTwits 的认出率校正后。校正要是搬到新闻标题上也管用，校正后的比例应该接近读者的比例。新闻上量出的认出率只报出来给人看，不拿它校正任何东西。
+#
+# **量的是什么。** 量的是新闻标题，以及读者对新闻的投票。它说明不了模型读评论、推文或别的文字准不准。
+
+# %%
+# The sentiment model on the news headlines that carry a reader label: two recognition rates and three bullish shares.
+is_media = (dated_posts["layer"] == "media").to_numpy()
+media_labels = dated_posts.loc[is_media, "label"]
+labelled_bullish = media_labels.eq(2).fillna(False).to_numpy(dtype=bool)
+labelled_bearish = media_labels.eq(0).fillna(False).to_numpy(dtype=bool)
+called_bullish = (dated_scores.loc[is_media, "half_call"] == "bullish").to_numpy()  # chapter 13's call at 0.5
+n_labelled_bullish, n_labelled_bearish = int(labelled_bullish.sum()), int(labelled_bearish.sum())
+n_bullish_called_bullish = int((labelled_bullish & called_bullish).sum())
+n_bearish_called_bullish = int((labelled_bearish & called_bullish).sum())
+n_labelled = n_labelled_bullish + n_labelled_bearish
+news_counted_share = safe_ratio(n_bullish_called_bullish + n_bearish_called_bullish, n_labelled)
+media_period = daily_layers.get("media", {})
+brief["layers"]["media_recognition"] = {
+    "layer": "media",
+    "date_from": media_period.get("date_from"),
+    "date_to": media_period.get("date_to"),
+    "label_rule": brief["dated_data"]["datasets"]["news"]["label_rule"],
+    "text_column": brief["dated_data"]["datasets"]["news"]["text_column"],
+    "half_rule": "bullish when the probability of bullish is above 0.5, otherwise bearish (exactly 0.5 is bearish)",
+    "n_labelled_bullish": n_labelled_bullish,
+    "n_labelled_bearish": n_labelled_bearish,
+    "n_bullish_called_bullish": n_bullish_called_bullish,
+    "n_bearish_called_bullish": n_bearish_called_bullish,
+    "true_bullish_rate": safe_ratio(n_bullish_called_bullish, n_labelled_bullish),
+    "false_bullish_rate": safe_ratio(n_bearish_called_bullish, n_labelled_bearish),
+    "stocktwits_true_bullish_rate": dated_rates["true_bullish_rate"],
+    "stocktwits_false_bullish_rate": dated_rates["false_bullish_rate"],
+    "label_bullish_share": safe_ratio(n_labelled_bullish, n_labelled),
+    "half_bullish_share": news_counted_share,
+    "calibrated_bullish_share": calibrate_bullish_share(news_counted_share, dated_rates),
+}
+recognition = brief["layers"]["media_recognition"]
+print(f"Media layer {recognition['date_from'] or '—'} to {recognition['date_to'] or '—'}: {n_labelled_bullish:,} headlines "
+      f"labelled bullish, {n_labelled_bearish:,} labelled bearish (label rule {recognition['label_rule']}, text "
+      f"{recognition['text_column']}); neutral ones take no part")
+print(f"Bullish share of these headlines: by the readers' labels {shown_rate(recognition['label_bullish_share'])}, "
+      f"counted at 0.5 {shown_rate(recognition['half_bullish_share'])}, calibrated with the StockTwits rates "
+      f"{shown_rate(recognition['calibrated_bullish_share'])}")
+pd.DataFrame({
+    "news headlines": [shown_rate(recognition["true_bullish_rate"]), shown_rate(recognition["false_bullish_rate"])],
+    "headlines counted": [f"{n_bullish_called_bullish:,} of {n_labelled_bullish:,}",
+                          f"{n_bearish_called_bullish:,} of {n_labelled_bearish:,}"],
+    "StockTwits test posts": [shown_rate(recognition["stocktwits_true_bullish_rate"]),
+                              shown_rate(recognition["stocktwits_false_bullish_rate"])],
+}, index=["true bullish rate", "false bullish rate"])
+
+# %% [markdown]
+# ## 15. Against the market: the BTC price and the Fear and Greed Index
+#
+# The bullish shares of chapter 13 come from a model, so it is worth putting them next to two things measured elsewhere, day by day:
+#
+# - the **BTC price**: every UTC day's change to the next day's close;
+# - the **Crypto Fear and Greed Index** of alternative.me, one value from 0 (extreme fear) to 100 (extreme greed) per day. Its makers combine volatility (25%), market momentum and volume (25%), social media, counted from posts on X (15%), surveys (15%, currently paused), Bitcoin's dominance of the crypto market (10%) and Google search trends (10%). **Data from [alternative.me](https://alternative.me/crypto/fear-and-greed-index/)**, which asks to be named next to its data; every table and chart of this chapter that shows the index says so.
+#
+# For every layer, on its own days, the chapter reports two **Spearman rank correlations**, of its daily calibrated bullish share with the index of the same day and with the next day's price change, and how many days took part. It reports the numbers and nothing more: no p-values, no test, no forecast, no back test, and no advice to buy or sell.
+#
+# **Two limits to keep in mind.**
+#
+# - Research on whether the mood of the crowd can predict prices has found only weak evidence.
+# - The Fear and Greed Index takes 15% of its value from statistics of social media posts, partly the same kind of source as the mood measured here, so a correlation with the index comes out higher than a check against an independent measure would.
+#
+# **The internet.** This is the only chapter that connects to the price sources and to alternative.me, and it needs no key and no account. A source that cannot be reached, asks for a key or an account, or gives no usable data counts as "not obtained": the chapter says why, leaves out what depends on it (its correlations are `null`) and the notebook goes on. Results are cached in `WORK_DIR/cache/`, so a later run with the same days connects to nothing.
+#
+# ***
+#
+# ## 15. 和行情对照：BTC 价格与恐惧贪婪指数
+#
+# 第 13 章的看多比例是模型给的，所以值得按天把它和两样在别处量出来的东西放在一起看：
+#
+# - **BTC 价格**：每个 UTC 日到第二天收盘的涨跌；
+# - alternative.me 的**加密货币恐惧贪婪指数**，每天一个 0（极度恐惧）到 100（极度贪婪）的数。编指数的人把这几样合在一起：波动率（25%）、市场动量和成交量（25%）、社交媒体（X 上帖子的统计，15%）、问卷（15%，目前暂停）、比特币占整个币市的比重（10%）、谷歌搜索趋势（10%）。**数据出自 [alternative.me](https://alternative.me/crypto/fear-and-greed-index/)**，它要求在显示数据的地方注明出处；这一章显示指数的每张表、每张图都写明了。
+#
+# 对每一层，在它自己的日子里，这一章给出两个 **Spearman 秩相关系数**：每天的校正后看多比例和当天指数的相关、和第二天价格涨跌的相关，以及有几天参加。只报这些数：不报 p 值，不做检验，不预测，不回测，也不给任何买卖建议。
+#
+# **要记住的两条局限。**
+#
+# - 「情绪能不能预测价格」，研究给出的结论很弱。
+# - 恐惧贪婪指数有 15% 来自社交媒体上帖子的统计，和这里量的情绪有一部分同源，所以和这个指数的相关，会比和一个独立的量对照时偏高。
+#
+# **联网。** 只有这一章连价格来源和 alternative.me，不要任何钥匙，也不要注册。某个来源连不上、要钥匙或要注册、或者给不出能用的数据，就算「未取得」：这一章写明原因，跳过依赖它的东西（相关系数写 `null`），笔记本接着往下跑。拉到的数据缓存在 `WORK_DIR/cache/`，以后用同样的日子再跑，就什么都不连。
+
+# %% [markdown]
+# ### Reading the web, and the caches
+#
+# The next cell only defines functions; the cells after it use them.
+#
+# - **`web_get(address)`** makes one request with Python's own `urllib`: a timeout of `WEB_TIMEOUT` seconds, no retry and no key. A failure becomes `NotObtained` with the reason.
+# - **The three price sources**, tried in this order when `PRICE_SOURCE = "auto"`:
+#   1. **Yahoo Finance** through the `yfinance` package (`BTC-USD`). Its daily bar runs from 00:00 to 24:00 UTC. If Yahoo answered with a cookie consent page, `yfinance` would accept it on its own; this notebook gives no consent on anyone's behalf, so it switches that off, and such an answer counts as not obtained. `yfinance` keeps its small cookie and time zone files in `WORK_DIR/cache/yfinance/`.
+#   2. **Coinbase**'s public daily candles (`BTC-USD`), at most 300 days per request, so the days are fetched page by page. A candle runs from 00:00 to 24:00 UTC; its close is the last trade of that UTC day.
+#   3. **Stooq**'s daily CSV file of `BTCUSD`. Stooq does not say at what time its day ends.
+#
+#   The first source that has every needed day is used; one that fails, asks for a key or misses a needed day is recorded with its reason, and the next one is tried. When none works, the prices are "not obtained".
+# - **The Fear and Greed Index** comes from alternative.me's public address: the whole history, one value per day, each stamped at 00:00 UTC of its day, which gives its UTC day.
+# - **Local files.** `PRICE_SOURCE` can name a CSV file with the columns `date` and `close` (lines starting with `#` are skipped), and `FEAR_GREED_SOURCE` a JSON file in the shape of alternative.me's reply; the checks use two small files in `samples/` and connect to nothing. A local file that cannot be read stops the notebook with its path. `"none"` reads nothing.
+# - **Caches.** What came from the web is saved in `WORK_DIR/cache/` as Parquet, with where it came from, the day it was fetched and the days it was needed for in the file's metadata: `price-btc-usd-<source>.parquet` and `fear-greed.parquet`. A cache is used only when it covers every day this run needs (and, for the index, comes from the same address); otherwise the data is fetched again and the cache replaced, so a change of the date switches never quietly leaves days out. The `[load]` lines say what was read from where.
+#
+# ***
+#
+# ### 怎么读网上的数据，以及缓存
+#
+# 下一格只定义函数；后面几格用它们。
+#
+# - **`web_get(address)`** 用 Python 自带的 `urllib` 发一次请求：等 `WEB_TIMEOUT` 秒就放弃，不重试，不带钥匙。失败就变成 `NotObtained`，附上原因。
+# - **三个价格来源**，`PRICE_SOURCE = "auto"` 时按这个顺序试：
+#   1. **Yahoo Finance**，经 `yfinance` 包读 `BTC-USD`。它的日线从 UTC 0 点到 24 点。Yahoo 要是回一个 cookie 同意页面，`yfinance` 会自己点同意；这个笔记本不替任何人同意任何东西，所以把这一步关掉，这样的回复算拉不到。`yfinance` 的小 cookie 文件和时区文件放在 `WORK_DIR/cache/yfinance/`。
+#   2. **Coinbase** 的公开日线（`BTC-USD`），一次最多给 300 天，所以一页一页地拉。一根日线从 UTC 0 点到 24 点，收盘价是那个 UTC 日最后一笔成交。
+#   3. **Stooq** 的 `BTCUSD` 日线 CSV 文件。Stooq 没有说它的一天在几点结束。
+#
+#   哪个来源先给齐要用的每一天，就用哪个；失败、要钥匙或缺了要用的日子的来源，记下原因，再试下一个。都不行，价格就是「未取得」。
+# - **恐惧贪婪指数**从 alternative.me 的公开地址拉：全部历史，每天一个数，每个数都带着它那一天 UTC 0 点的时间戳，由此得到它的 UTC 日。
+# - **本地文件。** `PRICE_SOURCE` 可以指向一个有 `date`、`close` 两列的 CSV 文件（`#` 开头的行跳过），`FEAR_GREED_SOURCE` 可以指向一个和 alternative.me 回复同样形状的 JSON 文件；检查命令用的就是 `samples/` 里的两个小文件，什么都不连。本地文件读不出来，笔记本停下并报出路径。`"none"` 什么都不读。
+# - **缓存。** 从网上拉到的数据存成 Parquet 放在 `WORK_DIR/cache/`，从哪拉的、哪天拉的、当时要的是哪段日子，都写在文件的元数据里：`price-btc-usd-<来源>.parquet` 和 `fear-greed.parquet`。只有缓存覆盖得到这次要用的每一天（指数还要求地址相同）才用它；否则重拉并替换缓存，所以改了起止日期开关，也不会悄悄少算天数。`[load]` 开头的行说明读了什么、从哪读的。
+
+# %%
+# Functions for chapter 15: web requests, the three price sources, the index, local files and the caches.
+import io  # standard library: a text read as a file, for the CSV reader
+import json  # standard library: JSON replies and cache metadata
+import re  # standard library: regular expressions
+import time  # standard library: timing
+import urllib.error  # standard library: errors of web requests
+import urllib.request  # standard library: web requests (Coinbase, Stooq, alternative.me)
+from datetime import date as calendar_date, datetime, timedelta, timezone  # standard library: UTC days
+from pathlib import Path  # standard library: file paths
+
+import numpy as np  # numbers
+import pandas as pd  # tables
+import pyarrow as pa  # tables with metadata, for the caches
+import pyarrow.parquet as pq  # Parquet files
+
+WEB_TIMEOUT = 30  # seconds to wait for one reply; a request is never repeated
+WEB_HEADERS = {"User-Agent": "ledger-eyes-notebook (public daily data, no key)"}
+PRICE_SOURCES = ["yfinance", "coinbase", "stooq"]  # the order in which PRICE_SOURCE = "auto" tries them
+PRICE_ADDRESSES = {
+    "yfinance": "BTC-USD on Yahoo Finance, through the yfinance package",
+    "coinbase": "https://api.exchange.coinbase.com/products/BTC-USD/candles",
+    "stooq": "https://stooq.com/q/d/l/?s=btcusd&i=d",
+}
+PRICE_DAY_BOUNDARIES = {
+    "yfinance": "Yahoo Finance's daily bar of BTC-USD runs from 00:00 to 24:00 UTC; its close is the last price of that UTC day",
+    "coinbase": "Coinbase's daily candle of BTC-USD runs from 00:00 to 24:00 UTC; its close is the last trade of that UTC day",
+    "stooq": "Stooq's daily bar of BTCUSD as written in its CSV file; Stooq does not say at what time its day ends",
+    "local_file": "as written in the local file; every date is taken as a UTC day",
+}
+COINBASE_PAGE_DAYS = 300  # Coinbase gives at most 300 daily candles per request
+FEAR_GREED_ATTRIBUTION = "Crypto Fear and Greed Index, data from alternative.me (https://alternative.me/crypto/fear-and-greed-index/)"
+KEY_WORDS = re.compile(r"api[\s_-]?key", flags=re.IGNORECASE)  # a reply that asks for a key
+
+
+class NotObtained(Exception):
+    """A web source gave no usable data; the message says why."""
+
+
+def web_get(address):
+    """The body of one GET request: a timeout, no retry, no key. NotObtained when it fails."""
+    request = urllib.request.Request(address, headers=WEB_HEADERS)
+    try:
+        with urllib.request.urlopen(request, timeout=WEB_TIMEOUT) as reply:
+            return reply.read()
+    except urllib.error.HTTPError as error:
+        refused = " (refused; it may want an account or a key)" if error.code in (401, 403) else ""
+        raise NotObtained(f"HTTP {error.code} {error.reason}{refused}") from None
+    except OSError as error:  # no connection, a name that cannot be looked up, a timeout
+        raise NotObtained(f"no reply: {getattr(error, 'reason', error)}") from None
+
+
+def is_day(value):
+    """True for a real day written YYYY-MM-DD."""
+    try:
+        return isinstance(value, str) and calendar_date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def utc_day(seconds):
+    """The UTC day YYYY-MM-DD of a Unix time in seconds."""
+    return datetime.fromtimestamp(int(seconds), timezone.utc).strftime("%Y-%m-%d")
+
+
+def closes_from_coinbase(replies):
+    """Daily closes from Coinbase's replies: lists of [time, low, high, open, close, volume], time at 00:00 UTC."""
+    closes = {}
+    for body in replies:
+        try:
+            candles = json.loads(body)
+        except ValueError:
+            raise NotObtained("the reply is not JSON") from None
+        if not isinstance(candles, list):
+            raise NotObtained(f"the reply is not a list of candles: {str(candles)[:120]}")
+        for candle in candles:
+            closes[utc_day(candle[0])] = float(candle[4])
+    return pd.Series(closes, dtype="float64").sort_index()
+
+
+def closes_from_stooq(text):
+    """Daily closes from Stooq's CSV text (Date, Open, High, Low, Close, Volume)."""
+    if text.lstrip().startswith("<"):
+        script = " that wants the browser to run JavaScript" if "javascript" in text.lower() else ""
+        raise NotObtained(f"the reply is a web page{script}, not a CSV file")
+    if KEY_WORDS.search(text):
+        raise NotObtained("the reply asks for a key")
+    try:
+        table = pd.read_csv(io.StringIO(text))
+    except ValueError:
+        raise NotObtained("the reply cannot be read as CSV") from None
+    if not {"Date", "Close"} <= set(table.columns):
+        raise NotObtained(f"the CSV has no Date and Close columns: {text[:80]!r}")
+    return pd.Series(table["Close"].astype("float64").to_numpy(), index=table["Date"].astype(str).tolist()).sort_index()
+
+
+def fear_greed_from_json(text):
+    """The index per UTC day from text in the shape of alternative.me's reply; ValueError when the shape is wrong."""
+    content = json.loads(text)
+    error = (content.get("metadata") or {}).get("error")
+    if error:
+        raise ValueError(f"the reply reports an error: {error}")
+    values = {utc_day(item["timestamp"]): int(item["value"]) for item in content["data"]}
+    return pd.Series(values, dtype="int64").sort_index()
+
+
+def fetch_yfinance(first, last):
+    """BTC-USD daily closes from Yahoo Finance through yfinance, first to last (dates); no consent is given."""
+    try:
+        import yfinance  # only imported when it is tried
+        import yfinance.data  # the HTTP session of yfinance
+    except ImportError as error:
+        raise NotObtained(f"yfinance cannot be imported: {error}") from None
+
+    def refuse_consent(*args, **kwargs):
+        raise NotObtained("yfinance would have accepted Yahoo's cookie consent, which this notebook does not do")
+
+    try:
+        for name in ("_get_cookie_csrf", "_accept_consent_form"):  # the two ways yfinance would accept a consent page
+            if hasattr(yfinance.data.YfData, name):
+                setattr(yfinance.data.YfData, name, refuse_consent)
+        yfinance.set_tz_cache_location(str(Path(WORK_DIR) / "cache" / "yfinance"))  # not in the home folder
+        settings = getattr(yfinance, "config", None)  # older versions have no such object
+        if settings is not None:
+            settings.network.retries = 0  # no retry
+            settings.debug.hide_exceptions = False  # an error comes back as an error, not as an empty table
+        table = yfinance.Ticker("BTC-USD").history(start=first.isoformat(), end=(last + timedelta(days=1)).isoformat(),
+                                                  interval="1d", auto_adjust=False, actions=False, timeout=WEB_TIMEOUT)
+    except NotObtained:
+        raise
+    except Exception as error:  # yfinance raises many kinds of errors
+        raise NotObtained(f"{type(error).__name__}: {str(error)[:200]}") from None
+    if table.empty:
+        raise NotObtained("yfinance gave an empty table")
+    days = table.index.tz_convert("UTC").strftime("%Y-%m-%d")
+    return pd.Series(table["Close"].astype("float64").to_numpy(), index=list(days)).sort_index()
+
+
+def fetch_coinbase(first, last):
+    """BTC-USD daily closes from Coinbase's public daily candles, first to last, COINBASE_PAGE_DAYS days a request."""
+    replies, page_first = [], first
+    while page_first <= last:
+        page_last = min(page_first + timedelta(days=COINBASE_PAGE_DAYS - 1), last)
+        replies.append(web_get(f"{PRICE_ADDRESSES['coinbase']}?granularity=86400&start={page_first.isoformat()}T00:00:00Z"
+                               f"&end={page_last.isoformat()}T00:00:00Z"))
+        page_first = page_last + timedelta(days=1)
+        time.sleep(0.2)  # a short pause between pages
+    return closes_from_coinbase(replies)
+
+
+def fetch_stooq(first, last):
+    """BTCUSD daily closes from Stooq's CSV file (all days; the caller keeps the ones it needs)."""
+    return closes_from_stooq(web_get(PRICE_ADDRESSES["stooq"]).decode("utf-8", errors="replace"))
+
+
+PRICE_FETCHERS = {"yfinance": fetch_yfinance, "coinbase": fetch_coinbase, "stooq": fetch_stooq}
+
+
+def read_cache(file):
+    """(daily values, record) of a cache file written by write_cache, or None when there is no such file."""
+    if not file.exists():
+        return None
+    table = pq.read_table(file)
+    frame = table.to_pandas()
+    return pd.Series(frame["value"].to_numpy(), index=frame["date"].tolist()), json.loads(table.schema.metadata[b"ledger_eyes"])
+
+
+def write_cache(file, values, record):
+    """Save daily values (columns date and value) with record in the file's metadata; write first, rename after."""
+    file.parent.mkdir(parents=True, exist_ok=True)
+    table = pa.table({"date": list(values.index), "value": values.to_numpy()})
+    temporary = file.with_suffix(".tmp")
+    pq.write_table(table.replace_schema_metadata({b"ledger_eyes": json.dumps(record).encode("utf-8")}), temporary)
+    temporary.replace(file)
+
+
+def price_cache_file(source):
+    """The cache file of one price source."""
+    return Path(WORK_DIR) / "cache" / f"price-btc-usd-{source}.parquet"
+
+
+def read_local_closes(path):
+    """Daily closes from a local CSV file with the columns date and close; ValueError when it does not fit."""
+    try:
+        table = pd.read_csv(path, comment="#", dtype={"date": str})
+    except (OSError, ValueError) as error:
+        raise ValueError(f"PRICE_SOURCE: cannot read {path}: {error}") from None
+    if list(table.columns) != ["date", "close"]:
+        raise ValueError(f"PRICE_SOURCE: {path} must have exactly the columns date and close, has {list(table.columns)}")
+    closes = pd.to_numeric(table["close"], errors="coerce").to_numpy(dtype="float64")
+    if not table["date"].map(is_day).all() or table["date"].duplicated().any() \
+            or not (np.isfinite(closes) & (closes > 0)).all():
+        raise ValueError(f"PRICE_SOURCE: {path} needs one row per day, dates written YYYY-MM-DD and closes above 0")
+    return pd.Series(closes, index=table["date"].tolist()).sort_index()
+
+
+def btc_closes(first, last):
+    """BTC daily closes for the UTC days first to last as PRICE_SOURCE says, and a record of where they come from."""
+    record = {"source": "not_obtained", "address": None, "reason": None, "failed": [], "requested_from": first,
+              "requested_to": last, "day_boundary": None, "fetched_on": None, "from_cache": False}
+    if PRICE_SOURCE == "none":
+        record["reason"] = 'not read: PRICE_SOURCE is "none"'
+        print("[load] price: not read (PRICE_SOURCE is \"none\")")
+        return None, record
+    if PRICE_SOURCE != "auto":  # a local file
+        closes = read_local_closes(PRICE_SOURCE)
+        record.update(source="local_file", address=PRICE_SOURCE, day_boundary=PRICE_DAY_BOUNDARIES["local_file"])
+        print(f"[load] price: read {len(closes):,} daily closes from the local file {PRICE_SOURCE}")
+        return closes, record
+    for source in PRICE_SOURCES:  # a cache that covers every needed day: no connection at all
+        cached = read_cache(price_cache_file(source))
+        if cached is not None and cached[1]["needed_from"] <= first and cached[1]["needed_to"] >= last:
+            closes, saved = cached
+            record.update(source=source, address=saved["address"], failed=saved["failed"],
+                          day_boundary=PRICE_DAY_BOUNDARIES[source], fetched_on=saved["fetched_on"], from_cache=True)
+            print(f"[load] price: cache hit: read {price_cache_file(source).name} ({source}, fetched on "
+                  f"{saved['fetched_on']} for {saved['needed_from']} to {saved['needed_to']}); no connection")
+            return closes, record
+    for source in PRICE_SOURCES:
+        started = time.perf_counter()
+        try:
+            closes = PRICE_FETCHERS[source](calendar_date.fromisoformat(first), calendar_date.fromisoformat(last))
+            if closes.empty:
+                raise NotObtained("no closes in the reply")
+            if closes.index[0] > first or closes.index[-1] < last:
+                raise NotObtained(f"misses needed days: has {closes.index[0]} to {closes.index[-1]}, needs {first} to {last}")
+        except NotObtained as problem:
+            record["failed"].append({"source": source, "reason": str(problem)})
+            print(f"[load] price: {source} not obtained after {time.perf_counter() - started:.1f} s: {problem}")
+            continue
+        fetched_on = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        write_cache(price_cache_file(source), closes, {"source": source, "address": PRICE_ADDRESSES[source],
+                                                       "failed": record["failed"], "fetched_on": fetched_on,
+                                                       "needed_from": first, "needed_to": last})
+        record.update(source=source, address=PRICE_ADDRESSES[source], day_boundary=PRICE_DAY_BOUNDARIES[source],
+                      fetched_on=fetched_on)
+        print(f"[load] price: fetched {len(closes):,} daily closes from {source} in {time.perf_counter() - started:.1f} s; "
+              f"saved cache {price_cache_file(source).name}")
+        return closes, record
+    record["reason"] = "no source gave every needed day: " + "; ".join(f"{item['source']}: {item['reason']}"
+                                                                         for item in record["failed"])
+    return None, record
+
+
+def fear_greed_index(first, last):
+    """The Fear and Greed Index per UTC day as FEAR_GREED_SOURCE says, and a record of where it comes from."""
+    record = {"source": "not_obtained", "address": None, "reason": None, "requested_from": first, "requested_to": last,
+              "fetched_on": None, "from_cache": False, "attribution": FEAR_GREED_ATTRIBUTION}
+    if FEAR_GREED_SOURCE == "none":
+        record["reason"] = 'not read: FEAR_GREED_SOURCE is "none"'
+        print("[load] fear and greed index: not read (FEAR_GREED_SOURCE is \"none\")")
+        return None, record
+    if "://" not in FEAR_GREED_SOURCE:  # a local file
+        try:
+            values = fear_greed_from_json(Path(FEAR_GREED_SOURCE).read_text(encoding="utf-8"))
+        except OSError as error:
+            raise ValueError(f"FEAR_GREED_SOURCE: cannot read {FEAR_GREED_SOURCE}: {error}") from None
+        except (ValueError, KeyError, TypeError) as error:
+            raise ValueError(f"FEAR_GREED_SOURCE: {FEAR_GREED_SOURCE} is not in the shape of alternative.me's reply: "
+                             f"{error}") from None
+        record.update(source="local_file", address=FEAR_GREED_SOURCE)
+        print(f"[load] fear and greed index: read {len(values):,} days from the local file {FEAR_GREED_SOURCE} "
+              f"({FEAR_GREED_ATTRIBUTION})")
+        return values, record
+    cache_file = Path(WORK_DIR) / "cache" / "fear-greed.parquet"
+    cached = read_cache(cache_file)
+    if cached is not None and cached[1]["address"] == FEAR_GREED_SOURCE and cached[1]["needed_from"] <= first \
+            and cached[1]["needed_to"] >= last:
+        values, saved = cached
+        record.update(source="alternative.me", address=FEAR_GREED_SOURCE, fetched_on=saved["fetched_on"], from_cache=True)
+        print(f"[load] fear and greed index: cache hit: read {cache_file.name} (fetched on {saved['fetched_on']} for "
+              f"{saved['needed_from']} to {saved['needed_to']}); no connection")
+        return values.astype("int64"), record
+    started = time.perf_counter()
+    try:
+        values = fear_greed_from_json(web_get(FEAR_GREED_SOURCE).decode("utf-8", errors="replace"))
+        if values.empty:
+            raise NotObtained("no values in the reply")
+    except NotObtained as problem:
+        record["reason"] = str(problem)
+    except (ValueError, KeyError, TypeError) as error:
+        record["reason"] = f"the reply is not in the expected shape: {error}"
+    if record["reason"] is not None:
+        print(f"[load] fear and greed index: not obtained after {time.perf_counter() - started:.1f} s: {record['reason']}")
+        return None, record
+    fetched_on = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    write_cache(cache_file, values, {"address": FEAR_GREED_SOURCE, "fetched_on": fetched_on, "needed_from": first,
+                                     "needed_to": last})
+    record.update(source="alternative.me", address=FEAR_GREED_SOURCE, fetched_on=fetched_on)
+    print(f"[load] fear and greed index: fetched {len(values):,} days from alternative.me in "
+          f"{time.perf_counter() - started:.1f} s; saved cache {cache_file.name}")
+    return values, record
+
+
+def coverage(values, record):
+    """Add to record the first and last day and the number of days of values within its requested days."""
+    inside = [] if values is None else [day for day in values.index
+                                        if record["requested_from"] <= day <= record["requested_to"]]
+    record.update(date_from=inside[0] if inside else None, date_to=inside[-1] if inside else None, n_days=len(inside))
+    return record
+
+# %% [markdown]
+# ### The BTC daily closes
+#
+# The days needed are every layer's period, from the earliest first day to the latest last day, and one day more, because the change of the last day needs the next day's close. The next cell gets them as `PRICE_SOURCE` says and prints which source was used, which ones were tried and failed (with the reason), and which days the closes cover.
+#
+# ***
+#
+# ### BTC 每天的收盘价
+#
+# 要用的日子是各层的时段，从最早的第一天到最晚的最后一天，再多一天，因为最后一天的涨跌要用第二天的收盘价。下一格按 `PRICE_SOURCE` 拿到这些收盘价，并打印用了哪个来源、试过哪些没成（附原因）、收盘价覆盖哪段日子。
+
+# %%
+# BTC daily closes for every layer's period and one day more (for the last day's change).
+validation_from = min(record["date_from"] for record in daily_layers.values())  # every layer's period together
+validation_to = max(record["date_to"] for record in daily_layers.values())
+price_to = (calendar_date.fromisoformat(validation_to) + timedelta(days=1)).isoformat()
+btc_close, price_record = btc_closes(validation_from, price_to)
+price_record = coverage(btc_close, price_record)
+for item in price_record["failed"]:
+    print(f"Tried and not obtained: {item['source']}: {item['reason']}")
+if btc_close is None:
+    print(f"BTC daily closes: not obtained ({price_record['reason']}); the price correlations are left out")
+else:
+    print(f"BTC daily closes from {price_record['source']} ({price_record['address']}): {price_record['n_days']:,} days "
+          f"from {price_record['date_from']} to {price_record['date_to']} (needed {validation_from} to {price_to}); "
+          f"day: {price_record['day_boundary']}" + (f"; fetched on {price_record['fetched_on']}"
+                                                     if price_record["fetched_on"] else ""))
+
+# %% [markdown]
+# ### The Fear and Greed Index
+#
+# The index for every layer's period, from the earliest first day to the latest last day, as `FEAR_GREED_SOURCE` says. alternative.me misses a few days of its history; such a day simply takes no part.
+#
+# ***
+#
+# ### 恐惧贪婪指数
+#
+# 按 `FEAR_GREED_SOURCE` 拿到各层时段（从最早的第一天到最晚的最后一天）的指数。alternative.me 的历史里缺几天；缺的那天就不参加。
+
+# %%
+# The Fear and Greed Index for every layer's period (data from alternative.me).
+fear_greed, fear_greed_record = fear_greed_index(validation_from, validation_to)
+fear_greed_record = coverage(fear_greed, fear_greed_record)
+if fear_greed is None:
+    print(f"Fear and Greed Index: not obtained ({fear_greed_record['reason']}); the index correlations are left out")
+else:
+    print(f"Fear and Greed Index ({fear_greed_record['source']}, {fear_greed_record['address']}): "
+          f"{fear_greed_record['n_days']:,} days from {fear_greed_record['date_from']} to {fear_greed_record['date_to']} "
+          f"(needed {validation_from} to {validation_to})" + (f"; fetched on {fear_greed_record['fetched_on']}"
+                                                              if fear_greed_record["fetched_on"] else ""))
+    print(f"Source: {FEAR_GREED_ATTRIBUTION}")
+
+# %% [markdown]
+# ### Rank correlations, layer by layer
+#
+# For every layer, on its own days (its period from chapter 12), the days that take part are those with a calibrated bullish share in chapter 13. They are paired, all in UTC days:
+#
+# - with the **index of the same day** d;
+# - with the **next day's change** of day d: close of day d + 1 ÷ close of day d − 1.
+#
+# A day missing on either side takes no part. **Spearman's rank correlation** ranks both columns (equal values get their average rank, as in pandas and SciPy) and correlates the ranks: +1 when the two always rise together, −1 when one always falls as the other rises, near 0 when the order of one says nothing about the other. Only the number of days and the coefficient are reported. The coefficient is `null` with fewer than `VALIDATION_MIN_DAYS` days (default 30: with n days a correlation of 0 comes out by chance at about ±2 ÷ √(n − 1), about ±0.37 with 30 days) or when either column has a single value. The calibration of chapter 13 changes every share by the same rising rule, so the ranks, and with them the coefficients, are almost the same with the counted shares; the calibration only clips some shares to 0 or 1, which makes equal values.
+#
+# Remember the two limits above: the research gives weak evidence that mood predicts prices, and 15% of the index comes from social media statistics, so the correlation with the index comes out higher than with an independent measure. These numbers describe the past; they are no forecast and no advice to buy or sell.
+#
+# ***
+#
+# ### 按层算秩相关
+#
+# 对每一层，在它自己的日子里（第 12 章给出的时段），参加的是第 13 章里有校正后看多比例的日子。它们按 UTC 日配对：
+#
+# - 和**当天**（第 d 天）的指数配；
+# - 和第 d 天的**第二天涨跌**配：第 d + 1 天收盘 ÷ 第 d 天收盘 − 1。
+#
+# 哪一边缺了那一天，那天就不参加。**Spearman 秩相关系数**把两列各自排名次（一样大的取名次的平均，和 pandas、SciPy 的做法一样），再算名次之间的相关：两边总是一起涨是 +1，一边涨另一边总是跌是 −1，一边的名次对另一边毫无提示时接近 0。只报参加的天数和系数。天数少于 `VALIDATION_MIN_DAYS`（默认 30：n 天时，本来毫不相关的两列光靠偶然就能算出约 ±2 ÷ √(n − 1) 的系数，30 天约 ±0.37），或者某一列只有一个值时，系数写 `null`。第 13 章的校正对每个比例用的是同一条单调上升的换算，所以名次不变，用直接数的比例算出的系数几乎一样；校正只会把一些比例夹到 0 或 1，造成并列。
+#
+# 记住上面的两条局限：研究表明情绪能不能预测价格的证据很弱；指数有 15% 来自社交媒体的统计，所以和指数的相关会比和独立的量对照时偏高。这些数描述的是过去，不是预测，也不是买卖建议。
+
+# %%
+# Spearman's rank correlation of every layer's daily calibrated share with the index and the next day's change.
+def spearman(pairs):
+    """Spearman's rank correlation of (x, y) pairs, ties at their average rank; None with fewer than
+    VALIDATION_MIN_DAYS pairs or when either side has a single value."""
+    if len(pairs) < VALIDATION_MIN_DAYS:
+        return None
+    frame = pd.DataFrame(pairs, columns=["x", "y"], dtype="float64")
+    if frame["x"].nunique() < 2 or frame["y"].nunique() < 2:
+        return None
+    ranks = frame.rank(method="average")  # equal values share their average rank
+    return max(-1.0, min(1.0, float(np.corrcoef(ranks["x"], ranks["y"])[0, 1])))
+
+
+closes_by_day = {} if btc_close is None else btc_close.to_dict()
+next_day_change = {}  # day d -> close of day d + 1 / close of day d - 1
+for day, close in closes_by_day.items():
+    following = (calendar_date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    if following in closes_by_day:
+        next_day_change[day] = closes_by_day[following] / close - 1
+index_by_day = {} if fear_greed is None else {day: int(value) for day, value in fear_greed.items()}
+validation_layers = {}
+for layer, record in daily_layers.items():
+    shares = {day["date"]: day["calibrated_bullish_share"] for day in record["days"]
+              if day["calibrated_bullish_share"] is not None}
+    with_index = [(share, index_by_day[day]) for day, share in shares.items() if day in index_by_day]
+    with_change = [(share, next_day_change[day]) for day, share in shares.items() if day in next_day_change]
+    validation_layers[layer] = {
+        "date_from": record["date_from"], "date_to": record["date_to"], "n_days_with_share": len(shares),
+        "fear_greed": {"n_days": len(with_index), "spearman": spearman(with_index)},
+        "next_day_change": {"n_days": len(with_change), "spearman": spearman(with_change)},
+    }
+brief["validation"] = {
+    "day": "UTC",
+    "date_from": validation_from,
+    "date_to": validation_to,
+    "share": "calibrated_bullish_share of the daily section; a day with too few posts or a null share takes no part",
+    "method": "Spearman's rank correlation: both columns are ranked (equal values get their average rank) and the ranks "
+              "are correlated; no p-value and no test",
+    "alignment": "the posts of UTC day d against the index of day d, and against the next day's change, close of day d + 1 "
+                 "/ close of day d - 1; a day missing on either side takes no part",
+    "min_days": VALIDATION_MIN_DAYS,
+    "price": price_record,
+    "fear_greed": fear_greed_record,
+    "layers": validation_layers,
+}
+print(f"Price: {price_record['source']}; Fear and Greed Index: {fear_greed_record['source']} ({FEAR_GREED_ATTRIBUTION}); "
+      f"a coefficient needs at least {VALIDATION_MIN_DAYS} days")
+pd.DataFrame({layer: {
+    "days with a share": entry["n_days_with_share"],
+    "vs index: days": entry["fear_greed"]["n_days"],
+    "vs index: Spearman": shown_rate(entry["fear_greed"]["spearman"]),
+    "vs next day's change: days": entry["next_day_change"]["n_days"],
+    "vs next day's change: Spearman": shown_rate(entry["next_day_change"]["spearman"]),
+} for layer, entry in validation_layers.items()}).T
+
+# %% [markdown]
+# ### The shares and the index as a chart
+#
+# For every layer with at least one day that takes part: its daily calibrated bullish share and, on the same scale, the Fear and Greed Index divided by 100. The chart shows the two side by side; it is no forecast. Index data from alternative.me.
+#
+# ***
+#
+# ### 比例和指数画成图
+#
+# 每个至少有一天参加的层一张图：它每天的校正后看多比例，以及同一个刻度上的恐惧贪婪指数（除以 100）。图只是把两样并排放着，不是预测。指数数据出自 alternative.me。
+
+# %%
+# Every layer's daily calibrated share next to the Fear and Greed Index / 100 (index data from alternative.me).
+drawn = [layer for layer, entry in validation_layers.items() if entry["n_days_with_share"] > 0]
+if not drawn:
+    print("No layer has a day with a calibrated share, so there is nothing to draw.")
+else:
+    figure, axes = plt.subplots(len(drawn), 1, figsize=(11, 3 * len(drawn)), squeeze=False)
+    for axis, layer in zip(axes[:, 0], drawn):
+        record = daily_layers[layer]
+        dates = pd.to_datetime([day["date"] for day in record["days"]])
+        values = [np.nan if day["calibrated_bullish_share"] is None else day["calibrated_bullish_share"]
+                  for day in record["days"]]
+        axis.plot(dates, values, linewidth=0.8, color="tab:orange", label=f"{layer}: calibrated bullish share")
+        if index_by_day:
+            index_values = [index_by_day.get(day["date"], np.nan) / 100 for day in record["days"]]
+            axis.plot(dates, index_values, linewidth=0.8, color="tab:grey",
+                      label="Fear and Greed Index / 100 (alternative.me)")
+        axis.set_ylim(0, 1)
+        axis.set_title(f"{layer}, {record['date_from']} to {record['date_to']} (UTC days); index data from alternative.me")
+        axis.legend(loc="upper right", fontsize="small")
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
+# ## 16. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
 #
@@ -5203,7 +5961,7 @@ for item in event_items:
 #
 # ***
 #
-# ## 14. 简报：格式、校验、保存和面板
+# ## 16. 简报：格式、校验、保存和面板
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，分四步：
 #
@@ -5231,14 +5989,14 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.5",
+  "title": "Ledger Eyes brief, format 1.6",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
-               "dated_data", "daily", "new_words"],
+               "dated_data", "daily", "new_words", "layers", "validation"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.5"},
+    "format_version": {"type": "string", "const": "1.6"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -6455,6 +7213,147 @@ BRIEF_SCHEMA_TEXT = r"""{
           }
         }
       }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compared", "share", "date_from", "date_to", "gap", "bullish_at_or_above", "bearish_at_or_below",
+                   "opposite_rule", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite", "opposite_dates", "days",
+                   "media_recognition"],
+      "properties": {
+        "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
+        "share": {"type": "string"},
+        "date_from": {"$ref": "#/$defs/day_or_null"},
+        "date_to": {"$ref": "#/$defs/day_or_null"},
+        "gap": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
+        "bullish_at_or_above": {"$ref": "#/$defs/share"},
+        "bearish_at_or_below": {"$ref": "#/$defs/share"},
+        "opposite_rule": {"type": "string"},
+        "n_days": {"$ref": "#/$defs/count"},
+        "n_days_with_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+        "n_days_both": {"$ref": "#/$defs/count"},
+        "n_days_opposite": {"$ref": "#/$defs/count"},
+        "opposite_dates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "calibrated_bullish_share", "opposite"],
+            "properties": {
+              "date": {"$ref": "#/$defs/day"},
+              "calibrated_bullish_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+              "opposite": {"type": ["boolean", "null"]}
+            }
+          }
+        },
+        "media_recognition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "date_from", "date_to", "label_rule", "text_column", "half_rule", "n_labelled_bullish",
+                       "n_labelled_bearish", "n_bullish_called_bullish", "n_bearish_called_bullish", "true_bullish_rate",
+                       "false_bullish_rate", "stocktwits_true_bullish_rate", "stocktwits_false_bullish_rate",
+                       "label_bullish_share", "half_bullish_share", "calibrated_bullish_share"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "label_rule": {"type": "string", "enum": ["market_direction", "votes"]},
+            "text_column": {"type": "string", "enum": ["title", "text"]},
+            "half_rule": {"type": "string"},
+            "n_labelled_bullish": {"$ref": "#/$defs/count"},
+            "n_labelled_bearish": {"$ref": "#/$defs/count"},
+            "n_bullish_called_bullish": {"$ref": "#/$defs/count"},
+            "n_bearish_called_bullish": {"$ref": "#/$defs/count"},
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "stocktwits_true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "stocktwits_false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers"],
+      "properties": {
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "share": {"type": "string"},
+        "method": {"type": "string"},
+        "alignment": {"type": "string"},
+        "min_days": {"$ref": "#/$defs/positive"},
+        "price": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "address", "reason", "failed", "requested_from", "requested_to", "day_boundary", "fetched_on",
+                       "from_cache", "date_from", "date_to", "n_days"],
+          "properties": {
+            "source": {"type": "string", "enum": ["yfinance", "coinbase", "stooq", "local_file", "not_obtained"]},
+            "address": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]},
+            "failed": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "reason"],
+                "properties": {"source": {"type": "string", "enum": ["yfinance", "coinbase", "stooq"]}, "reason": {"type": "string"}}
+              }
+            },
+            "requested_from": {"$ref": "#/$defs/day"},
+            "requested_to": {"$ref": "#/$defs/day"},
+            "day_boundary": {"type": ["string", "null"]},
+            "fetched_on": {"$ref": "#/$defs/day_or_null"},
+            "from_cache": {"type": "boolean"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"}
+          }
+        },
+        "fear_greed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "address", "reason", "requested_from", "requested_to", "fetched_on", "from_cache", "attribution",
+                       "date_from", "date_to", "n_days"],
+          "properties": {
+            "source": {"type": "string", "enum": ["alternative.me", "local_file", "not_obtained"]},
+            "address": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]},
+            "requested_from": {"$ref": "#/$defs/day"},
+            "requested_to": {"$ref": "#/$defs/day"},
+            "fetched_on": {"$ref": "#/$defs/day_or_null"},
+            "from_cache": {"type": "boolean"},
+            "attribution": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"}
+          }
+        },
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "n_days_with_share", "fear_greed", "next_day_change"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "n_days_with_share": {"$ref": "#/$defs/count"},
+              "fear_greed": {"$ref": "#/$defs/rank_correlation"},
+              "next_day_change": {"$ref": "#/$defs/rank_correlation"}
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -6690,6 +7589,12 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": false,
       "required": ["post_id", "text", "bullish_probability"],
       "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}, "bullish_probability": {"$ref": "#/$defs/share"}}
+    },
+    "rank_correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_days", "spearman"],
+      "properties": {"n_days": {"$ref": "#/$defs/count"}, "spearman": {"type": ["number", "null"], "minimum": -1, "maximum": 1}}
     },
     "new_word": {
       "type": "object",

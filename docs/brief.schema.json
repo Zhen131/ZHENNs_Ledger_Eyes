@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.5",
+  "title": "Ledger Eyes brief, format 1.6",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
-               "dated_data", "daily", "new_words"],
+               "dated_data", "daily", "new_words", "layers", "validation"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.5"},
+    "format_version": {"type": "string", "const": "1.6"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -1224,6 +1224,147 @@
           }
         }
       }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compared", "share", "date_from", "date_to", "gap", "bullish_at_or_above", "bearish_at_or_below",
+                   "opposite_rule", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite", "opposite_dates", "days",
+                   "media_recognition"],
+      "properties": {
+        "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
+        "share": {"type": "string"},
+        "date_from": {"$ref": "#/$defs/day_or_null"},
+        "date_to": {"$ref": "#/$defs/day_or_null"},
+        "gap": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
+        "bullish_at_or_above": {"$ref": "#/$defs/share"},
+        "bearish_at_or_below": {"$ref": "#/$defs/share"},
+        "opposite_rule": {"type": "string"},
+        "n_days": {"$ref": "#/$defs/count"},
+        "n_days_with_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+        "n_days_both": {"$ref": "#/$defs/count"},
+        "n_days_opposite": {"$ref": "#/$defs/count"},
+        "opposite_dates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "calibrated_bullish_share", "opposite"],
+            "properties": {
+              "date": {"$ref": "#/$defs/day"},
+              "calibrated_bullish_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+              "opposite": {"type": ["boolean", "null"]}
+            }
+          }
+        },
+        "media_recognition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "date_from", "date_to", "label_rule", "text_column", "half_rule", "n_labelled_bullish",
+                       "n_labelled_bearish", "n_bullish_called_bullish", "n_bearish_called_bullish", "true_bullish_rate",
+                       "false_bullish_rate", "stocktwits_true_bullish_rate", "stocktwits_false_bullish_rate",
+                       "label_bullish_share", "half_bullish_share", "calibrated_bullish_share"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "label_rule": {"type": "string", "enum": ["market_direction", "votes"]},
+            "text_column": {"type": "string", "enum": ["title", "text"]},
+            "half_rule": {"type": "string"},
+            "n_labelled_bullish": {"$ref": "#/$defs/count"},
+            "n_labelled_bearish": {"$ref": "#/$defs/count"},
+            "n_bullish_called_bullish": {"$ref": "#/$defs/count"},
+            "n_bearish_called_bullish": {"$ref": "#/$defs/count"},
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "stocktwits_true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "stocktwits_false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers"],
+      "properties": {
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "share": {"type": "string"},
+        "method": {"type": "string"},
+        "alignment": {"type": "string"},
+        "min_days": {"$ref": "#/$defs/positive"},
+        "price": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "address", "reason", "failed", "requested_from", "requested_to", "day_boundary", "fetched_on",
+                       "from_cache", "date_from", "date_to", "n_days"],
+          "properties": {
+            "source": {"type": "string", "enum": ["yfinance", "coinbase", "stooq", "local_file", "not_obtained"]},
+            "address": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]},
+            "failed": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "reason"],
+                "properties": {"source": {"type": "string", "enum": ["yfinance", "coinbase", "stooq"]}, "reason": {"type": "string"}}
+              }
+            },
+            "requested_from": {"$ref": "#/$defs/day"},
+            "requested_to": {"$ref": "#/$defs/day"},
+            "day_boundary": {"type": ["string", "null"]},
+            "fetched_on": {"$ref": "#/$defs/day_or_null"},
+            "from_cache": {"type": "boolean"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"}
+          }
+        },
+        "fear_greed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "address", "reason", "requested_from", "requested_to", "fetched_on", "from_cache", "attribution",
+                       "date_from", "date_to", "n_days"],
+          "properties": {
+            "source": {"type": "string", "enum": ["alternative.me", "local_file", "not_obtained"]},
+            "address": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]},
+            "requested_from": {"$ref": "#/$defs/day"},
+            "requested_to": {"$ref": "#/$defs/day"},
+            "fetched_on": {"$ref": "#/$defs/day_or_null"},
+            "from_cache": {"type": "boolean"},
+            "attribution": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"}
+          }
+        },
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "n_days_with_share", "fear_greed", "next_day_change"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "n_days_with_share": {"$ref": "#/$defs/count"},
+              "fear_greed": {"$ref": "#/$defs/rank_correlation"},
+              "next_day_change": {"$ref": "#/$defs/rank_correlation"}
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -1459,6 +1600,12 @@
       "additionalProperties": false,
       "required": ["post_id", "text", "bullish_probability"],
       "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}, "bullish_probability": {"$ref": "#/$defs/share"}}
+    },
+    "rank_correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_days", "spearman"],
+      "properties": {"n_days": {"$ref": "#/$defs/count"}, "spearman": {"type": ["number", "null"], "minimum": -1, "maximum": 1}}
     },
     "new_word": {
       "type": "object",
