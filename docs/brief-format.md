@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.0** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.1** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -21,7 +21,7 @@ How to read the tables:
 | --- | --- |
 | Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>` and `<sheet>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
-| Required | "yes": always present in format 1.0. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
+| Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
 
 The rules allow no other fields: a writer that adds a field without changing the rules (and this document, and the version) produces a brief that does not pass.
@@ -35,7 +35,7 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `dataset` | Every post of the data source; then the working sample drawn from them. | `dataset.n_posts`; `dataset.sample` |
 | `sentiment` | The working sample (with the default switches: posts about all coins, bearish and bullish only, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that mention Bitcoin. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
 | `topics` | The topic post table, taken from every post of the data source, not from the working sample, with all three classes in their natural shares. With the default switches: every post that mentions Bitcoin. | `topics.scope`; `topics.n_posts`; `topics.sampled`; `topics.class_counts` |
-| `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison` |
+| `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -45,11 +45,11 @@ For example, with the default switches `scope.coins` is `"all"`, because the mod
 
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
-| `format_version` | string | yes | no | The format version, `"1.0"` for this document. See [Versions](#versions). |
+| `format_version` | string | yes | no | The format version, the one named at the top of this document. See [Versions](#versions). |
 | `generated_at` | string | yes | no | When the brief was saved: UTC time, ISO 8601, to the second, ending in `Z` (for example `2026-01-31T12:00:00Z`). |
 | `scope` | object | yes | no | What the brief as a whole covers. |
 | `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local spreadsheet. |
-| `scope.granularity` | string | yes | no | `"batch"`: every section describes the whole data source at once. Format 1.0 allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
+| `scope.granularity` | string | yes | no | `"batch"`: every section describes the whole data source at once. The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
 | `scope.coins` | string | yes | no | Which posts the working sample holds: `"all"` (posts about all coins) or `"btc_only"` (only posts that mention Bitcoin). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
 | `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
 
@@ -355,8 +355,24 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.thresholds.bullish_at_or_above` | number | yes | no | At or above this: bullish (`BULLISH_THRESHOLD`). |
 | `why.thresholds.bearish_at_or_below` | number | yes | no | Otherwise, at or below this: bearish (`BEARISH_THRESHOLD`). In between: unsure. |
 | `why.min_topic_posts` | integer | yes | no | Topics with fewer posts are marked `too_few_posts` (`MIN_TOPIC_POSTS`). |
+| `why.min_bullish_bearish_posts` | integer | yes | no | Rows (every topic and `overall`) with fewer bearish + bullish posts by label are marked `too_few_bullish_bearish` (`MIN_BULLISH_BEARISH_POSTS`). |
 | `why.bullish_share` | string | yes | no | Description of the bullish share: bullish ÷ (bullish + bearish), neutral and unsure posts left out. |
 | `why.differences` | string | yes | no | Description of the two differences in percentage points. |
+| `why.calibration` | object | yes | no | How the model's bullish share is counted at 0.5 and calibrated with the recognition rates measured in `sentiment`. |
+| `why.calibration.half_rule` | string | yes | no | Description of the call at 0.5: bullish when the probability of bullish is above 0.5, otherwise bearish (exactly 0.5 is bearish); nothing is unsure. With two classes it gives exactly the labels evaluated in `sentiment`. |
+| `why.calibration.formula` | string | yes | no | Description of the calibration: (`half_bullish_share` − `false_bullish_rate`) ÷ (`true_bullish_rate` − `false_bullish_rate`), clipped to [0, 1]. |
+| `why.calibration.status` | string | yes | no | `"applied"`: the calibrated shares are computed. Otherwise every calibrated share is `null`, because of `"three_classes"` (with three classes, 1 − the bearish recall also counts bearish posts called neutral, so it is not the false bullish rate), `"rates_missing"` (a rate is `null`) or `"rate_gap_too_small"` (`rate_gap` below `min_rate_gap`, or not above 0); checked in this order. |
+| `why.calibration.rates_from` | object | yes | no | The row of `sentiment.evaluation.rows` the rates come from. |
+| `why.calibration.rates_from.model` | string | yes | no | The chosen model, `sentiment.selection.selected`. |
+| `why.calibration.rates_from.subset` | string | yes | no | The test posts that match the posts being counted: `"test_mentions_btc"` when `topics.scope` is `"btc"`, `"all_test"` when it is `"all"`. |
+| `why.calibration.true_bullish_rate` | number | yes | yes | Share of the bullish test posts the model calls bullish: that row's `per_class.2.recall`. `null` with three classes or when the recall is `null`. |
+| `why.calibration.false_bullish_rate` | number | yes | yes | Share of the bearish test posts the model calls bullish: 1 − that row's `per_class.0.recall`. `null` with three classes or when the recall is `null`. |
+| `why.calibration.rate_gap` | number | yes | yes | `true_bullish_rate` − `false_bullish_rate`, from −1 to 1; `null` when either is `null`. Calibration divides by it. |
+| `why.calibration.rate_posts` | object | yes | no | The test posts behind the rates: that row's supports (also with three classes). |
+| `why.calibration.rate_posts.0` | integer | yes | no | Bearish test posts (`per_class.0.support`). |
+| `why.calibration.rate_posts.2` | integer | yes | no | Bullish test posts (`per_class.2.support`). |
+| `why.calibration.min_rate_gap` | number | yes | no | The smallest `rate_gap` that allows a calibration (`MIN_RATE_GAP`). |
+| `why.calibration.n_rate_posts_in_fair_comparison` | integer | yes | no | Of those test posts, the ones that are also in `overall.fair` (counted only). The rates and the fair comparison share these posts, so the calibrated share there is a little optimistic. |
 | `why.fair_comparison` | object | yes | no | The posts on which model and labels are compared fairly: not in the training set, labelled bearish or bullish. |
 | `why.fair_comparison.posts` | string | yes | no | Description of those posts. |
 | `why.fair_comparison.train_ids` | string | yes | no | `"train_post_ids"`. |
@@ -372,12 +388,18 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.overall.label_counts.1` | integer | yes | no | Neutral. |
 | `why.overall.label_counts.2` | integer | yes | no | Bullish. |
 | `why.overall.label_bullish_share` | number | yes | yes | Bullish share by label; `null` when there is no bearish or bullish post. |
+| `why.overall.too_few_bullish_bearish` | boolean | yes | no | Whether its bearish + bullish posts by label are fewer than `min_bullish_bearish_posts`. The mark changes no number. |
 | `why.overall.model_counts` | object | yes | no | The model's calls. |
 | `why.overall.model_counts.bullish` | integer | yes | no | Called bullish. |
 | `why.overall.model_counts.bearish` | integer | yes | no | Called bearish. |
 | `why.overall.model_counts.unsure` | integer | yes | no | Unsure (between the thresholds). |
 | `why.overall.model_bullish_share` | number | yes | yes | Bullish share by model (unsure left out); `null` when nothing was called bullish or bearish. |
 | `why.overall.model_unsure_share` | number | yes | yes | Unsure posts ÷ all posts; `null` when there are no posts. |
+| `why.overall.half_counts` | object | yes | no | The model's calls at 0.5 (see `calibration.half_rule`); they add up to `n_posts`. |
+| `why.overall.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.overall.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.overall.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when there are no posts. Neutral posts are split as well, so it is not comparable with `label_bullish_share`. |
+| `why.overall.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated (see `calibration.formula`); `null` when that is `null` or `calibration.status` is not `"applied"`. It covers neutral posts too; it is compared with the labels only in `fair`. |
 | `why.overall.fair` | object | yes | no | The fair comparison over the whole table. |
 | `why.overall.fair.n_posts` | integer | yes | no | Posts in it. |
 | `why.overall.fair.label_counts` | object | yes | no | Its posts per label (bearish and bullish only). |
@@ -390,6 +412,13 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.overall.fair.model_counts.unsure` | integer | yes | no | Unsure. |
 | `why.overall.fair.model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
 | `why.overall.fair.model_minus_label_pp` | number | yes | yes | Model minus labels, in percentage points (positive: the model is more bullish); `null` when either share is `null`. |
+| `why.overall.fair.half_counts` | object | yes | no | The model's calls at 0.5 on these posts. |
+| `why.overall.fair.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.overall.fair.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.overall.fair.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when the comparison is empty. |
+| `why.overall.fair.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated; `null` when that is `null` or `calibration.status` is not `"applied"`. The model's bullish share to use; `model_bullish_share` (with the thresholds) stays as a comparison. |
+| `why.overall.fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
+| `why.overall.fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
 | `why.topics` | array | yes | no | One row per topic of `topics.topics`, sorted by `label_bullish_share`, highest first, `null` last, ties by topic number. |
 | `why.topics[]` | object | — | no | One topic. |
 | `why.topics[].topic` | integer | yes | no | Topic number, as in `topics.topics[].topic`. |
@@ -401,12 +430,18 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.topics[].label_counts.1` | integer | yes | no | Neutral. |
 | `why.topics[].label_counts.2` | integer | yes | no | Bullish. |
 | `why.topics[].label_bullish_share` | number | yes | yes | Bullish share by label; `null` when the topic has no bearish or bullish post. |
+| `why.topics[].too_few_bullish_bearish` | boolean | yes | no | Whether the topic's bearish + bullish posts by label are fewer than `min_bullish_bearish_posts`. The mark changes no number. |
 | `why.topics[].model_counts` | object | yes | no | The model's calls. |
 | `why.topics[].model_counts.bullish` | integer | yes | no | Called bullish. |
 | `why.topics[].model_counts.bearish` | integer | yes | no | Called bearish. |
 | `why.topics[].model_counts.unsure` | integer | yes | no | Unsure. |
 | `why.topics[].model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
 | `why.topics[].model_unsure_share` | number | yes | yes | Unsure posts ÷ the topic's posts; `null` when the topic has no posts. |
+| `why.topics[].half_counts` | object | yes | no | The model's calls at 0.5 (see `calibration.half_rule`); they add up to `n_posts`. |
+| `why.topics[].half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.topics[].half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.topics[].half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when there are no posts. Neutral posts are split as well, so it is not comparable with `label_bullish_share`. |
+| `why.topics[].calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated (see `calibration.formula`); `null` when that is `null` or `calibration.status` is not `"applied"`. It covers neutral posts too; it is compared with the labels only in `fair`. |
 | `why.topics[].fair` | object | yes | no | The fair comparison inside the topic. |
 | `why.topics[].fair.n_posts` | integer | yes | no | Posts in it. |
 | `why.topics[].fair.label_counts` | object | yes | no | Its posts per label (bearish and bullish only). |
@@ -419,6 +454,13 @@ Chapter 10: which topics lean bullish and which lean bearish, by the dataset's l
 | `why.topics[].fair.model_counts.unsure` | integer | yes | no | Unsure. |
 | `why.topics[].fair.model_bullish_share` | number | yes | yes | Bullish share by model; `null` when nothing was called bullish or bearish. |
 | `why.topics[].fair.model_minus_label_pp` | number | yes | yes | Model minus labels, in percentage points; `null` when either share is `null`. |
+| `why.topics[].fair.half_counts` | object | yes | no | The model's calls at 0.5 on these posts. |
+| `why.topics[].fair.half_counts.bullish` | integer | yes | no | Called bullish at 0.5. |
+| `why.topics[].fair.half_counts.bearish` | integer | yes | no | Called bearish at 0.5. |
+| `why.topics[].fair.half_bullish_share` | number | yes | yes | Bullish share at 0.5; `null` when the comparison is empty. |
+| `why.topics[].fair.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated; `null` when that is `null` or `calibration.status` is not `"applied"`. The model's bullish share to use; `model_bullish_share` (with the thresholds) stays as a comparison. |
+| `why.topics[].fair.half_minus_label_pp` | number | yes | yes | At 0.5 minus labels, in percentage points; `null` when either share is `null`. |
+| `why.topics[].fair.calibrated_minus_label_pp` | number | yes | yes | Calibrated minus labels, in percentage points; `null` when either share is `null`. |
 | `why.topics[].label_vs_overall_pp` | number | yes | yes | The topic's bullish share by label minus that of `overall`, in percentage points (positive: more bullish than all topic posts); `null` when either share is `null`. |
 
 A hand-written example of a fair comparison with no posts, as it appears in a small topic:
@@ -430,20 +472,25 @@ A hand-written example of a fair comparison with no posts, as it appears in a sm
   "label_bullish_share": null,
   "model_counts": {"bullish": 0, "bearish": 0, "unsure": 0},
   "model_bullish_share": null,
-  "model_minus_label_pp": null
+  "model_minus_label_pp": null,
+  "half_counts": {"bullish": 0, "bearish": 0},
+  "half_bullish_share": null,
+  "calibrated_bullish_share": null,
+  "half_minus_label_pp": null,
+  "calibrated_minus_label_pp": null
 }
 ```
 
 ## Daily results
 
-Format 1.0 knows one granularity, `"batch"`: every section describes the whole data source at once. The StockTwits data has no dates, so it cannot say "how was today". Results per day need dated data and come with a later version of the format. They will be added in this way, so that no field of format 1.0 changes its name, type or meaning:
+The current format knows one granularity, `"batch"`: every section describes the whole data source at once. The StockTwits data has no dates, so it cannot say "how was today". Results per day need dated data and come with a later version of the format. They will be added in this way, so that no field of the current format changes its name, type or meaning:
 
 1. `scope.granularity` may then also be `"daily"`, and `scope` gets two new fields, `date_from` and `date_to` (UTC dates, `YYYY-MM-DD`), for the period the brief covers. Every existing field keeps describing the whole period.
 2. A section with results per day gets one new field, `days`: a list with one entry per day of the period, sorted by date. Each entry has `date` (`YYYY-MM-DD`) and the same fields the section uses for the whole period; in `why`, for example, an entry has `overall` and `topics` with exactly the row fields listed above. A day without posts is still listed, with counts of 0 and `null` shares.
 3. Results that do not change from day to day, such as the model's evaluation on the test set, stay where they are and get no `days`.
 4. A brief with granularity `"batch"` never has `days`, `date_from` or `date_to`.
 
-These are additions, so the version goes from 1.0 to 1.1 (see below), together with the new rules and new rows in the tables above.
+These are additions, so MINOR goes up by one (see below), together with the new rules and new rows in the tables above.
 
 ## Versions
 
@@ -457,6 +504,7 @@ These are additions, so the version goes from 1.0 to 1.1 (see below), together w
 | Version | Change |
 | --- | --- |
 | 1.0 | First fixed format. |
+| 1.1 | Chapter 10 counts the model's calls at 0.5 and calibrates the bullish share with the recognition rates of chapter 8, and marks rows with too few bullish or bearish posts. New: `why.min_bullish_bearish_posts` and `why.calibration`; in `why.overall` and every `why.topics[]` row `too_few_bullish_bearish`, `half_counts`, `half_bullish_share` and `calibrated_bullish_share`; in every `fair` block `half_counts`, `half_bullish_share`, `calibrated_bullish_share`, `half_minus_label_pp` and `calibrated_minus_label_pp`. Additions only: no field of 1.0 changed. |
 
 ## Reading a brief
 
@@ -480,7 +528,7 @@ for row in brief["why"]["topics"]:  # most bullish topic first
     print(row["name"], "-" if share is None else f"{share:.1%}")
 ```
 
-To check a brief against the rules (format 1.0 only), with the `jsonschema` package:
+To check a brief against the rules (only a brief of the version the rules describe), with the `jsonschema` package:
 
 ```python
 from jsonschema import Draft202012Validator

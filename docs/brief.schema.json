@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.0",
+  "title": "Ledger Eyes brief, format 1.1",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.0"},
+    "format_version": {"type": "string", "const": "1.1"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -461,8 +461,9 @@
     "why": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts", "bullish_share",
-                   "differences", "fair_comparison", "order", "overall", "topics"],
+      "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts",
+                   "min_bullish_bearish_posts", "bullish_share", "differences", "calibration", "fair_comparison", "order",
+                   "overall", "topics"],
       "properties": {
         "post_table": {"type": "string"},
         "topic_column": {"type": "string"},
@@ -486,8 +487,32 @@
           "properties": {"bullish_at_or_above": {"$ref": "#/$defs/share"}, "bearish_at_or_below": {"$ref": "#/$defs/share"}}
         },
         "min_topic_posts": {"$ref": "#/$defs/positive"},
+        "min_bullish_bearish_posts": {"$ref": "#/$defs/positive"},
         "bullish_share": {"type": "string"},
         "differences": {"type": "string"},
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["half_rule", "formula", "status", "rates_from", "true_bullish_rate", "false_bullish_rate", "rate_gap",
+                       "rate_posts", "min_rate_gap", "n_rate_posts_in_fair_comparison"],
+          "properties": {
+            "half_rule": {"type": "string"},
+            "formula": {"type": "string"},
+            "status": {"type": "string", "enum": ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]},
+            "rates_from": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "subset"],
+              "properties": {"model": {"type": "string"}, "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]}}
+            },
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "rate_gap": {"$ref": "#/$defs/gap_or_null"},
+            "rate_posts": {"$ref": "#/$defs/bearish_bullish_counts"},
+            "min_rate_gap": {"$ref": "#/$defs/share"},
+            "n_rate_posts_in_fair_comparison": {"$ref": "#/$defs/count"}
+          }
+        },
         "fair_comparison": {
           "type": "object",
           "additionalProperties": false,
@@ -506,15 +531,20 @@
         "overall": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share",
-                       "model_unsure_share", "fair"],
+          "required": ["n_posts", "label_counts", "label_bullish_share", "too_few_bullish_bearish", "model_counts",
+                       "model_bullish_share", "model_unsure_share", "half_counts", "half_bullish_share",
+                       "calibrated_bullish_share", "fair"],
           "properties": {
             "n_posts": {"$ref": "#/$defs/count"},
             "label_counts": {"$ref": "#/$defs/label_counts"},
             "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "too_few_bullish_bearish": {"type": "boolean"},
             "model_counts": {"$ref": "#/$defs/model_calls"},
             "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+            "half_counts": {"$ref": "#/$defs/half_calls"},
+            "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "fair": {"$ref": "#/$defs/fair"}
           }
         },
@@ -523,8 +553,9 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["topic", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share", "model_counts",
-                         "model_bullish_share", "model_unsure_share", "fair", "label_vs_overall_pp"],
+            "required": ["topic", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share",
+                         "too_few_bullish_bearish", "model_counts", "model_bullish_share", "model_unsure_share",
+                         "half_counts", "half_bullish_share", "calibrated_bullish_share", "fair", "label_vs_overall_pp"],
             "properties": {
               "topic": {"$ref": "#/$defs/count"},
               "name": {"type": "string"},
@@ -532,9 +563,13 @@
               "n_posts": {"$ref": "#/$defs/count"},
               "label_counts": {"$ref": "#/$defs/label_counts"},
               "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "too_few_bullish_bearish": {"type": "boolean"},
               "model_counts": {"$ref": "#/$defs/model_calls"},
               "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
               "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+              "half_counts": {"$ref": "#/$defs/half_calls"},
+              "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
               "fair": {"$ref": "#/$defs/fair"},
               "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
             }
@@ -551,6 +586,7 @@
     "share": {"type": "number", "minimum": 0, "maximum": 1},
     "share_or_null": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
     "points_or_null": {"type": ["number", "null"], "minimum": -100, "maximum": 100},
+    "gap_or_null": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
     "label": {"type": "string", "enum": ["0", "1", "2"]},
     "labels_in_use": {"type": "array", "minItems": 2, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/label"}},
     "label_counts": {
@@ -589,10 +625,24 @@
       "required": ["bullish", "bearish", "unsure"],
       "properties": {"bullish": {"$ref": "#/$defs/count"}, "bearish": {"$ref": "#/$defs/count"}, "unsure": {"$ref": "#/$defs/count"}}
     },
+    "half_calls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bullish", "bearish"],
+      "properties": {"bullish": {"$ref": "#/$defs/count"}, "bearish": {"$ref": "#/$defs/count"}}
+    },
+    "bearish_bullish_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["0", "2"],
+      "properties": {"0": {"$ref": "#/$defs/count"}, "2": {"$ref": "#/$defs/count"}}
+    },
     "fair": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share", "model_minus_label_pp"],
+      "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share", "model_minus_label_pp",
+                   "half_counts", "half_bullish_share", "calibrated_bullish_share", "half_minus_label_pp",
+                   "calibrated_minus_label_pp"],
       "properties": {
         "n_posts": {"$ref": "#/$defs/count"},
         "label_counts": {
@@ -604,7 +654,12 @@
         "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
         "model_counts": {"$ref": "#/$defs/model_calls"},
         "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
-        "model_minus_label_pp": {"$ref": "#/$defs/points_or_null"}
+        "model_minus_label_pp": {"$ref": "#/$defs/points_or_null"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "half_minus_label_pp": {"$ref": "#/$defs/points_or_null"},
+        "calibrated_minus_label_pp": {"$ref": "#/$defs/points_or_null"}
       }
     }
   }

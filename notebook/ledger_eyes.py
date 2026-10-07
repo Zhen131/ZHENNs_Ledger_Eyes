@@ -162,18 +162,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 11 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics` and `why`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (version 1.0, described field by field in the repository's `docs/brief-format.md`); chapter 11 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 11 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics` and `why`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 11 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 11 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`why`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（版本 1.0，仓库里的 `docs/brief-format.md` 逐个字段写了说明）；第 11 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 11 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`why`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 11 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.0",  # the format of chapter 11's rules (docs/brief-format.md in the repository)
+    "format_version": "1.1",  # the format of chapter 11's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -1974,7 +1974,11 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
 #
 # The row **all** does the same for the whole topic post table and is the baseline.
 #
+# **Counting at 0.5, and calibrating.** The by-model share above counts the model's calls as they are. Because the model finds bullish and bearish posts differently well, a count like that is biased. So every post is also split at 0.5 (bullish when its probability of bullish is above 0.5, bearish otherwise, nothing unsure), and the share counted this way is **calibrated** with the model's recognition rates from chapter 8; the section "Counting at 0.5, and calibrating" below explains how. **From here on, the calibrated share is the model's bullish share to use.** The 0.3 / 0.7 columns stay next to it as a comparison; later they will be used to pick example posts the model is confident about.
+#
 # **Too few posts.** A topic with fewer than `MIN_TOPIC_POSTS` posts is marked: its shares rest on so few posts that chance alone can move them a lot. Why 200 by default: if about half of a topic's posts are neutral, 200 posts leave about 100 bullish or bearish posts, and with 100 posts a bullish share near one half can be off by about 10 percentage points by chance (two standard errors: 2 × √(0.5 × 0.5 / 100) = 0.1). A smaller topic's lean says little. This is a rule of thumb for the default, not a statistical test.
+#
+# **Too few bullish or bearish posts.** A row, the row all included, is also marked when its bearish + bullish posts by label are fewer than `MIN_BULLISH_BEARISH_POSTS`, whatever its total: a bullish share rests on these posts only, and the default 100 is where the 200 above comes from. The mark changes no number. Here the posts are counted by their labels; data without labels (for example comments) can only count the posts the model splits at 0.5, and that is a different number.
 #
 # A share whose denominator is 0 (for example a topic in which the model calls no post bullish or bearish) cannot be computed: it is "—" in the table and `null` in the brief, and so is every difference computed from it.
 #
@@ -1991,7 +1995,11 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
 #
 # **all** 那一行对整张话题帖子表做同样的计算，作为基准。
 #
+# **按 0.5 分，再校正。** 上面按模型的看多比例，是把模型的判断原样数出来。模型认出看多帖和认出看空帖的本事不一样，这样数出来的比例是偏的。所以每条帖子还要再按 0.5 分一次（看多的概率大于 0.5 算看多，否则算看空，没有说不清），按这种分法数出的比例，再用第 8 章量出的两个认出率**校正**回去；怎么校正，见下面「按 0.5 分，再校正」那一节。**从这里开始，模型给出的看多比例以校正后的为准。** 0.3／0.7 那几列留在旁边作对照，以后用来挑模型把握大的例句。
+#
 # **帖子太少。** 帖子数少于 `MIN_TOPIC_POSTS` 的话题会被标出来：它的比例建立在很少几条帖子上，光靠偶然就能变很多。默认为什么是 200：如果一个话题大约一半是中性帖，200 条帖子里大约剩 100 条看多或看空；只有 100 条时，一个接近一半的看多比例，光靠偶然就可能差 10 个百分点左右（两个标准误：2 × √(0.5 × 0.5 / 100) = 0.1）。再小的话题，偏多偏空就说明不了什么。这只是给默认值的经验算法，不是统计检验。
+#
+# **看多看空太少。** 一行（包括 all 那一行）里按标签的「看空 + 看多」条数少于 `MIN_BULLISH_BEARISH_POSTS` 时，不管帖子总数多少，也标出来：看多比例只建立在这些帖子上，默认的 100 正是上面那个 200 的来由。这个标记不改任何数。这里按标签数条数；没有标签的数据（例如评论）只能数模型按 0.5 分出来的条数，那是另一个数。
 #
 # 分母为 0 的比例（例如模型在某个话题里一条看多、看空都没判出来）算不出来：表里显示「—」，简报里写 `null`，由它算出的差值也一样。
 
@@ -2017,17 +2025,18 @@ for topic in topic_table.sort_values("posts", ascending=False, kind="stable").in
 # %% [markdown]
 # ### Scoring the topic posts
 #
-# `sentiment_proba` scores the `clean_text` of every post in `topic_posts`, and the probability of bullish is turned into a call: bullish, bearish or unsure. The calls go into a table of their own, `why_posts` (`post_id`, `label`, `topic`, `bullish_proba`, `model_call`, `seen_in_training`, `in_fair_comparison`), so that `topic_posts` stays as chapter 9 left it. The cell prints how long the scoring took and how many posts got each call.
+# `sentiment_proba` scores the `clean_text` of every post in `topic_posts`, and the probability of bullish is turned into a call: bullish, bearish or unsure with the two thresholds (`model_call`), and bullish or bearish at 0.5 (`half_call`: bullish above 0.5, otherwise bearish). The calls go into a table of their own, `why_posts` (`post_id`, `label`, `topic`, `bullish_proba`, `model_call`, `half_call`, `seen_in_training`, `in_fair_comparison`), so that `topic_posts` stays as chapter 9 left it. The cell prints how long the scoring took and how many posts got each call.
 #
 # ***
 #
 # ### 给话题帖子打分
 #
-# `sentiment_proba` 给 `topic_posts` 里每条帖子的 `clean_text` 打分，「看多的概率」再换成一个判断：看多、看空或说不清。判断放进一张单独的表 `why_posts`（`post_id`、`label`、`topic`、`bullish_proba`、`model_call`、`seen_in_training`、`in_fair_comparison`），`topic_posts` 保持第 9 章留下的样子。这一格打印打分花了多久，以及三种判断各几条。
+# `sentiment_proba` 给 `topic_posts` 里每条帖子的 `clean_text` 打分，「看多的概率」再换成判断：按两个门槛判成看多、看空或说不清（`model_call`），以及按 0.5 分成看多或看空（`half_call`：大于 0.5 算看多，否则算看空）。判断放进一张单独的表 `why_posts`（`post_id`、`label`、`topic`、`bullish_proba`、`model_call`、`half_call`、`seen_in_training`、`in_fair_comparison`），`topic_posts` 保持第 9 章留下的样子。这一格打印打分花了多久，以及各种判断各几条。
 
 # %%
 # Score every topic post with the chosen model and turn its probability of bullish into a call.
 MODEL_CALLS = ["bullish", "bearish", "unsure"]  # the model's calls, in this order everywhere
+HALF_CALLS = ["bullish", "bearish"]  # the calls at 0.5, in this order everywhere
 
 
 def bullish_probability(proba):
@@ -2050,6 +2059,12 @@ def model_call(probability):
                     np.where(probability <= BEARISH_THRESHOLD, "bearish", "unsure"))
 
 
+def half_call(probability):
+    """'bullish' when the probability of bullish is above 0.5, otherwise 'bearish' (exactly 0.5 is bearish)."""
+    probability = np.asarray(probability, dtype="float64")
+    return np.where(probability > 0.5, "bullish", "bearish")
+
+
 scoring_started = time.perf_counter()
 topic_proba = sentiment_proba(topic_posts["clean_text"])  # every topic post, neutral ones included
 scoring_seconds = time.perf_counter() - scoring_started
@@ -2057,11 +2072,128 @@ scoring_seconds = time.perf_counter() - scoring_started
 why_posts = topic_posts[["post_id", "label", "topic"]].copy()  # a table of its own; topic_posts stays unchanged
 why_posts["bullish_proba"] = bullish_probability(topic_proba)
 why_posts["model_call"] = model_call(why_posts["bullish_proba"])
+why_posts["half_call"] = half_call(why_posts["bullish_proba"])  # every post on one side, for calibration
 why_posts["seen_in_training"] = why_posts["post_id"].isin(train_post_ids)  # the models learned these labels
 why_posts["in_fair_comparison"] = ~why_posts["seen_in_training"] & why_posts["label"].isin([0, 2])
 print(f"Scored {len(why_posts):,} topic posts with {selected_model_name} in {scoring_seconds:.1f} s; "
       f"{int(why_posts['seen_in_training'].sum()):,} of them are training posts")
-why_posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0).rename("posts").rename_axis("model call")
+pd.DataFrame({
+    "with the thresholds": why_posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0),
+    "at 0.5": why_posts["half_call"].value_counts().reindex(MODEL_CALLS, fill_value=0),
+}).rename_axis("model call")  # posts per call; nothing is unsure at 0.5
+
+# %% [markdown]
+# ### Counting at 0.5, and calibrating
+#
+# **Why counting the calls is not enough.** The model makes mistakes, and it does not find bullish and bearish posts equally well: chapter 8's table gives its recall for each class. Counting its calls therefore moves the bullish share away from the truth. Suppose a group of posts has a true bullish share *p*; the model finds a share *t* of the bullish posts (the **true bullish rate**: the bullish recall) and calls a share *f* of the bearish posts bullish (the **false bullish rate**: 1 − the bearish recall). Then the share it calls bullish is, on average, *h* = *p* × *t* + (1 − *p*) × *f*. So the counted share always lies between *f* and *t*: a group that is mostly bullish looks less bullish than it is, and a mostly bearish one less bearish. Solving for *p* gives the **calibrated share**:
+#
+# calibrated share = (*h* − *f*) ÷ (*t* − *f*)
+#
+# Chance can push the result a little below 0 or above 1, so it is clipped to the range from 0 to 1.
+#
+# **Why at 0.5.** The formula needs every post on one side, because the two rates were measured with chapter 8's rule, which has no "unsure". So for the calibration every post is split at 0.5 (`half_call`). With two classes this is exactly chapter 8's rule (the class with the higher probability; a tie counts as bearish), and the next cell checks this on the test posts: the labels must be identical, otherwise the notebook stops. With three classes the check covers the test posts that chapter 8 called bearish or bullish. One difference from `model_call` remains on purpose: when both thresholds are set to 0.5, `model_call` counts a probability of exactly 0.5 as bullish, while `half_call` counts it as bearish, because the rates were measured with chapter 8's rule. Each keeps its own rule.
+#
+# **Which rates.** From chapter 8's evaluation table, the row of the chosen model on the test posts that match the posts being counted: with `TOPIC_SCOPE = "btc"` the test posts that mention Bitcoin, with `"all"` all test posts. The model can find bullish and bearish posts differently well on Bitcoin posts than on posts about all coins, so rates from another group of posts would correct in the wrong way. Nothing is trained or evaluated again; the rates are read from the brief.
+#
+# **When the share is not calibrated** (it is then `null` in the brief and "—" in the table): when the share at 0.5 cannot be computed; when a rate cannot be computed (status `rates_missing`); when the gap *t* − *f* is below `MIN_RATE_GAP` or not above 0 (status `rate_gap_too_small`): the formula divides by the gap, so every error of *h* (chance, or rates measured on a few hundred test posts) is multiplied by 1 ÷ gap, and the default 0.2 allows at most a five-fold magnification; and with three classes (status `three_classes`): then 1 − the bearish recall also counts the bearish posts called neutral, so it is no longer the false bullish rate and the formula does not hold.
+#
+# **The test posts count twice.** The rates are measured on test posts, and the test posts that are in the topic post table are also in the fair comparison of the next table. The calibrated share in the fair comparison is therefore a little optimistic. How many posts this concerns is recorded in the brief (`n_rate_posts_in_fair_comparison`); the method is not changed for it.
+#
+# ***
+#
+# ### 按 0.5 分，再校正
+#
+# **为什么不能直接数。** 模型会判错，而且它认出看多帖和认出看空帖的本事不一样：第 8 章的表里有每一类的 recall。所以把它的判断直接数出来，看多比例会偏离真实值。设一堆帖子真实的看多比例是 *p*；模型能认出看多帖里的 *t*（**真看多率**，即看多那一类的 recall），会把看空帖里的 *f* 判成看多（**错看多率**，即 1 − 看空那一类的 recall）。那么它判成看多的比例平均是 *h* = *p* × *t* +（1 − *p*）× *f*。所以数出来的比例总落在 *f* 和 *t* 之间：大多看多的一堆帖子显得没那么看多，大多看空的一堆显得没那么看空。反过来解出 *p*，就是**校正后的比例**：
+#
+# 校正后的比例 =（*h* − *f*）÷（*t* − *f*）
+#
+# 偶然因素会把结果推到略低于 0 或略高于 1，所以最后夹到 0 和 1 之间。
+#
+# **为什么按 0.5 分。** 公式要求每条帖子都落在某一边，因为两个认出率是用第 8 章的判法量出来的，那种判法没有「说不清」。所以校正时每条帖子都按 0.5 分（`half_call`）。两类时这和第 8 章的判法完全相同（取概率高的那一类，相等算看空），下一格会在测试帖上核对：判出的标签必须一模一样，否则笔记本停下。三类时只核第 8 章判成看空或看多的那些测试帖。和 `model_call` 有一处特意保留的不同：两个门槛都设成 0.5 时，`model_call` 把正好 0.5 的算看多，`half_call` 把它算看空，因为认出率是按第 8 章的判法量的。两边各守各的规则。
+#
+# **用哪两个认出率。** 取第 8 章评估表里选中模型的那一行，测试子集和被数的帖子对应：`TOPIC_SCOPE = "btc"` 用提到比特币的测试帖，`"all"` 用全部测试帖。模型在比特币帖子上认出看多、看空的本事，可能和在全部币种的帖子上不一样，用了别的帖子量出的认出率，就会往错的方向校正。这里不重新训练、不重新评估，认出率直接从简报里读。
+#
+# **哪些情况不校正**（校正后的比例在简报里写 `null`，表里显示「—」）：按 0.5 分的比例本身算不出来；某个认出率算不出来（状态 `rates_missing`）；差 *t* − *f* 小于 `MIN_RATE_GAP` 或不大于 0（状态 `rate_gap_too_small`）：公式要除以这个差，所以 *h* 的任何误差（偶然因素，或者认出率本身只是在几百条测试帖上量的）都会被放大「1 ÷ 差」倍，默认的 0.2 最多允许放大五倍；三类时（状态 `three_classes`）：这时「1 − 看空的 recall」里还混着被判成中性的看空帖，不再是错看多率，公式不成立。
+#
+# **测试帖用了两次。** 认出率是在测试帖上量的，而话题帖子表里的测试帖，也在下一张表的公平比较里。所以公平比较里的校正后比例会偏乐观一点。涉及多少条帖子记在简报里（`n_rate_posts_in_fair_comparison`）；算法不为此改动。
+
+# %%
+# The recognition rates from chapter 8, the calibration they allow, and a check of the 0.5 rule on the test posts.
+RATE_SUBSET = {"btc": "test_mentions_btc", "all": "all_test"}[TOPIC_SCOPE]  # test posts matching the topic posts
+CALIBRATION_STATUSES = ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]
+
+
+def finite_or_none(value):
+    """A score from the evaluation table as a float, or None when it could not be computed (None or NaN)."""
+    return None if value is None or not np.isfinite(value) else float(value)
+
+
+# The 0.5 rule must give the labels chapter 8 evaluated for the chosen model (its results are only read here).
+evaluated_labels = np.asarray(test_predictions[selected_model_name])
+half_labels = np.where(half_call(bullish_probability(test_proba)) == "bullish", 2, 0)
+checked = np.ones(len(evaluated_labels), dtype=bool) if N_CLASSES == 2 else np.isin(evaluated_labels, [0, 2])
+n_half_mismatches = int((half_labels[checked] != evaluated_labels[checked]).sum())
+if n_half_mismatches:
+    raise AssertionError(f"the 0.5 rule disagrees with chapter 8's labels on {n_half_mismatches} test posts")
+print(f"The 0.5 rule gives chapter 8's labels on all {int(checked.sum()):,} checked test posts "
+      + ("(every test post)" if N_CLASSES == 2 else "(those chapter 8 called bearish or bullish)"))
+
+# The two rates: true bullish rate = bullish recall, false bullish rate = 1 - bearish recall.
+rate_row = next(row for row in brief["sentiment"]["evaluation"]["rows"]
+                if row["model"] == selected_model_name and row["subset"] == RATE_SUBSET)
+if N_CLASSES == 3:  # 1 - bearish recall would also count bearish posts called neutral
+    true_rate = false_rate = rate_gap = None
+    calibration_status = "three_classes"
+else:
+    true_rate = finite_or_none(rate_row["per_class"]["2"]["recall"])
+    bearish_recall = finite_or_none(rate_row["per_class"]["0"]["recall"])
+    false_rate = None if bearish_recall is None else 1.0 - bearish_recall
+    rate_gap = None if true_rate is None or false_rate is None else true_rate - false_rate
+    if rate_gap is None:
+        calibration_status = "rates_missing"
+    elif rate_gap < MIN_RATE_GAP or rate_gap <= 0:  # a gap of 0 or below never allows a calibration
+        calibration_status = "rate_gap_too_small"
+    else:
+        calibration_status = "applied"
+calibration_rates = {  # what calibrate_bullish_share uses; later chapters may reuse it
+    "status": calibration_status,
+    "model": selected_model_name,
+    "subset": RATE_SUBSET,
+    "true_bullish_rate": true_rate,
+    "false_bullish_rate": false_rate,
+    "rate_gap": rate_gap,
+    "rate_posts": {label: int(rate_row["per_class"][label]["support"]) for label in ("0", "2")},  # bearish, bullish
+}
+
+
+def calibrate_bullish_share(share, rates=None):
+    """(share - false bullish rate) / (true bullish rate - false bullish rate), clipped to [0, 1].
+
+    share is a bullish share counted at 0.5. Returns None when share is None or the status of the rates
+    (calibration_rates unless given) is not 'applied'.
+    """
+    rates = calibration_rates if rates is None else rates
+    if share is None or rates["status"] != "applied":
+        return None
+    calibrated = (share - rates["false_bullish_rate"]) / (rates["true_bullish_rate"] - rates["false_bullish_rate"])
+    return min(1.0, max(0.0, calibrated))
+
+
+# Recorded only: test posts of that subset that are also in the fair comparison of the next table.
+rate_post_ids = set(test_df.loc[subset_masks[RATE_SUBSET], "post_id"])
+n_rate_posts_in_fair_comparison = len(rate_post_ids & set(why_posts.loc[why_posts["in_fair_comparison"], "post_id"]))
+
+
+def shown_rate(value):
+    """A rate with four decimals, or a dash when it cannot be computed."""
+    return "—" if value is None else f"{value:.4f}"
+
+
+print(f"Rates from chapter 8, row {selected_model_name} / {RATE_SUBSET} "
+      f"({calibration_rates['rate_posts']['0']:,} bearish and {calibration_rates['rate_posts']['2']:,} bullish test posts): "
+      f"true bullish rate {shown_rate(true_rate)}, false bullish rate {shown_rate(false_rate)}, "
+      f"gap {shown_rate(rate_gap)} (at least {MIN_RATE_GAP}); status: {calibration_status}")
+print(f"Of these test posts, {n_rate_posts_in_fair_comparison:,} are also in the fair comparison")
 
 # %% [markdown]
 # ### The topic × bullish table
@@ -2069,12 +2201,17 @@ why_posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0).rename
 # First the row "all" (every topic post), then one row per topic, from the most bullish to the most bearish by label; topics whose by-label share cannot be computed come last, and equal shares keep the topic order. Columns:
 #
 # - **posts**, **too few**: the topic's posts, and whether they are fewer than `MIN_TOPIC_POSTS`;
+# - **too few b+b**: whether its bearish + bullish posts by label are fewer than `MIN_BULLISH_BEARISH_POSTS` (also for the row all);
 # - **bearish**, **neutral**, **bullish**: posts per label;
 # - **label share**, **vs all (pp)**: the bullish share by label, and its difference from the row "all" in percentage points;
 # - **model bullish**, **model bearish**, **unsure**, **model share**, **unsure share**: the model's calls, its bullish share, and the unsure posts as a share of all the topic's posts;
-# - **fair posts**, **fair label**, **fair model**, **model − label (pp)**: the fair comparison on unseen bullish or bearish posts.
+# - **half share**, **calibrated share**: the model's bullish share counted at 0.5, and the same share calibrated;
+# - **fair posts**, **fair label**, **fair model**, **model − label (pp)**: the fair comparison on unseen bullish or bearish posts;
+# - **fair half**, **fair calibrated**, **half − label (pp)**, **calibrated − label (pp)**: in the same fair comparison, the share at 0.5 and the calibrated share, and each minus the share by label.
 #
-# Everything goes into the brief's `why` section, together with the model, the thresholds and the number of posts in the fair comparison whose text equals a training post.
+# **How to read the calibrated share of a whole row.** At 0.5 the neutral posts are pushed to one side as well, so the half and calibrated shares of a whole topic (or of the row all) describe all its posts, neutral ones included, while the share by label leaves neutral posts out. They are not the same quantity, so they are not compared: the comparison with the labels is made only in the fair comparison, where every post is labelled bullish or bearish. The whole-row shares are kept all the same, because data without labels (for example comments) has nothing else to offer.
+#
+# Everything goes into the brief's `why` section, together with the model, the thresholds, the two rates and where they come from, and the number of posts in the fair comparison whose text equals a training post.
 #
 # ***
 #
@@ -2083,12 +2220,17 @@ why_posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0).rename
 # 第一行是 all（全部话题帖子），然后每个话题一行，按「按标签」的看多比例从最偏多排到最偏空；按标签的比例算不出来的话题排在最后，比例相同的按话题编号排。各列：
 #
 # - **posts**、**too few**：这个话题的帖子数，以及是否少于 `MIN_TOPIC_POSTS`；
+# - **too few b+b**：按标签的「看空 + 看多」条数是否少于 `MIN_BULLISH_BEARISH_POSTS`（all 那一行也标）；
 # - **bearish**、**neutral**、**bullish**：按标签各几条；
 # - **label share**、**vs all (pp)**：按标签的看多比例，以及它和 all 那一行之差（百分点）；
 # - **model bullish**、**model bearish**、**unsure**、**model share**、**unsure share**：模型判看多、判看空、说不清各几条，按模型的看多比例，以及说不清占这个话题全部帖子的比例；
-# - **fair posts**、**fair label**、**fair model**、**model − label (pp)**：在模型没见过、标签为看多或看空的帖子上的公平比较。
+# - **half share**、**calibrated share**：模型按 0.5 分数出的看多比例，以及它校正后的比例；
+# - **fair posts**、**fair label**、**fair model**、**model − label (pp)**：在模型没见过、标签为看多或看空的帖子上的公平比较；
+# - **fair half**、**fair calibrated**、**half − label (pp)**、**calibrated − label (pp)**：在同一个公平比较里，按 0.5 分的比例和校正后的比例，以及它们各自减去按标签的比例。
 #
-# 这些都写进简报的 `why` 节，连同用的模型、两个门槛，以及参加公平比较的帖子里文字和某条训练帖相同的有几条。
+# **整行的校正后比例怎么读。** 按 0.5 分时中性帖也被分到了某一边，所以一个话题（或 all 那一行）整行的按 0.5 分比例和校正后比例，说的是它的全部帖子，中性帖也算在内；而按标签的比例不算中性帖。两者不是同一个量，所以不拿来比：和标签的比较只在公平比较里做，那里每条帖子的标签都是看多或看空。整行的这两个比例照样保留，因为没有标签的数据（例如评论）只能给出这种数。
+#
+# 这些都写进简报的 `why` 节，连同用的模型、两个门槛、两个认出率和它们的出处，以及参加公平比较的帖子里文字和某条训练帖相同的有几条。
 
 # %%
 # Bullish shares by label and by model for every topic and for the whole topic table; record them in the brief.
@@ -2103,21 +2245,34 @@ def percentage_points(share, baseline):
 
 
 def why_row(posts):
-    """Label counts and bullish share, model calls and bullish share, and the fair comparison for rows of why_posts."""
+    """Every field of one row of the why section, for rows of why_posts (or a table with the same columns).
+
+    Label counts and bullish share, the too-few-bullish-or-bearish mark, model calls and bullish share, calls at 0.5
+    with their bullish share and its calibration, and the fair comparison with the same shares.
+    """
     label_counts = posts["label"].value_counts().reindex(list(LABEL_NAMES), fill_value=0)  # labels 0, 1, 2
     calls = posts["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0)
+    halves = posts["half_call"].value_counts().reindex(HALF_CALLS, fill_value=0)
     fair = posts[posts["in_fair_comparison"]]  # unseen posts labelled bearish or bullish
     fair_labels = fair["label"].value_counts().reindex([0, 2], fill_value=0)
     fair_calls = fair["model_call"].value_counts().reindex(MODEL_CALLS, fill_value=0)
+    fair_halves = fair["half_call"].value_counts().reindex(HALF_CALLS, fill_value=0)
     fair_label_share = bullish_share(fair_labels[2], fair_labels[0])
     fair_model_share = bullish_share(fair_calls["bullish"], fair_calls["bearish"])
+    half_share = bullish_share(halves["bullish"], halves["bearish"])
+    fair_half_share = bullish_share(fair_halves["bullish"], fair_halves["bearish"])
+    fair_calibrated_share = calibrate_bullish_share(fair_half_share)
     return {
         "n_posts": int(len(posts)),
         "label_counts": {str(label): int(count) for label, count in label_counts.items()},
         "label_bullish_share": bullish_share(label_counts[2], label_counts[0]),
+        "too_few_bullish_bearish": int(label_counts[0]) + int(label_counts[2]) < MIN_BULLISH_BEARISH_POSTS,
         "model_counts": {call: int(count) for call, count in calls.items()},
         "model_bullish_share": bullish_share(calls["bullish"], calls["bearish"]),
         "model_unsure_share": safe_ratio(int(calls["unsure"]), len(posts)),
+        "half_counts": {call: int(count) for call, count in halves.items()},
+        "half_bullish_share": half_share,
+        "calibrated_bullish_share": calibrate_bullish_share(half_share),
         "fair": {
             "n_posts": int(len(fair)),
             "label_counts": {str(label): int(count) for label, count in fair_labels.items()},
@@ -2125,6 +2280,11 @@ def why_row(posts):
             "model_counts": {call: int(count) for call, count in fair_calls.items()},
             "model_bullish_share": fair_model_share,
             "model_minus_label_pp": percentage_points(fair_model_share, fair_label_share),
+            "half_counts": {call: int(count) for call, count in fair_halves.items()},
+            "half_bullish_share": fair_half_share,
+            "calibrated_bullish_share": fair_calibrated_share,
+            "half_minus_label_pp": percentage_points(fair_half_share, fair_label_share),
+            "calibrated_minus_label_pp": percentage_points(fair_calibrated_share, fair_label_share),
         },
     }
 
@@ -2161,9 +2321,24 @@ brief["why"] = {
     },
     "thresholds": {"bullish_at_or_above": BULLISH_THRESHOLD, "bearish_at_or_below": BEARISH_THRESHOLD},
     "min_topic_posts": MIN_TOPIC_POSTS,
+    "min_bullish_bearish_posts": MIN_BULLISH_BEARISH_POSTS,
     "bullish_share": "bullish / (bullish + bearish); neutral posts (by label) and unsure posts (by model) are left out",
     "differences": "percentage points; label_vs_overall_pp is the topic minus all topic posts, "
                    "model_minus_label_pp is the model minus the labels",
+    "calibration": {
+        "half_rule": "bullish when the probability of bullish is above 0.5, otherwise bearish (exactly 0.5 is bearish); "
+                     "nothing is unsure",
+        "formula": "(half_bullish_share - false_bullish_rate) / (true_bullish_rate - false_bullish_rate), clipped to "
+                   "[0, 1]; null unless status is applied",
+        "status": calibration_rates["status"],
+        "rates_from": {"model": calibration_rates["model"], "subset": calibration_rates["subset"]},
+        "true_bullish_rate": calibration_rates["true_bullish_rate"],
+        "false_bullish_rate": calibration_rates["false_bullish_rate"],
+        "rate_gap": calibration_rates["rate_gap"],
+        "rate_posts": calibration_rates["rate_posts"],
+        "min_rate_gap": MIN_RATE_GAP,
+        "n_rate_posts_in_fair_comparison": n_rate_posts_in_fair_comparison,
+    },
     "fair_comparison": {
         "posts": "post_id not in train_post_ids and label bearish or bullish",
         "train_ids": "train_post_ids",
@@ -2192,14 +2367,21 @@ def table_row(row, topic, name, too_few, versus_all):
     """One line of the topic × bullish table."""
     return {
         "topic": topic, "name": name, "posts": row["n_posts"], "too few": too_few,
+        "too few b+b": "yes" if row["too_few_bullish_bearish"] else "no",
         "bearish": row["label_counts"]["0"], "neutral": row["label_counts"]["1"], "bullish": row["label_counts"]["2"],
         "label share": shown_share(row["label_bullish_share"]), "vs all (pp)": versus_all,
         "model bullish": row["model_counts"]["bullish"], "model bearish": row["model_counts"]["bearish"],
         "unsure": row["model_counts"]["unsure"], "model share": shown_share(row["model_bullish_share"]),
         "unsure share": shown_share(row["model_unsure_share"]),
+        "half share": shown_share(row["half_bullish_share"]),
+        "calibrated share": shown_share(row["calibrated_bullish_share"]),
         "fair posts": row["fair"]["n_posts"], "fair label": shown_share(row["fair"]["label_bullish_share"]),
         "fair model": shown_share(row["fair"]["model_bullish_share"]),
         "model − label (pp)": shown_points(row["fair"]["model_minus_label_pp"]),
+        "fair half": shown_share(row["fair"]["half_bullish_share"]),
+        "fair calibrated": shown_share(row["fair"]["calibrated_bullish_share"]),
+        "half − label (pp)": shown_points(row["fair"]["half_minus_label_pp"]),
+        "calibrated − label (pp)": shown_points(row["fair"]["calibrated_minus_label_pp"]),
     }
 
 
@@ -2210,6 +2392,11 @@ why_table = pd.DataFrame(
 ).set_index("topic")
 print(f"Model: {selected_model_name}; bullish at or above {BULLISH_THRESHOLD}, bearish at or below {BEARISH_THRESHOLD}; "
       f"too few below {MIN_TOPIC_POSTS} posts; fair comparison: {why_overall['fair']['n_posts']:,} posts")
+print(f"Calibration: rates from {calibration_rates['model']} / {calibration_rates['subset']} "
+      f"({calibration_rates['rate_posts']['0']:,} bearish and {calibration_rates['rate_posts']['2']:,} bullish test posts): "
+      f"true bullish rate {shown_rate(calibration_rates['true_bullish_rate'])}, "
+      f"false bullish rate {shown_rate(calibration_rates['false_bullish_rate'])}; status: {calibration_rates['status']}; "
+      f"too few b+b below {MIN_BULLISH_BEARISH_POSTS} bearish + bullish posts")
 why_table
 
 # %% [markdown]
@@ -2217,7 +2404,7 @@ why_table
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
 #
-# 1. **The format.** The brief has a fixed format, version 1.0: which fields exist, what type each one has, and which ones may be `null`. The repository describes every field in `docs/brief-format.md` and writes the same rules in a form a program can check, a **JSON Schema** (`docs/brief.schema.json`). JSON Schema is a common way to write such rules as JSON; checkers for it exist in many programming languages. Colab cannot read files from the repository, so the notebook carries an identical copy of the rules, and the repository's checks make sure the two copies never drift apart.
+# 1. **The format.** The brief has a fixed format, whose version is written in `format_version`: which fields exist, what type each one has, and which ones may be `null`. The repository describes every field in `docs/brief-format.md` and writes the same rules in a form a program can check, a **JSON Schema** (`docs/brief.schema.json`). JSON Schema is a common way to write such rules as JSON; checkers for it exist in many programming languages. Colab cannot read files from the repository, so the notebook carries an identical copy of the rules, and the repository's checks make sure the two copies never drift apart.
 # 2. **The check.** Before saving, the brief is checked against the rules. A missing field, a value of the wrong type, a granularity the format does not know, or a number that is NaN or infinite stops the notebook with a list of the problems, and nothing is saved.
 # 3. **Saving.** A brief that passed is written to `WORK_DIR/brief.json`.
 # 4. **The panel.** A small web page with the main tables of the saved brief. It reads only the file.
@@ -2230,7 +2417,7 @@ why_table
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，分四步：
 #
-# 1. **格式。** 简报有固定的格式，版本 1.0：有哪些字段、每个字段是什么类型、哪些可以是 `null`。仓库里的 `docs/brief-format.md` 逐个字段写了说明，同样的规则还写成了程序能核对的形式，即 **JSON Schema**（`docs/brief.schema.json`）。JSON Schema 是把这类规则本身也写成 JSON 的通行写法，很多编程语言都有现成的校验库。Colab 读不到仓库里的文件，所以笔记本自己带着一份一模一样的规则，仓库的检查命令负责确认两份始终一致。
+# 1. **格式。** 简报有固定的格式，版本号写在 `format_version` 里：有哪些字段、每个字段是什么类型、哪些可以是 `null`。仓库里的 `docs/brief-format.md` 逐个字段写了说明，同样的规则还写成了程序能核对的形式，即 **JSON Schema**（`docs/brief.schema.json`）。JSON Schema 是把这类规则本身也写成 JSON 的通行写法，很多编程语言都有现成的校验库。Colab 读不到仓库里的文件，所以笔记本自己带着一份一模一样的规则，仓库的检查命令负责确认两份始终一致。
 # 2. **校验。** 保存之前，先拿规则对照简报。缺字段、类型不对、粒度不是格式认识的值、某个数是 NaN 或无穷大，笔记本都会停下并列出问题，什么也不保存。
 # 3. **保存。** 通过校验的简报写到 `WORK_DIR/brief.json`。
 # 4. **面板。** 一个小网页，显示已保存简报里的几张主要的表。它只读这个文件。
@@ -2240,13 +2427,13 @@ why_table
 # %% [markdown]
 # ### The rules of the format
 #
-# The next cell holds the rules as JSON Schema text, exactly as in `docs/brief.schema.json`; it is long because it lists every field, and there is no need to read it line by line. In short: `format_version` must be "1.0" and `scope.granularity` must be "batch"; every object lists its fields, all of them must be there, and no other field is allowed; counts are whole numbers of 0 or more, shares lie between 0 and 1; a field that may be `null` has the type `["number", "null"]` (or `["integer", "null"]`), every other field may not be `null`.
+# The next cell holds the rules as JSON Schema text, exactly as in `docs/brief.schema.json`; it is long because it lists every field, and there is no need to read it line by line. In short: `format_version` must be the version these rules describe and `scope.granularity` must be "batch"; every object lists its fields, all of them must be there, and no other field is allowed; counts are whole numbers of 0 or more, shares lie between 0 and 1; a field that may be `null` has the type `["number", "null"]` (or `["integer", "null"]`), every other field may not be `null`.
 #
 # ***
 #
 # ### 格式的规则
 #
-# 下一格是写成 JSON Schema 文本的规则，和 `docs/brief.schema.json` 一字不差；它列出了每一个字段，所以很长，不必逐行读。要点：`format_version` 必须是 "1.0"，`scope.granularity` 必须是 "batch"；每个对象都列出了自己的字段，全部必须有，别的字段一概不许出现；条数是 0 或更大的整数，比例在 0 和 1 之间；可以为 `null` 的字段，类型写成 `["number", "null"]`（或 `["integer", "null"]`），其余字段都不许是 `null`。
+# 下一格是写成 JSON Schema 文本的规则，和 `docs/brief.schema.json` 一字不差；它列出了每一个字段，所以很长，不必逐行读。要点：`format_version` 必须是这份规则所描述的版本，`scope.granularity` 必须是 "batch"；每个对象都列出了自己的字段，全部必须有，别的字段一概不许出现；条数是 0 或更大的整数，比例在 0 和 1 之间；可以为 `null` 的字段，类型写成 `["number", "null"]`（或 `["integer", "null"]`），其余字段都不许是 `null`。
 
 # %%
 # The format rules as JSON Schema text (draft 2020-12), identical to docs/brief.schema.json in the repository.
@@ -2254,13 +2441,13 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.0",
+  "title": "Ledger Eyes brief, format 1.1",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.0"},
+    "format_version": {"type": "string", "const": "1.1"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -2715,8 +2902,9 @@ BRIEF_SCHEMA_TEXT = r"""{
     "why": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts", "bullish_share",
-                   "differences", "fair_comparison", "order", "overall", "topics"],
+      "required": ["post_table", "topic_column", "model", "scoring", "thresholds", "min_topic_posts",
+                   "min_bullish_bearish_posts", "bullish_share", "differences", "calibration", "fair_comparison", "order",
+                   "overall", "topics"],
       "properties": {
         "post_table": {"type": "string"},
         "topic_column": {"type": "string"},
@@ -2740,8 +2928,32 @@ BRIEF_SCHEMA_TEXT = r"""{
           "properties": {"bullish_at_or_above": {"$ref": "#/$defs/share"}, "bearish_at_or_below": {"$ref": "#/$defs/share"}}
         },
         "min_topic_posts": {"$ref": "#/$defs/positive"},
+        "min_bullish_bearish_posts": {"$ref": "#/$defs/positive"},
         "bullish_share": {"type": "string"},
         "differences": {"type": "string"},
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["half_rule", "formula", "status", "rates_from", "true_bullish_rate", "false_bullish_rate", "rate_gap",
+                       "rate_posts", "min_rate_gap", "n_rate_posts_in_fair_comparison"],
+          "properties": {
+            "half_rule": {"type": "string"},
+            "formula": {"type": "string"},
+            "status": {"type": "string", "enum": ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]},
+            "rates_from": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "subset"],
+              "properties": {"model": {"type": "string"}, "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]}}
+            },
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "rate_gap": {"$ref": "#/$defs/gap_or_null"},
+            "rate_posts": {"$ref": "#/$defs/bearish_bullish_counts"},
+            "min_rate_gap": {"$ref": "#/$defs/share"},
+            "n_rate_posts_in_fair_comparison": {"$ref": "#/$defs/count"}
+          }
+        },
         "fair_comparison": {
           "type": "object",
           "additionalProperties": false,
@@ -2760,15 +2972,20 @@ BRIEF_SCHEMA_TEXT = r"""{
         "overall": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share",
-                       "model_unsure_share", "fair"],
+          "required": ["n_posts", "label_counts", "label_bullish_share", "too_few_bullish_bearish", "model_counts",
+                       "model_bullish_share", "model_unsure_share", "half_counts", "half_bullish_share",
+                       "calibrated_bullish_share", "fair"],
           "properties": {
             "n_posts": {"$ref": "#/$defs/count"},
             "label_counts": {"$ref": "#/$defs/label_counts"},
             "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "too_few_bullish_bearish": {"type": "boolean"},
             "model_counts": {"$ref": "#/$defs/model_calls"},
             "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+            "half_counts": {"$ref": "#/$defs/half_calls"},
+            "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+            "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "fair": {"$ref": "#/$defs/fair"}
           }
         },
@@ -2777,8 +2994,9 @@ BRIEF_SCHEMA_TEXT = r"""{
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["topic", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share", "model_counts",
-                         "model_bullish_share", "model_unsure_share", "fair", "label_vs_overall_pp"],
+            "required": ["topic", "name", "too_few_posts", "n_posts", "label_counts", "label_bullish_share",
+                         "too_few_bullish_bearish", "model_counts", "model_bullish_share", "model_unsure_share",
+                         "half_counts", "half_bullish_share", "calibrated_bullish_share", "fair", "label_vs_overall_pp"],
             "properties": {
               "topic": {"$ref": "#/$defs/count"},
               "name": {"type": "string"},
@@ -2786,9 +3004,13 @@ BRIEF_SCHEMA_TEXT = r"""{
               "n_posts": {"$ref": "#/$defs/count"},
               "label_counts": {"$ref": "#/$defs/label_counts"},
               "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "too_few_bullish_bearish": {"type": "boolean"},
               "model_counts": {"$ref": "#/$defs/model_calls"},
               "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
               "model_unsure_share": {"$ref": "#/$defs/share_or_null"},
+              "half_counts": {"$ref": "#/$defs/half_calls"},
+              "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+              "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
               "fair": {"$ref": "#/$defs/fair"},
               "label_vs_overall_pp": {"$ref": "#/$defs/points_or_null"}
             }
@@ -2805,6 +3027,7 @@ BRIEF_SCHEMA_TEXT = r"""{
     "share": {"type": "number", "minimum": 0, "maximum": 1},
     "share_or_null": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
     "points_or_null": {"type": ["number", "null"], "minimum": -100, "maximum": 100},
+    "gap_or_null": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
     "label": {"type": "string", "enum": ["0", "1", "2"]},
     "labels_in_use": {"type": "array", "minItems": 2, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/label"}},
     "label_counts": {
@@ -2843,10 +3066,24 @@ BRIEF_SCHEMA_TEXT = r"""{
       "required": ["bullish", "bearish", "unsure"],
       "properties": {"bullish": {"$ref": "#/$defs/count"}, "bearish": {"$ref": "#/$defs/count"}, "unsure": {"$ref": "#/$defs/count"}}
     },
+    "half_calls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bullish", "bearish"],
+      "properties": {"bullish": {"$ref": "#/$defs/count"}, "bearish": {"$ref": "#/$defs/count"}}
+    },
+    "bearish_bullish_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["0", "2"],
+      "properties": {"0": {"$ref": "#/$defs/count"}, "2": {"$ref": "#/$defs/count"}}
+    },
     "fair": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share", "model_minus_label_pp"],
+      "required": ["n_posts", "label_counts", "label_bullish_share", "model_counts", "model_bullish_share", "model_minus_label_pp",
+                   "half_counts", "half_bullish_share", "calibrated_bullish_share", "half_minus_label_pp",
+                   "calibrated_minus_label_pp"],
       "properties": {
         "n_posts": {"$ref": "#/$defs/count"},
         "label_counts": {
@@ -2858,7 +3095,12 @@ BRIEF_SCHEMA_TEXT = r"""{
         "label_bullish_share": {"$ref": "#/$defs/share_or_null"},
         "model_counts": {"$ref": "#/$defs/model_calls"},
         "model_bullish_share": {"$ref": "#/$defs/share_or_null"},
-        "model_minus_label_pp": {"$ref": "#/$defs/points_or_null"}
+        "model_minus_label_pp": {"$ref": "#/$defs/points_or_null"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "half_minus_label_pp": {"$ref": "#/$defs/points_or_null"},
+        "calibrated_minus_label_pp": {"$ref": "#/$defs/points_or_null"}
       }
     }
   }
