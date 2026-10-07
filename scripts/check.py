@@ -9,11 +9,16 @@ quick: static checks, then the notebook runs three times on the bundled
        topics sections of the two default runs must be identical. A fourth
        run sets both thresholds of the why chapter to 0.5 and the too-few bar
        above the topic post table; the why section of every brief is checked.
+       The fourth run also sets the too-few-bullish-or-bearish bar above the
+       topic post table, and the calibration of chapter 10 is checked in
+       every brief.
        Every brief must pass the format rules (docs/brief.schema.json); the
        first two are also broken on purpose (locked counterexamples, all of
        which must be rejected) and shown on the panel, built but not started.
 full:  static checks, then one run on the full dataset with the default
-       switches; prints the key numbers from the brief.
+       switches; prints the key numbers from the brief. The calibrated
+       bullish share must narrow the gap to the labels in the overall fair
+       comparison.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -68,6 +73,11 @@ MODEL_CALLS = ["bullish", "bearish", "unsure"]  # the model's calls in the why s
 FAIR_CLASSES = ["0", "2"]  # the fair comparison uses posts labelled bearish or bullish only
 THRESHOLD_SETTINGS = {"BULLISH_THRESHOLD": 0.5, "BEARISH_THRESHOLD": 0.5}  # fourth quick run; plus MIN_TOPIC_POSTS
 THRESHOLD_LABEL = "threshold run"
+# Chapter 10's calibration: calls at 0.5, the recognition rates of chapter 8 and the too-few-bullish-or-bearish mark.
+CALIBRATION_SWITCHES = ["MIN_RATE_GAP", "MIN_BULLISH_BEARISH_POSTS"]
+HALF_CALLS = ["bullish", "bearish"]  # the calls at 0.5: every post on one side
+CALIBRATION_STATUSES = ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]
+RATE_SUBSETS = {"btc": "test_mentions_btc", "all": "all_test"}  # TOPIC_SCOPE -> evaluation subset of the rates
 # Chapter 11: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
@@ -1099,10 +1109,12 @@ def check_why(report, label, brief, switches):
 
 
 WHY_STABLE_ROW_FIELDS = ["topic", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
-                         "label_vs_overall_pp"]
+                         "label_vs_overall_pp", "too_few_bullish_bearish"]
 WHY_STABLE_FAIR_FIELDS = ["n_posts", "label_counts", "label_bullish_share"]
 WHY_STABLE_COUNTS = ["n_topic_posts_in_training_set", "n_unseen_bullish_or_bearish",
                      "n_same_text_as_a_training_post", "n_same_clean_text_as_a_training_post"]
+# Calibration fields that do not depend on training (the rates and the chosen model may).
+WHY_STABLE_CALIBRATION = ["rate_posts", "min_rate_gap", "n_rate_posts_in_fair_comparison"]
 
 
 def stable_why(brief):
@@ -1116,8 +1128,12 @@ def stable_why(brief):
         return {**{key: row.get(key) for key in WHY_STABLE_ROW_FIELDS},
                 "fair": {key: as_dict(row.get("fair")).get(key) for key in WHY_STABLE_FAIR_FIELDS}}
 
+    calibration = as_dict(why.get("calibration"))
     return {"overall": part(why.get("overall")), "topics": [part(row) for row in why_rows(why)],
-            "fair_comparison": {key: as_dict(why.get("fair_comparison")).get(key) for key in WHY_STABLE_COUNTS}}
+            "fair_comparison": {key: as_dict(why.get("fair_comparison")).get(key) for key in WHY_STABLE_COUNTS},
+            "calibration": {**{key: calibration.get(key) for key in WHY_STABLE_CALIBRATION},
+                            "subset": as_dict(calibration.get("rates_from")).get("subset"),
+                            "min_bullish_bearish_posts": why.get("min_bullish_bearish_posts")}}
 
 
 def compare_why(report, first, again):
@@ -1131,13 +1147,14 @@ def compare_why(report, first, again):
     report.check(left is not None and left == right,
                  "default switches run twice: the why sections agree on everything that does not depend on training "
                  "(label counts and shares, differences from all, too-few marks, order, fair comparison sizes and "
-                 "label shares)", detail)
+                 "label shares; too-few-bullish-or-bearish marks, the calibration's test subset and test posts)", detail)
 
 
 def threshold_run(report, defaults, overrides, default_brief, rules=None):
     """Both thresholds at 0.5 and MIN_TOPIC_POSTS above the topic post table: no post unsure, every topic too small."""
     table = as_dict(as_dict(default_brief).get("topics")).get("n_posts")
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
+    settings["MIN_BULLISH_BEARISH_POSTS"] = settings["MIN_TOPIC_POSTS"]  # above every row's bullish + bearish posts
     parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
     parameters = panel_settings(report, THRESHOLD_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
@@ -1152,6 +1169,7 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None):
     if brief is None:
         return
     check_why(report, THRESHOLD_LABEL, brief, switches)
+    check_calibration(report, THRESHOLD_LABEL, brief, switches)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -1172,6 +1190,13 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None):
     report.check(all(row.get("too_few_posts") is True for row in rows),
                  f"{THRESHOLD_LABEL}: every topic is marked as having too few posts",
                  f"{sum(row.get('too_few_posts') is True for row in rows)} of {len(rows)} topics marked")
+    marked_rows = [overall] + rows
+    report.check(is_count(n_table) and switches["MIN_BULLISH_BEARISH_POSTS"] > n_table and bool(overall)
+                 and all(row.get("too_few_bullish_bearish") is True for row in marked_rows),
+                 f"{THRESHOLD_LABEL}: MIN_BULLISH_BEARISH_POSTS is larger than the whole topic post table and every row, "
+                 "the overall row included, is marked as having too few bullish or bearish posts",
+                 f"{switches['MIN_BULLISH_BEARISH_POSTS']} vs {n_table!r} posts; "
+                 f"{sum(row.get('too_few_bullish_bearish') is True for row in marked_rows)} of {len(marked_rows)} rows marked")
 
 
 def print_why(brief):
@@ -1218,6 +1243,252 @@ def print_why(brief):
     print("  topic names:")
     for row in why_rows(why):
         print(f"    topic {row.get('topic')}: {row.get('name')}")
+
+
+# ---------------------------------------------------------------- calibration (chapter 10)
+
+def check_calibration_switches(report, defaults):
+    absent = [name for name in CALIBRATION_SWITCHES if name not in defaults]
+    report.check(not absent, "switches of the calibration are present", ", ".join(absent))
+
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def calibrated_from(share, calibration):
+    """The calibrated share the notebook must have written for a share at 0.5 (None unless status is applied)."""
+    if share is INVALID:
+        return INVALID
+    if share is None or calibration.get("status") != "applied":
+        return None
+    true_rate, false_rate = calibration.get("true_bullish_rate"), calibration.get("false_bullish_rate")
+    if not (is_number(true_rate) and is_number(false_rate)) or true_rate - false_rate <= 0:
+        return INVALID
+    return min(1.0, max(0.0, (share - false_rate) / (true_rate - false_rate)))
+
+
+def stored_share(value):
+    """A share as stored in the brief: the value when it is a number in [0, 1] or None, otherwise INVALID."""
+    return value if is_score(value) else INVALID
+
+
+def half_row_problems(row, where, calibration, min_bullish_bearish_posts):
+    """Problems of the fields a row gets from the calibration, for any row with them (topic, overall or other).
+
+    Returns (problems with the calls at 0.5, the shares and differences; problems with the too-few mark).
+    """
+    problems, marks = [], []
+    row = as_dict(row)
+    n, labels = row.get("n_posts"), counts_of(row.get("label_counts"), TOPIC_CLASSES)
+    halves = counts_of(row.get("half_counts"), HALF_CALLS)
+    if halves is None or not is_count(n) or sum(halves.values()) != n:
+        problems.append(f"{where}: calls at 0.5 {row.get('half_counts')!r} do not add up to {n!r} posts")
+    expected_half = INVALID if halves is None else share_of(halves["bullish"], halves["bullish"] + halves["bearish"])
+    if not (is_score(row.get("half_bullish_share")) and same_value(row.get("half_bullish_share"), expected_half)):
+        problems.append(f"{where}: half_bullish_share {row.get('half_bullish_share')!r}")
+    expected_calibrated = calibrated_from(stored_share(row.get("half_bullish_share")), calibration)
+    if not (is_score(row.get("calibrated_bullish_share"))
+            and same_value(row.get("calibrated_bullish_share"), expected_calibrated)):
+        problems.append(f"{where}: calibrated_bullish_share {row.get('calibrated_bullish_share')!r} "
+                        f"(expected {expected_calibrated if expected_calibrated is not INVALID else 'not computable'!r})")
+    expected_mark = (labels["0"] + labels["2"] < min_bullish_bearish_posts
+                     if labels is not None and is_count(min_bullish_bearish_posts) else INVALID)
+    if expected_mark is INVALID or row.get("too_few_bullish_bearish") is not expected_mark:
+        marks.append(f"{where}: too_few_bullish_bearish {row.get('too_few_bullish_bearish')!r} with label counts "
+                     f"{row.get('label_counts')!r} and bar {min_bullish_bearish_posts!r}")
+
+    fair = as_dict(row.get("fair"))
+    fair_n, fair_labels = fair.get("n_posts"), counts_of(fair.get("label_counts"), FAIR_CLASSES)
+    fair_halves = counts_of(fair.get("half_counts"), HALF_CALLS)
+    if fair_halves is None or not is_count(fair_n) or sum(fair_halves.values()) != fair_n:
+        problems.append(f"{where}: fair calls at 0.5 {fair.get('half_counts')!r} do not add up to {fair_n!r} posts")
+    fair_half = INVALID if fair_halves is None else share_of(fair_halves["bullish"],
+                                                             fair_halves["bullish"] + fair_halves["bearish"])
+    if not (is_score(fair.get("half_bullish_share")) and same_value(fair.get("half_bullish_share"), fair_half)):
+        problems.append(f"{where}: fair half_bullish_share {fair.get('half_bullish_share')!r}")
+    fair_calibrated = calibrated_from(stored_share(fair.get("half_bullish_share")), calibration)
+    if not (is_score(fair.get("calibrated_bullish_share"))
+            and same_value(fair.get("calibrated_bullish_share"), fair_calibrated)):
+        problems.append(f"{where}: fair calibrated_bullish_share {fair.get('calibrated_bullish_share')!r}")
+    fair_label = INVALID if fair_labels is None else stored_share(fair.get("label_bullish_share"))
+    for key, share in [("half_minus_label_pp", stored_share(fair.get("half_bullish_share"))),
+                       ("calibrated_minus_label_pp", stored_share(fair.get("calibrated_bullish_share")))]:
+        if not same_value(fair.get(key), points(share, fair_label)):
+            problems.append(f"{where}: fair {key} {fair.get(key)!r}")
+    return problems, marks
+
+
+def evaluation_row(brief, model, subset):
+    """The one row of sentiment.evaluation.rows for model and subset, or None."""
+    rows = as_dict(as_dict(brief.get("sentiment")).get("evaluation")).get("rows")
+    found = [row for row in rows or [] if isinstance(row, dict) and row.get("model") == model
+             and row.get("subset") == subset] if isinstance(rows, list) else []
+    return found[0] if len(found) == 1 else None
+
+
+def check_calibration(report, label, brief, switches):
+    """Chapter 10's calibration: where the rates come from, the status, every row's new fields and marks."""
+    why = as_dict(brief.get("why"))
+    calibration = as_dict(why.get("calibration"))
+    if not report.check(bool(calibration), f"{label}: why has a calibration block"):
+        return
+    selected = as_dict(as_dict(brief.get("sentiment")).get("selection")).get("selected")
+    subset = RATE_SUBSETS.get(switches.get("TOPIC_SCOPE"))
+    source = evaluation_row(brief, selected, subset)
+    per_class = as_dict(as_dict(source).get("per_class"))
+    supports = {key: as_dict(per_class.get(key)).get("support") for key in FAIR_CLASSES}
+    min_gap, min_posts = switches.get("MIN_RATE_GAP"), switches.get("MIN_BULLISH_BEARISH_POSTS")
+    report.check(source is not None and calibration.get("rates_from") == {"model": selected, "subset": subset}
+                 and all(is_count(value) for value in supports.values())
+                 and calibration.get("rate_posts") == supports
+                 and is_number(min_gap) and same_value(calibration.get("min_rate_gap"), min_gap)
+                 and is_count(min_posts) and why.get("min_bullish_bearish_posts") == min_posts
+                 and all(isinstance(calibration.get(key), str) and calibration[key] for key in ("half_rule", "formula")),
+                 f"{label}: calibration reads the chosen model's row for the matching test posts (rates_from), records "
+                 "its bearish and bullish test posts (rate_posts) and MIN_RATE_GAP and MIN_BULLISH_BEARISH_POSTS as set",
+                 f"rates_from {calibration.get('rates_from')!r} (expected model {selected!r}, subset {subset!r}, "
+                 f"row found {source is not None}); rate_posts {calibration.get('rate_posts')!r} (supports {supports}); "
+                 f"min_rate_gap {calibration.get('min_rate_gap')!r} ({min_gap!r}); "
+                 f"min_bullish_bearish_posts {why.get('min_bullish_bearish_posts')!r} ({min_posts!r})")
+
+    # The rates and the status, from chapter 8's recalls, N_CLASSES and MIN_RATE_GAP.
+    recalls = {key: as_dict(per_class.get(key)).get("recall") for key in FAIR_CLASSES}
+    if switches.get("N_CLASSES") == 3:
+        expected = {"true_bullish_rate": None, "false_bullish_rate": None, "rate_gap": None}
+        status = "three_classes"
+    else:
+        true_rate = recalls["2"] if is_number(recalls["2"]) else None
+        false_rate = 1.0 - recalls["0"] if is_number(recalls["0"]) else None
+        gap = None if true_rate is None or false_rate is None else true_rate - false_rate
+        expected = {"true_bullish_rate": true_rate, "false_bullish_rate": false_rate, "rate_gap": gap}
+        if source is None:
+            status = INVALID
+        elif gap is None:
+            status = "rates_missing"
+        elif not is_number(min_gap) or gap < min_gap or gap <= 0:
+            status = "rate_gap_too_small"
+        else:
+            status = "applied"
+    wrong = [f"{key} {calibration.get(key)!r} (expected {value!r})" for key, value in expected.items()
+             if not same_value(calibration.get(key), value)]
+    report.check(source is not None and not wrong and calibration.get("status") == status
+                 and calibration.get("status") in CALIBRATION_STATUSES,
+                 f"{label}: the two rates follow chapter 8's recalls (true = bullish recall, false = 1 - bearish recall, "
+                 "both null with three classes) and the status follows them, N_CLASSES and MIN_RATE_GAP",
+                 f"status {calibration.get('status')!r} (expected {status if status is not INVALID else 'no source row'!r}); "
+                 + "; ".join(wrong))
+
+    # Every row and every fair comparison.
+    overall, rows = as_dict(why.get("overall")), why_rows(why)
+    problems, marks = [], []
+    for where, row in [("all", overall)] + [(f"topic {row.get('topic')}", row) for row in rows]:
+        row_problems, row_marks = half_row_problems(row, where, calibration, min_posts)
+        problems += row_problems
+        marks += row_marks
+    report.check(bool(overall) and not problems,
+                 f"{label}: every row and every fair comparison: calls at 0.5 add up to the posts, the share at 0.5 "
+                 "follows from them, the calibrated share follows from it and the two rates (null unless the status is "
+                 "applied, otherwise in [0, 1]), and the two new differences follow from the shares",
+                 "; ".join(problems[:5]))
+    report.check(bool(overall) and not marks,
+                 f"{label}: too_few_bullish_bearish marks follow MIN_BULLISH_BEARISH_POSTS (bearish + bullish posts by "
+                 "label below the bar), in every topic and in the overall row", "; ".join(marks[:5]))
+
+    calibrated = [as_dict(row).get("calibrated_bullish_share") for row in [overall] + rows] + [
+        as_dict(as_dict(row).get("fair")).get("calibrated_bullish_share") for row in [overall] + rows]
+    report.check(calibration.get("status") == "applied" or all(value is None for value in calibrated),
+                 f"{label}: when the status is not applied, every calibrated share is null",
+                 f"status {calibration.get('status')!r}, calibrated shares {calibrated[:6]}")
+
+    def total(part):
+        values = [counts_of(as_dict(row.get(part) if part else row).get("half_counts"), HALF_CALLS) for row in rows]
+        return None if any(value is None for value in values) else {
+            call: sum(value[call] for value in values) for call in HALF_CALLS}
+
+    report.check(bool(rows) and total(None) == counts_of(overall.get("half_counts"), HALF_CALLS)
+                 and total("fair") == counts_of(as_dict(overall.get("fair")).get("half_counts"), HALF_CALLS),
+                 f"{label}: topic rows add up to the overall row at 0.5 (calls, and calls in the fair comparison)",
+                 f"topics {total(None)} vs overall {overall.get('half_counts')!r}; fair topics {total('fair')} vs "
+                 f"overall {as_dict(overall.get('fair')).get('half_counts')!r}")
+
+    shared = calibration.get("n_rate_posts_in_fair_comparison")
+    fair_n = as_dict(overall.get("fair")).get("n_posts")
+    report.check(is_count(shared) and is_count(fair_n) and shared <= fair_n
+                 and all(is_count(value) for value in supports.values()) and shared <= sum(supports.values()),
+                 f"{label}: the test posts behind the rates that are also in the fair comparison are counted (at most "
+                 "the rates' bearish and bullish test posts and the fair comparison)",
+                 f"{shared!r} of {supports} test posts, fair comparison {fair_n!r}")
+
+
+def check_calibration_narrows(report, label, brief):
+    """Full run: in the overall fair comparison the calibrated share is closer to the labels than both counted shares."""
+    why = as_dict(brief.get("why"))
+    fair = as_dict(as_dict(why.get("overall")).get("fair"))
+    status = as_dict(why.get("calibration")).get("status")
+    differences = {key: fair.get(key) for key in ("calibrated_minus_label_pp", "half_minus_label_pp", "model_minus_label_pp")}
+    numbers = all(is_number(value) for value in differences.values())
+    report.check(status == "applied" and numbers
+                 and abs(differences["calibrated_minus_label_pp"]) < abs(differences["half_minus_label_pp"])
+                 and abs(differences["calibrated_minus_label_pp"]) < abs(differences["model_minus_label_pp"]),
+                 f"{label}: calibration narrows the gap to the labels in the overall fair comparison: "
+                 "|calibrated - label| is smaller than |at 0.5 - label| and |with the thresholds - label|, status applied",
+                 f"status {status!r}; " + ", ".join(f"{key} {value:+.2f}" if is_number(value) else f"{key} {value!r}"
+                                                    for key, value in differences.items()))
+
+
+def print_calibration(brief):
+    """Print the calibration and the new columns of the topic x bullish table (full run)."""
+    why = as_dict(brief.get("why"))
+    calibration = as_dict(why.get("calibration"))
+    if not calibration:
+        return
+
+    def share(value):
+        return f"{value:.4f}" if is_number(value) else "-"
+
+    def pp(value):
+        return f"{value:+.2f}" if is_number(value) else "-"
+
+    rates_from = as_dict(calibration.get("rates_from"))
+    rate_posts = as_dict(calibration.get("rate_posts"))
+    print("\nCalibration (full run)")
+    print(f"  rates from:                    {rates_from.get('model')} / {rates_from.get('subset')}   test posts: "
+          f"{rate_posts.get('0')} bearish, {rate_posts.get('2')} bullish")
+    print(f"  true bullish rate:             {share(calibration.get('true_bullish_rate'))}   false bullish rate: "
+          f"{share(calibration.get('false_bullish_rate'))}   gap: {share(calibration.get('rate_gap'))} "
+          f"(at least {calibration.get('min_rate_gap')})")
+    print(f"  status:                        {calibration.get('status')}")
+    print(f"  test posts also in the fair comparison: {calibration.get('n_rate_posts_in_fair_comparison')}")
+    print(f"  too few bullish + bearish below: {why.get('min_bullish_bearish_posts')} posts")
+    fair = as_dict(as_dict(why.get("overall")).get("fair"))
+    print(f"  overall fair comparison, minus the labels (pp): with the thresholds {pp(fair.get('model_minus_label_pp'))}, "
+          f"at 0.5 {pp(fair.get('half_minus_label_pp'))}, calibrated {pp(fair.get('calibrated_minus_label_pp'))}")
+    true_rate, false_rate = calibration.get("true_bullish_rate"), calibration.get("false_bullish_rate")
+    clipped = []
+    rows = [("all", as_dict(why.get("overall")))] + [(str(row.get("topic")), row) for row in why_rows(why)]
+    if calibration.get("status") == "applied" and is_number(true_rate) and is_number(false_rate):
+        for name, row in rows:
+            for where, part in (("row", row), ("fair", as_dict(row.get("fair")))):
+                half = part.get("half_bullish_share")
+                if is_number(half):
+                    raw = (half - false_rate) / (true_rate - false_rate)
+                    if raw < 0 or raw > 1:
+                        clipped.append(f"{name} {where} {raw:.4f} -> {min(1.0, max(0.0, raw)):.0f}")
+    print(f"  clipped to 0 or 1:             {', '.join(clipped) or 'none'}")
+    print("  columns: topic, too few bullish + bearish, calls at 0.5 bullish / bearish, share at 0.5, calibrated share,")
+    print("           fair posts, fair share by label, fair share at 0.5, fair calibrated share, at 0.5 minus label (pp),")
+    print("           calibrated minus label (pp); - = null")
+    print(f"  {'topic':>5} {'few':>3} {'h-bull':>6} {'h-bear':>6} {'half':>7} {'calib':>7} "
+          f"{'fair':>6} {'f-label':>7} {'f-half':>7} {'f-calib':>7} {'h-l pp':>7} {'c-l pp':>7}")
+    for name, row in rows:
+        halves, part = as_dict(row.get("half_counts")), as_dict(row.get("fair"))
+        print(f"  {name:>5} {'yes' if row.get('too_few_bullish_bearish') else 'no':>3} "
+              f"{str(halves.get('bullish')):>6} {str(halves.get('bearish')):>6} "
+              f"{share(row.get('half_bullish_share')):>7} {share(row.get('calibrated_bullish_share')):>7} "
+              f"{str(part.get('n_posts')):>6} {share(part.get('label_bullish_share')):>7} "
+              f"{share(part.get('half_bullish_share')):>7} {share(part.get('calibrated_bullish_share')):>7} "
+              f"{pp(part.get('half_minus_label_pp')):>7} {pp(part.get('calibrated_minus_label_pp')):>7}")
 
 
 # ---------------------------------------------------------------- the brief's format and the panel (chapter 11)
@@ -1534,6 +1805,7 @@ BROKEN_BRIEFS = [
     ("2 required field missing in a section", ("why", "overall"), DELETE, "why", "overall"),
     ("2 required field missing in a section", ("why", "topics", 0, "fair", "label_bullish_share"), DELETE,
      "why.topics[0].fair", "label_bullish_share"),
+    ("2 required field missing in a section", ("why", "calibration"), DELETE, "why", "calibration"),
     ("3 wrong type", ("dataset", "n_posts"), str, "dataset.n_posts", "integer"),  # a count written as text
     ("3 wrong type", ("why", "overall", "label_bullish_share"), lambda old: "0.5", "why.overall.label_bullish_share",
      "number"),  # a share written as text
@@ -1559,6 +1831,8 @@ BROKEN_BRIEFS = [
     ("6 null not allowed, or an unknown field", ("why", "topics", 0, "name"), lambda old: None, "why.topics[0].name",
      "None"),
     ("6 null not allowed, or an unknown field", ("why", "extra_field"), lambda old: 1, "why", "extra_field"),
+    ("6 null not allowed, or an unknown field", ("why", "overall", "too_few_bullish_bearish"), lambda old: None,
+     "why.overall.too_few_bullish_bearish", "None"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -1567,6 +1841,7 @@ NULL_ALLOWED = [
     ("sentiment", "evaluation", "rows", 0, "macro_f1"),
     ("why", "overall", "fair", "model_minus_label_pp"),
     ("why", "topics", 0, "label_vs_overall_pp"),
+    ("why", "overall", "fair", "calibrated_minus_label_pp"),
 ]
 
 
@@ -1859,6 +2134,7 @@ def quick(report, defaults, others, overrides, rules=None):
             check_topics(report, label, brief, switches, full_run=False)
         if brief is not None:
             check_why(report, label, brief, switches)
+            check_calibration(report, label, brief, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -1894,6 +2170,8 @@ def full(report, defaults, overrides, rules=None):
     check_sentiment(report, "full run", brief, switches, full_run=True)
     check_topics(report, "full run", brief, switches, full_run=True)
     check_why(report, "full run", brief, switches)
+    check_calibration(report, "full run", brief, switches)
+    check_calibration_narrows(report, "full run", brief)
     check_format(report, "full run", brief, rules)
     check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     check_panel(report, "full run", brief_path, brief)
@@ -1915,6 +2193,7 @@ def full(report, defaults, overrides, rules=None):
     print_sentiment(brief)
     print_topics(brief)
     print_why(brief)
+    print_calibration(brief)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
@@ -1936,6 +2215,7 @@ def main():
     check_sentiment_switches(report, defaults)
     check_topic_switches(report, defaults)
     check_why_switches(report, defaults)
+    check_calibration_switches(report, defaults)
     check_numbering_rules(report)
     check_text(report)
     rules = load_format_rules(report)
