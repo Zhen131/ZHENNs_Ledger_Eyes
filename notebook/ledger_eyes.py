@@ -5426,7 +5426,7 @@ pd.DataFrame({
 # - Research on whether the mood of the crowd can predict prices has found only weak evidence.
 # - The Fear and Greed Index takes 15% of its value from statistics of social media posts, partly the same kind of source as the mood measured here, so a correlation with the index comes out higher than a check against an independent measure would.
 #
-# **The internet.** This is the only chapter that connects to the price sources and to alternative.me, and it needs no key and no account. A source that cannot be reached, asks for a key or an account, or gives no usable data counts as "not obtained": the chapter says why, leaves out what depends on it (its correlations are `null`) and the notebook goes on. Results are cached in `WORK_DIR/cache/`, so a later run with the same days connects to nothing.
+# **The internet.** This is the only chapter that connects to the price sources and to alternative.me, and it needs no key and no account. A source that cannot be reached, asks for a key or an account, or gives no usable data counts as "not obtained": the chapter says why, leaves out what depends on it (its correlations are `null`) and the notebook goes on. Results are cached in `WORK_DIR/cache/`, so a later run with the same days does not connect to them again.
 #
 # ***
 #
@@ -5444,7 +5444,7 @@ pd.DataFrame({
 # - 「情绪能不能预测价格」，研究给出的结论很弱。
 # - 恐惧贪婪指数有 15% 来自社交媒体上帖子的统计，和这里量的情绪有一部分同源，所以和这个指数的相关，会比和一个独立的量对照时偏高。
 #
-# **联网。** 只有这一章连价格来源和 alternative.me，不要任何钥匙，也不要注册。某个来源连不上、要钥匙或要注册、或者给不出能用的数据，就算「未取得」：这一章写明原因，跳过依赖它的东西（相关系数写 `null`），笔记本接着往下跑。拉到的数据缓存在 `WORK_DIR/cache/`，以后用同样的日子再跑，就什么都不连。
+# **联网。** 只有这一章连价格来源和 alternative.me，不要任何钥匙，也不要注册。某个来源连不上、要钥匙或要注册、或者给不出能用的数据，就算「未取得」：这一章写明原因，跳过依赖它的东西（相关系数写 `null`），笔记本接着往下跑。拉到的数据缓存在 `WORK_DIR/cache/`，以后用同样的日子再跑，就不再连它们。
 
 # %% [markdown]
 # ### Reading the web, and the caches

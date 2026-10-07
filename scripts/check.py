@@ -5344,7 +5344,8 @@ def check_offline_sources(report, label, parameters, defaults):
     index = parameters.get("FEAR_GREED_SOURCE", defaults.get("FEAR_GREED_SOURCE"))
     report.check(isinstance(price, str) and price != "auto" and "://" not in price
                  and isinstance(index, str) and "://" not in index,
-                 f"{label}: the price and the index come from local files or none, so the run connects to nothing "
+                 f"{label}: the price and the index come from local files or none, so the run connects to no price source "
+                 "and not to alternative.me "
                  f"(PRICE_SOURCE {price!r}, FEAR_GREED_SOURCE {index!r})")
 
 
