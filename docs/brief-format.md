@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.4** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.5** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -19,12 +19,14 @@ How to read the tables:
 
 | Column | Meaning |
 | --- | --- |
-| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>`, `<n_drawers>`, `<emotion>`, `<prelabel>` and `<layer>` stand for every key of an object whose keys vary (described in the row of that object). |
+| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>`, `<n_drawers>`, `<emotion>`, `<prelabel>`, `<layer>` and `<drawer>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
 | Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
 
 The rules allow no other fields: a writer that adds a field without changing the rules (and this document, and the version) produces a brief that does not pass.
+
+One rule cannot be written in JSON Schema, because it compares two fields: every day of a layer's `days` lies within that layer's `date_from` and `date_to` (in `dated_data`, `daily` and `new_words`). The notebook's format check (`brief_problems`) checks it besides the rules file, and a brief that breaks it is not saved either.
 
 ## What each section covers
 
@@ -39,6 +41,8 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. The drawer rows use the drawers of `drawers`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from`; `why.any_drawer.n_posts` |
 | `emotions` | First the emotion data: the posts of a pre-label file (silver labels from a language model, read from `EMOTION_LABELS_SOURCE`) that fit the data source and are left after four steps, split into training, validation and test parts. Then the same posts as `topics`, each given an emotion by the chosen network; the drawer rows use the drawers of `drawers`. | `emotions.labels_source`; `emotions.labels_file.n_matched`; `emotions.dropped`; `emotions.n_posts`; `emotions.split`; `emotions.scoring.post_table`; `emotions.overall.n_posts` |
 | `dated_data` | Not the StockTwits posts: the posts of two dated datasets (tweets as the `retail` layer, news headlines as the `media` layer) that are left after the date, language and Bitcoin steps and the daily cap, counted per layer and UTC day. It covers its own period, given in its own fields. | `dated_data.datasets.tweets.steps`; `dated_data.datasets.news.steps`; `dated_data.date_from`; `dated_data.date_to`; `dated_data.layers.<layer>.date_from`; `dated_data.layers.<layer>.date_to` |
+| `daily` | The same posts as `dated_data`, every post cleaned, scored by the sentiment model of `sentiment` (split at 0.5), given an emotion by the network of `emotions` and put into the drawers of `drawers`; counted per layer and UTC day, for the whole period and for every day, with the bullish shares calibrated by recognition rates read from `sentiment.evaluation`. It covers the same period as `dated_data`, given in its own fields. | `daily.post_table`; `daily.scoring.n_scored`; `daily.calibration.rates_from`; `daily.date_from`; `daily.date_to`; `daily.layers.<layer>.date_from`; `daily.layers.<layer>.date_to` |
+| `new_words` | The same posts as `dated_data`, by their cleaned texts: the words that suddenly appear in many more posts of a layer than on the days before. It covers the same period as `dated_data`, given in its own fields. | `new_words.post_table`; `new_words.date_from`; `new_words.date_to`; `new_words.layers.<layer>.date_from`; `new_words.layers.<layer>.date_to` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -52,7 +56,7 @@ For example, with the default switches `scope.coins` is `"all"`, because the mod
 | `generated_at` | string | yes | no | When the brief was saved: UTC time, ISO 8601, to the second, ending in `Z` (for example `2026-01-31T12:00:00Z`). |
 | `scope` | object | yes | no | What the brief as a whole covers. |
 | `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local spreadsheet. |
-| `scope.granularity` | string | yes | no | `"batch"`: every section computed from the data source (`DATA_SOURCE`) describes it at once; results per day sit in sections of their own that carry their own period (`dated_data`). The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
+| `scope.granularity` | string | yes | no | `"batch"`: every section computed from the data source (`DATA_SOURCE`) describes it at once; results per day sit in sections of their own that carry their own period (`dated_data`, `daily`, `new_words`). The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
 | `scope.coins` | string | yes | no | Which posts the working sample holds: `"all"` (posts about all coins) or `"btc_only"` (only posts that mention Bitcoin). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
 | `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
 
@@ -951,11 +955,170 @@ An object keyed by `<layer>` has one key per layer that has posts in the table: 
 | `dated_data.layers.<layer>.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
 | `dated_data.layers.<layer>.days[].n_posts` | integer | yes | no | The layer's posts on that day (at most `daily_cap`). |
 
+### daily
+
+Chapter 13: every post of the dated post table (see `dated_data`) cleaned with `clean_texts`, scored by the sentiment model chosen in `sentiment` (probability of bullish, split at 0.5), given an emotion by the network chosen in `emotions` and put into the drawers of the word list of `drawers`; then counted per layer and UTC day. Like `dated_data`, it describes a period and carries its own `date_from` and `date_to`, for the section and for every layer; every layer's `days` are exactly the days of `dated_data.layers.<layer>.days` (see [Daily results](#daily-results)). The models learned from StockTwits posts, so the shares and emotions describe what these models make of tweets and news headlines; they are a reference, not a measurement.
+
+A **pile** is either all posts of one layer on one day (or over the layer's whole period), or those of them that sit in one drawer. Every post of a pile is split at 0.5 into bullish or bearish, so `half_counts.bullish` + `half_counts.bearish` = `n_posts`; a drawer's pile records only its bullish posts, `n_half_bullish`. A pile with fewer posts than `daily.min_posts` is marked `too_few_posts`, and both its shares are `null`; a day without posts is a pile of 0 posts and is marked too. An object keyed by `<drawer>` has one key per drawer of `daily.drawer_ids`, in that order; an object keyed by `<emotion>` has one key per class of `daily.emotion_classes`, in that order.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `daily` | object | yes | no | Chapter 13: the dated posts scored, counted per layer and UTC day, and example posts of chosen days. |
+| `daily.post_table` | string | yes | no | The table the posts come from, `dated_posts` (chapter 12). |
+| `daily.score_table` | string | yes | no | The notebook's table with every dated post's scores, `dated_scores`. |
+| `daily.day` | string | yes | no | The unit of every day in this section: `"UTC"`. |
+| `daily.date_from` | string | yes | no | The first UTC day of the section, `YYYY-MM-DD`: the same as `dated_data.date_from`. |
+| `daily.date_to` | string | yes | no | The last UTC day of the section, `YYYY-MM-DD`: the same as `dated_data.date_to`. |
+| `daily.min_posts` | integer | yes | no | `DAILY_MIN_POSTS`: a pile with fewer posts is marked `too_few_posts` and has no shares. |
+| `daily.half_rule` | string | yes | no | How a post is split at 0.5 (bullish above 0.5, otherwise bearish); the same rule as chapter 10's. |
+| `daily.scoring` | object | yes | no | How the dated posts were scored. |
+| `daily.scoring.text` | string | yes | no | The text the models read: `clean_text`, the post's text after `clean_texts`. |
+| `daily.scoring.sentiment_model` | string | yes | no | The sentiment model, the one chosen in `sentiment.selection.selected`. |
+| `daily.scoring.emotion_model` | string | yes | no | The emotion network, the one chosen in `emotions.selection.selected`. |
+| `daily.scoring.n_scored` | integer | yes | no | Dated posts scored: every post of the dated post table, `dated_data.n_posts`. |
+| `daily.scoring.n_distinct_clean_texts` | integer | yes | no | Different cleaned texts among them (each was scored once). |
+| `daily.calibration` | object | yes | no | The recognition rates that calibrate every bullish share of this section, and where they come from. |
+| `daily.calibration.status` | string | yes | no | As in `why.calibration.status`: `applied`, `rates_missing`, `rate_gap_too_small` or `three_classes`. Unless `applied`, every `calibrated_bullish_share` of this section is `null`. |
+| `daily.calibration.rates_from` | object | yes | no | The row of `sentiment.evaluation.rows` the rates come from. |
+| `daily.calibration.rates_from.model` | string | yes | no | The chosen sentiment model. |
+| `daily.calibration.rates_from.subset` | string | yes | no | `test_mentions_btc` when `dated_data.switches.btc_only` is true, otherwise `all_test` (not `TOPIC_SCOPE`, which decides `why.calibration`). |
+| `daily.calibration.subset_rule` | string | yes | no | That rule, as an English sentence. |
+| `daily.calibration.true_bullish_rate` | number | yes | yes | That row's bullish recall; `null` with three classes or when it cannot be computed. |
+| `daily.calibration.false_bullish_rate` | number | yes | yes | 1 − that row's bearish recall; `null` as above. |
+| `daily.calibration.rate_gap` | number | yes | yes | True bullish rate − false bullish rate; `null` when either is `null`. |
+| `daily.calibration.rate_posts` | object | yes | no | That row's test posts per class. |
+| `daily.calibration.rate_posts.0` | integer | yes | no | Bearish test posts of the row. |
+| `daily.calibration.rate_posts.2` | integer | yes | no | Bullish test posts of the row. |
+| `daily.calibration.min_rate_gap` | number | yes | no | `MIN_RATE_GAP`, as in `why.calibration.min_rate_gap`. |
+| `daily.calibration.formula` | string | yes | no | The calibration, as an English sentence: (counted share − false bullish rate) ÷ (true bullish rate − false bullish rate), clipped to [0, 1]. |
+| `daily.calibration.assumption` | string | yes | no | The assumption behind using rates measured on StockTwits test posts for tweets and news, as an English sentence. |
+| `daily.emotion_classes` | array | yes | no | The emotions every `emotion_counts` lists, in order: the classes the emotion network actually learned, the same as `emotions.classes`. |
+| `daily.emotion_classes[]` | string | — | no | One emotion. |
+| `daily.drawer_ids` | array | yes | no | The drawers every `drawers` object lists, in word-list order: the same as the ids of `drawers.drawers`. |
+| `daily.drawer_ids[]` | string | — | no | One drawer id. |
+| `daily.word_list_version` | string | yes | no | The version of the drawer word list, the same as `drawers.word_list_version`. |
+| `daily.layers` | object | yes | no | Every layer of `dated_data.layers`, keyed by `<layer>`. |
+| `daily.layers.<layer>` | object | — | no | One layer. |
+| `daily.layers.<layer>.date_from` | string | yes | no | The layer's first day, the same as `dated_data.layers.<layer>.date_from`. |
+| `daily.layers.<layer>.date_to` | string | yes | no | The layer's last day, the same as `dated_data.layers.<layer>.date_to`. |
+| `daily.layers.<layer>.overall` | object | yes | no | The layer's whole period: every count is the sum of the same count over `days`. |
+| `daily.layers.<layer>.overall.n_posts` | integer | yes | no | The layer's posts, the same as `dated_data.layers.<layer>.n_posts`. |
+| `daily.layers.<layer>.overall.half_counts` | object | yes | no | The posts split at 0.5. |
+| `daily.layers.<layer>.overall.half_counts.bullish` | integer | yes | no | Posts with a probability of bullish above 0.5. |
+| `daily.layers.<layer>.overall.half_counts.bearish` | integer | yes | no | The other posts; bullish + bearish = `n_posts`. |
+| `daily.layers.<layer>.overall.half_bullish_share` | number | yes | yes | The counted bullish share, `half_counts.bullish` ÷ `n_posts`; `null` when `too_few_posts`. |
+| `daily.layers.<layer>.overall.calibrated_bullish_share` | number | yes | yes | The counted share calibrated with `daily.calibration`, clipped to [0, 1]; `null` when `too_few_posts` or the status is not `applied`. |
+| `daily.layers.<layer>.overall.too_few_posts` | boolean | yes | no | True when `n_posts` is below `daily.min_posts`. |
+| `daily.layers.<layer>.overall.emotion_counts` | object | yes | no | Posts per emotion of the network, keyed by `<emotion>`; they add up to `n_posts`. |
+| `daily.layers.<layer>.overall.emotion_counts.<emotion>` | integer | — | no | Posts given this emotion. |
+| `daily.layers.<layer>.overall.n_in_any_drawer` | integer | yes | no | Posts in at least one drawer. |
+| `daily.layers.<layer>.overall.n_in_no_drawer` | integer | yes | no | Posts in no drawer; with `n_in_any_drawer` it adds up to `n_posts`. |
+| `daily.layers.<layer>.overall.drawers` | object | yes | no | One pile per drawer, keyed by `<drawer>`. The piles overlap: a post can be in several drawers. |
+| `daily.layers.<layer>.overall.drawers.<drawer>` | object | — | no | The posts in this drawer. |
+| `daily.layers.<layer>.overall.drawers.<drawer>.n_posts` | integer | yes | no | Posts in the drawer (at most the layer's `n_posts`). |
+| `daily.layers.<layer>.overall.drawers.<drawer>.n_half_bullish` | integer | yes | no | Of these, posts with a probability of bullish above 0.5 (bullish at 0.5); the others are bearish at 0.5. |
+| `daily.layers.<layer>.overall.drawers.<drawer>.half_bullish_share` | number | yes | yes | The drawer's counted bullish share; `null` when its `too_few_posts`. |
+| `daily.layers.<layer>.overall.drawers.<drawer>.calibrated_bullish_share` | number | yes | yes | The drawer's calibrated bullish share; `null` when its `too_few_posts` or the status is not `applied`. |
+| `daily.layers.<layer>.overall.drawers.<drawer>.too_few_posts` | boolean | yes | no | True when the drawer has fewer posts than `daily.min_posts`. |
+| `daily.layers.<layer>.days` | array | yes | no | One entry per calendar day from the layer's `date_from` to its `date_to`, sorted by date: the same days as `dated_data.layers.<layer>.days`. |
+| `daily.layers.<layer>.days[]` | object | — | no | One day: the same fields as `overall`, for the posts of that day, and its date. |
+| `daily.layers.<layer>.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
+| `daily.layers.<layer>.days[].n_posts` | integer | yes | no | The layer's posts on that day, the same as in `dated_data`. |
+| `daily.layers.<layer>.days[].half_counts` | object | yes | no | The day's posts split at 0.5. |
+| `daily.layers.<layer>.days[].half_counts.bullish` | integer | yes | no | Bullish at 0.5. |
+| `daily.layers.<layer>.days[].half_counts.bearish` | integer | yes | no | Bearish at 0.5. |
+| `daily.layers.<layer>.days[].half_bullish_share` | number | yes | yes | The day's counted bullish share; `null` when `too_few_posts`. |
+| `daily.layers.<layer>.days[].calibrated_bullish_share` | number | yes | yes | The day's calibrated bullish share; `null` when `too_few_posts` or the status is not `applied`. |
+| `daily.layers.<layer>.days[].too_few_posts` | boolean | yes | no | True when the day has fewer posts than `daily.min_posts` (also on a day without posts). |
+| `daily.layers.<layer>.days[].emotion_counts` | object | yes | no | The day's posts per emotion, keyed by `<emotion>`. |
+| `daily.layers.<layer>.days[].emotion_counts.<emotion>` | integer | — | no | Posts given this emotion on that day. |
+| `daily.layers.<layer>.days[].n_in_any_drawer` | integer | yes | no | The day's posts in at least one drawer. |
+| `daily.layers.<layer>.days[].n_in_no_drawer` | integer | yes | no | The day's posts in no drawer. |
+| `daily.layers.<layer>.days[].drawers` | object | yes | no | One pile per drawer for that day, keyed by `<drawer>`. |
+| `daily.layers.<layer>.days[].drawers.<drawer>` | object | — | no | The day's posts in this drawer. |
+| `daily.layers.<layer>.days[].drawers.<drawer>.n_posts` | integer | yes | no | Posts in the drawer on that day. |
+| `daily.layers.<layer>.days[].drawers.<drawer>.n_half_bullish` | integer | yes | no | Of these, posts with a probability of bullish above 0.5 (bullish at 0.5); the others are bearish at 0.5. |
+| `daily.layers.<layer>.days[].drawers.<drawer>.half_bullish_share` | number | yes | yes | The counted bullish share; `null` when `too_few_posts`. |
+| `daily.layers.<layer>.days[].drawers.<drawer>.calibrated_bullish_share` | number | yes | yes | The calibrated bullish share; `null` when `too_few_posts` or the status is not `applied`. |
+| `daily.layers.<layer>.days[].drawers.<drawer>.too_few_posts` | boolean | yes | no | True when the drawer has fewer posts than `daily.min_posts` on that day. |
+| `daily.events` | object | yes | no | Example posts of the days in `EVENT_DAYS`. |
+| `daily.events.days` | array | yes | no | `EVENT_DAYS`, in the order given. |
+| `daily.events.days[]` | string | — | no | One day, `YYYY-MM-DD`. |
+| `daily.events.examples_per_side` | integer | yes | no | `EVENT_EXAMPLES`: the most example posts per day, layer and side. |
+| `daily.events.bullish_at_or_above` | number | yes | no | `BULLISH_THRESHOLD`: a bullish example has a probability of bullish at or above it. |
+| `daily.events.bearish_at_or_below` | number | yes | no | `BEARISH_THRESHOLD`: a bearish example has a probability of bullish at or below it. |
+| `daily.events.items` | array | yes | no | One item per day of `days`, in the same order. |
+| `daily.events.items[]` | object | — | no | One event day. |
+| `daily.events.items[].date` | string | yes | no | The day, `YYYY-MM-DD`. |
+| `daily.events.items[].layers` | object | yes | no | Every layer of `daily.layers`, keyed by `<layer>`. |
+| `daily.events.items[].layers.<layer>` | object | — | no | The day in one layer. |
+| `daily.events.items[].layers.<layer>.in_period` | boolean | yes | no | True when the day lies within the layer's period; when false, the other fields are 0 or empty. |
+| `daily.events.items[].layers.<layer>.n_posts` | integer | yes | no | The layer's posts on that day. |
+| `daily.events.items[].layers.<layer>.bullish` | array | yes | no | At most `examples_per_side` posts with a probability of bullish at or above `bullish_at_or_above`, highest first, every text once (ties by `post_id`). |
+| `daily.events.items[].layers.<layer>.bullish[]` | object | — | no | One example post. |
+| `daily.events.items[].layers.<layer>.bullish[].post_id` | string | yes | no | The post's id in the dated post table. |
+| `daily.events.items[].layers.<layer>.bullish[].text` | string | yes | no | Its text, with account names and links replaced. |
+| `daily.events.items[].layers.<layer>.bullish[].bullish_probability` | number | yes | no | The model's probability of bullish for it. |
+| `daily.events.items[].layers.<layer>.bearish` | array | yes | no | At most `examples_per_side` posts with a probability of bullish at or below `bearish_at_or_below`, lowest first, every text once (ties by `post_id`). |
+| `daily.events.items[].layers.<layer>.bearish[]` | object | — | no | One example post. |
+| `daily.events.items[].layers.<layer>.bearish[].post_id` | string | yes | no | The post's id in the dated post table. |
+| `daily.events.items[].layers.<layer>.bearish[].text` | string | yes | no | Its text, with account names and links replaced. |
+| `daily.events.items[].layers.<layer>.bearish[].bullish_probability` | number | yes | no | The model's probability of bullish for it. |
+| `daily.events.items[].layers.<layer>.new_words` | array | yes | no | The layer's new words of that day, in the order of `new_words` (empty when the day is not judged or has none). |
+| `daily.events.items[].layers.<layer>.new_words[]` | string | — | no | One new word. |
+
+### new_words
+
+Chapter 13: per layer and UTC day, the words that suddenly appear in many more posts than on the days before. Words are the pieces of a post's cleaned text (`clean_text`) between spaces; a word counts once per post. A word's count on a day is the number of the layer's posts that day containing it; its past daily mean is its counts on the `window_days` calendar days before, added up and divided by `window_days` (a day without posts counts 0). A word is new when its count is at least `min_count` and at least `ratio` × its past daily mean; with a past daily mean of 0 only the first condition applies. No model is involved, so the same switches always give the same section. Like `dated_data`, it carries its own period, for the section and for every layer, and every layer's `days` are exactly the days of `dated_data.layers.<layer>.days`.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `new_words` | object | yes | no | Chapter 13: the new words of every layer and day, with example posts. |
+| `new_words.post_table` | string | yes | no | The table the posts come from, `dated_posts`. |
+| `new_words.text` | string | yes | no | The text the words come from: `clean_text`. |
+| `new_words.word_rule` | string | yes | no | What a word and its count are, as an English sentence. |
+| `new_words.day` | string | yes | no | The unit of every day in this section: `"UTC"`. |
+| `new_words.date_from` | string | yes | no | The first UTC day of the section, the same as `dated_data.date_from`. |
+| `new_words.date_to` | string | yes | no | The last UTC day of the section, the same as `dated_data.date_to`. |
+| `new_words.window_days` | integer | yes | no | `NEW_WORD_WINDOW`: the calendar days before a day that give the past daily mean. |
+| `new_words.min_count` | integer | yes | no | `NEW_WORD_MIN_COUNT`: a new word is in at least this many posts of the day. |
+| `new_words.ratio` | number | yes | no | `NEW_WORD_RATIO`: a new word is in at least this many times as many posts as its past daily mean. |
+| `new_words.max_per_day` | integer | yes | no | `NEW_WORD_MAX_PER_DAY`: the most new words reported per layer and day. |
+| `new_words.quotes_per_word` | integer | yes | no | The most example posts per new word (1 to 3). |
+| `new_words.new_word_rule` | string | yes | no | When a word is new, as an English sentence. |
+| `new_words.ignored_words` | array | yes | no | Words that are never new: NLTK's English stop words, `never`, `bitcoin`, `btc`, `user` and `http`, sorted. |
+| `new_words.ignored_words[]` | string | — | no | One such word. |
+| `new_words.ignored_rule` | string | yes | no | The words that never count, also words without a letter and words of a single character, as an English sentence. |
+| `new_words.order` | string | yes | no | The order of a day's new words, which decides which ones are kept when there are more than `max_per_day`: most posts first, then the higher ratio (`null` first), then the word. |
+| `new_words.quote_rule` | string | yes | no | How the example posts are chosen, as an English sentence. |
+| `new_words.layers` | object | yes | no | Every layer of `dated_data.layers`, keyed by `<layer>`. |
+| `new_words.layers.<layer>` | object | — | no | One layer. |
+| `new_words.layers.<layer>.date_from` | string | yes | no | The layer's first day, the same as in `dated_data`. |
+| `new_words.layers.<layer>.date_to` | string | yes | no | The layer's last day, the same as in `dated_data`. |
+| `new_words.layers.<layer>.n_days_judged` | integer | yes | no | Days judged: every day but the first `window_days`. |
+| `new_words.layers.<layer>.n_days_with_new_words` | integer | yes | no | Days with at least one new word. |
+| `new_words.layers.<layer>.n_new_words` | integer | yes | no | New words over all days (a word new on two days counts twice). |
+| `new_words.layers.<layer>.days` | array | yes | no | One entry per calendar day from the layer's `date_from` to its `date_to`, sorted by date: the same days as in `dated_data`. |
+| `new_words.layers.<layer>.days[]` | object | — | no | One day. |
+| `new_words.layers.<layer>.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
+| `new_words.layers.<layer>.days[].n_posts` | integer | yes | no | The layer's posts on that day, the same as in `dated_data`. |
+| `new_words.layers.<layer>.days[].judged` | boolean | yes | no | False for the first `window_days` days of the layer, which have fewer days before them; such a day has no new words. |
+| `new_words.layers.<layer>.days[].new_words` | array | yes | no | The day's new words in the order of `new_words.order`, at most `max_per_day`. |
+| `new_words.layers.<layer>.days[].new_words[]` | object | — | no | One new word. |
+| `new_words.layers.<layer>.days[].new_words[].word` | string | yes | no | The word, as it appears in the cleaned texts. |
+| `new_words.layers.<layer>.days[].new_words[].n_posts` | integer | yes | no | Its count: the layer's posts that day whose cleaned text contains it (at least `min_count`). |
+| `new_words.layers.<layer>.days[].new_words[].past_daily_mean` | number | yes | no | Its past daily mean (0 when no post of the `window_days` days before contained it). |
+| `new_words.layers.<layer>.days[].new_words[].ratio` | number | yes | yes | `n_posts` ÷ `past_daily_mean`, at least `new_words.ratio`; `null` when `past_daily_mean` is 0 (never infinity). |
+| `new_words.layers.<layer>.days[].new_words[].quotes` | array | yes | no | 1 to `quotes_per_word` posts of that layer and day whose cleaned text contains the word, in `post_id` order, every text once. |
+| `new_words.layers.<layer>.days[].new_words[].quotes[]` | object | — | no | One example post. |
+| `new_words.layers.<layer>.days[].new_words[].quotes[].post_id` | string | yes | no | The post's id in the dated post table. |
+| `new_words.layers.<layer>.days[].new_words[].quotes[].text` | string | yes | no | Its text, with account names and links replaced. |
+
 ## Daily results
 
 The StockTwits data has no dates, so the sections computed from it (`dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`) describe the whole data source at once, and `scope.granularity` is `"batch"`. Results per day come from dated data and are added in this way, so that no field of an earlier format changes its name, type or meaning:
 
-1. Results per day go into **sections of their own** (so far `dated_data`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
+1. Results per day go into **sections of their own** (so far `dated_data`, `daily` and `new_words`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
 2. A list of days has one entry per calendar day from the first to the last day of its period, sorted by date, each with `date` (`YYYY-MM-DD`) and the section's counts for that day; a day without posts is still listed, with counts of 0 (and `null` for a share that cannot be computed).
 3. The sections computed from the StockTwits data stay results for the whole data source; they get no `days`.
 4. `scope.granularity` stays `"batch"` for such a brief, which is half whole-batch and half per day. `"daily"` is kept for a later brief whose every section is computed per day (for example from comments collected day by day); it is not allowed in the current format.
@@ -978,6 +1141,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | 1.2 | Chapter 9 puts the topic posts into drawers chosen by a person through a versioned word list and groups the posts in no drawer; chapter 10 gives every drawer the same row as a topic. New: the top-level section `drawers`; in `why` the fields `drawers` (one row per drawer), `any_drawer` and `no_drawer`. Additions only: no field of 1.1 changed. |
 | 1.3 | Chapter 11 learns eight crypto emotions and `none` from silver labels (a pre-label file), evaluates two networks against two baselines and gives every topic post an emotion, overall and per drawer, with example posts and an interface for a person's review. New: the top-level section `emotions`. Additions only: no field of 1.2 changed. |
 | 1.4 | Chapter 12 reads two public datasets with dates, tweets as the `retail` layer and news headlines as the `media` layer, into one dated post table, and counts its posts per layer and UTC day. New: the top-level section `dated_data`, which carries its own period (`date_from`, `date_to`, per layer as well). `scope.granularity` stays `"batch"`; the rules for results per day are rewritten in [Daily results](#daily-results). Additions only: no field of 1.3 changed. |
+| 1.5 | Chapter 13 cleans and scores every dated post (bullish share at 0.5 and calibrated, emotion, drawers) and counts it per layer and UTC day, with example posts of chosen days, and finds the new words of every layer and day. New: the top-level sections `daily` and `new_words`, each carrying its own period like `dated_data`. The format check also refuses a day outside its layer's period. Additions only: no field of 1.4 changed. |
 
 ## Reading a brief
 

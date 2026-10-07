@@ -245,18 +245,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 14 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions` and `dated_data`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 14 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions`, `dated_data`, `daily` and `new_words`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 14 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 14 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 14 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`、`daily`、`new_words`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 14 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.4",  # the format of chapter 14's rules (docs/brief-format.md in the repository)
+    "format_version": "1.5",  # the format of chapter 14's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -271,6 +271,8 @@ brief = {
     "why": None,
     "emotions": None,
     "dated_data": None,  # chapter 12
+    "daily": None,  # chapter 13
+    "new_words": None,  # chapter 13
 }
 list(brief)  # show the top-level fields
 
@@ -4749,6 +4751,429 @@ print(f"Rates for the dated posts from chapter 8, row {selected_model_name} / {D
       + ("; the same row as chapter 10" if DATED_RATE_SUBSET == calibration_rates["subset"] else ""))
 
 # %% [markdown]
+# ### Bullish share, emotions and drawers per day
+#
+# A **pile** of posts is either all posts of one layer on one UTC day, or those of them that sit in one drawer. For every pile:
+#
+# - **posts** and the **calls at 0.5**: every scored post is bullish or bearish, so bullish + bearish = posts (a drawer's pile keeps only its bullish calls);
+# - the **counted bullish share**: bullish ÷ posts;
+# - the **calibrated bullish share**: the counted share calibrated by chapter 10's `calibrate_bullish_share` with the two rates above, (share − false bullish rate) ÷ (true bullish rate − false bullish rate), clipped to [0, 1];
+# - **too few**: a pile with fewer posts than `DAILY_MIN_POSTS` is marked, and both its shares are `null`; its counts stay. Why 100 by default: split at 0.5, the share rests on every post of the pile, and with 100 posts a share near one half can be off by about 10 percentage points by chance (2 × √(0.5 × 0.5 / 100) = 0.1), the same rule of thumb as `MIN_BULLISH_BEARISH_POSTS` in chapter 10; calibration then multiplies that error by 1 ÷ gap. A day without posts is a pile of 0 posts and is marked too. The media layer has a few headlines a day, so its days rarely reach the bar; its whole period does.
+#
+# Every layer gets one row for its whole period and one row for every calendar day from its first to its last day, the same days as in `dated_data`. Besides the pile of all its posts, a row holds:
+#
+# - the **emotions**: posts per emotion. The emotions listed are the classes the network of chapter 11 actually learned (`emotion_classes`), in that order. An emotion with too few pre-labelled posts was left out of the training, and so was `none` when `EMOTION_KEEP_NONE` is `False`; the network can never give such an emotion, so it is not listed;
+# - the **drawers**: one pile per drawer, in word-list order, and the posts in at least one drawer and in none. Only the drawers of the word list (layer 1 of chapter 9) are used. The groups of layer 2 are found afresh in every run from other posts, so group 3 of one day has nothing to do with group 3 of the next, while a drawer is the same on every day. A post can sit in several drawers, so the drawer piles overlap.
+#
+# The whole period's counts are the sums of its days'. Shares of an emotion or of a drawer are not stored: they follow from the counts.
+#
+# ***
+#
+# ### 每天的看多比例、情绪和抽屉
+#
+# 一**堆**帖子，指一层一个 UTC 日的全部帖子，或者其中进了某个抽屉的那些。对每一堆：
+#
+# - **条数**和**按 0.5 分的判断**：打了分的帖子每条都是看多或看空，所以看多 + 看空 = 条数（抽屉那一堆只记看多条数）；
+# - **直接数的看多比例**：看多 ÷ 条数；
+# - **校正后的看多比例**：用上面两个认出率，经第 10 章的 `calibrate_bullish_share` 校正直接数的比例，即（比例 − 错看多率）÷（真看多率 − 错看多率），夹到 0 和 1 之间；
+# - **不够**：条数少于 `DAILY_MIN_POSTS` 的一堆要标出来，两个比例都写 `null`，条数照写。默认为什么是 100：按 0.5 分时，比例建立在这一堆的每一条帖子上；只有 100 条时，一个接近一半的比例光靠偶然就可能差 10 个百分点左右（2 × √(0.5 × 0.5 / 100) = 0.1），和第 10 章 `MIN_BULLISH_BEARISH_POSTS` 是同一条经验规则；校正还会把这个误差放大「1 ÷ 差」倍。没有帖子的日子是一堆 0 条的帖子，也标出来。媒体层每天只有几条标题，所以它的单日很少够数；整个时段是够的。
+#
+# 每层有整个时段一行，再从第一天到最后一天每个日历日一行，和 `dated_data` 里的日子一样。一行里除了这一层全部帖子那一堆，还有：
+#
+# - **情绪**：每种情绪几条。列出的情绪是第 11 章的网络实际学过的类（`emotion_classes`），顺序也一样。预标帖子太少的情绪在训练时被去掉了，`EMOTION_KEEP_NONE` 为 `False` 时 `none` 也被去掉了；网络根本判不出这些情绪，所以不列；
+# - **抽屉**：每个抽屉一堆，按词表的顺序，外加至少进了一个抽屉的条数和一个都没进的条数。只用词表里的抽屉（第 9 章的第 1 层）。第 2 层的堆每次运行都从别的帖子重新分出来，某一天的第 3 堆和第二天的第 3 堆毫无关系；而抽屉每天都是同一个。一条帖子可以同时在好几个抽屉里，所以各抽屉的堆彼此有重叠。
+#
+# 整个时段的条数是各天之和。某种情绪、某个抽屉占当天的比例不另外存：由条数相除就能得到。
+
+# %%
+# Count every layer's posts per UTC day: calls at 0.5, emotions and drawers; both bullish shares; the brief's daily section.
+def daily_shares(n_posts, n_bullish):
+    """(too few, counted share, calibrated share) of a pile: no share below DAILY_MIN_POSTS posts."""
+    too_few = n_posts < DAILY_MIN_POSTS
+    counted = None if too_few else n_bullish / n_posts  # DAILY_MIN_POSTS >= 1, so n_posts > 0 here
+    return too_few, counted, calibrate_bullish_share(counted, dated_rates)
+
+
+def daily_pile(n_posts, n_bullish):
+    """The pile of all posts of a row: posts, calls at 0.5, both bullish shares and the too-few mark."""
+    too_few, counted, calibrated = daily_shares(n_posts, n_bullish)
+    return {"n_posts": int(n_posts), "half_counts": {"bullish": int(n_bullish), "bearish": int(n_posts - n_bullish)},
+            "half_bullish_share": counted, "calibrated_bullish_share": calibrated, "too_few_posts": too_few}
+
+
+def daily_drawer_pile(n_posts, n_bullish):
+    """The pile of one drawer: posts, bullish calls at 0.5, both bullish shares and the too-few mark."""
+    too_few, counted, calibrated = daily_shares(n_posts, n_bullish)
+    return {"n_posts": int(n_posts), "n_half_bullish": int(n_bullish), "half_bullish_share": counted,
+            "calibrated_bullish_share": calibrated, "too_few_posts": too_few}
+
+
+def daily_counts(scores, days):
+    """Per day of days (every calendar day of a layer): posts, bullish calls, posts per emotion and per drawer."""
+    bullish = (scores["half_call"] == "bullish").to_numpy()
+    columns = {"posts": np.ones(len(scores), dtype="int64"), "bullish": bullish.astype("int64"),
+               "any_drawer": (scores["n_drawers"] > 0).to_numpy().astype("int64")}
+    for label in emotion_classes:
+        columns[f"emotion:{label}"] = (scores["emotion"] == label).to_numpy().astype("int64")
+    for drawer in DRAWER_IDS:
+        inside = scores[drawer].to_numpy()
+        columns[f"drawer:{drawer}"] = inside.astype("int64")
+        columns[f"drawer bullish:{drawer}"] = (inside & bullish).astype("int64")
+    counted = pd.DataFrame(columns, index=scores.index).groupby(scores["date"].to_numpy()).sum()
+    return counted.reindex(days, fill_value=0).astype("int64")
+
+
+def daily_row(counts):
+    """One row of the daily section from a row of daily_counts (a day) or their sum (the whole period)."""
+    return {
+        **daily_pile(counts["posts"], counts["bullish"]),
+        "emotion_counts": {label: int(counts[f"emotion:{label}"]) for label in emotion_classes},
+        "n_in_any_drawer": int(counts["any_drawer"]),
+        "n_in_no_drawer": int(counts["posts"] - counts["any_drawer"]),
+        "drawers": {drawer: daily_drawer_pile(counts[f"drawer:{drawer}"], counts[f"drawer bullish:{drawer}"])
+                    for drawer in DRAWER_IDS},
+    }
+
+
+daily_tables, daily_layers = {}, {}
+for layer, days in days_per_layer.items():  # chapter 12: every calendar day of every layer with posts
+    counts = daily_counts(dated_scores[dated_scores["layer"] == layer], list(days.index))
+    if not (counts["posts"] == days).all():
+        raise AssertionError(f"{layer}: the posts per day differ from chapter 12's count")
+    daily_tables[layer] = counts
+    daily_layers[layer] = {
+        "date_from": days.index[0], "date_to": days.index[-1],
+        "overall": daily_row(counts.sum()),
+        "days": [{"date": day, **daily_row(row)} for day, row in counts.iterrows()],
+    }
+brief["daily"] = {
+    "post_table": "dated_posts",
+    "score_table": "dated_scores",
+    "day": "UTC",
+    "date_from": brief["dated_data"]["date_from"],
+    "date_to": brief["dated_data"]["date_to"],
+    "min_posts": DAILY_MIN_POSTS,
+    "half_rule": "bullish when the probability of bullish is above 0.5, otherwise bearish (exactly 0.5 is bearish); "
+                 "nothing is unsure",
+    "scoring": {"text": "clean_text", "sentiment_model": selected_model_name, "emotion_model": selected_emotion_model_name,
+                "n_scored": int(len(dated_scores)), "n_distinct_clean_texts": int(len(distinct_clean))},
+    "calibration": {
+        "status": dated_rates["status"],
+        "rates_from": {"model": dated_rates["model"], "subset": dated_rates["subset"]},
+        "subset_rule": "test_mentions_btc when DATED_BTC_ONLY is true (every dated post mentions Bitcoin), otherwise "
+                       "all_test",
+        "true_bullish_rate": dated_rates["true_bullish_rate"],
+        "false_bullish_rate": dated_rates["false_bullish_rate"],
+        "rate_gap": dated_rates["rate_gap"],
+        "rate_posts": dated_rates["rate_posts"],
+        "min_rate_gap": MIN_RATE_GAP,
+        "formula": "(half_bullish_share - false_bullish_rate) / (true_bullish_rate - false_bullish_rate), clipped to "
+                   "[0, 1]; null unless status is applied or when the pile has too few posts",
+        "assumption": "the rates were measured on StockTwits test posts; using them for tweets and news assumes that the "
+                      "model recognises bullish and bearish posts there as well as on StockTwits",
+    },
+    "emotion_classes": list(emotion_classes),
+    "drawer_ids": list(DRAWER_IDS),
+    "word_list_version": DRAWER_WORDS_VERSION,
+    "layers": daily_layers,
+}
+daily_summary = {}
+for layer, record in daily_layers.items():
+    counted = pd.Series([day["half_bullish_share"] for day in record["days"]], dtype="float64")
+    calibrated = pd.Series([day["calibrated_bullish_share"] for day in record["days"]], dtype="float64")
+    daily_summary[layer] = {
+        "days": len(record["days"]), "days with a share": int(counted.notna().sum()),
+        "days too few": sum(day["too_few_posts"] for day in record["days"]),
+        "counted: lowest": counted.min(), "counted: median": counted.median(), "counted: highest": counted.max(),
+        "calibrated: lowest": calibrated.min(), "calibrated: median": calibrated.median(),
+        "calibrated: highest": calibrated.max(),
+        "whole period: counted": record["overall"]["half_bullish_share"],
+        "whole period: calibrated": record["overall"]["calibrated_bullish_share"],
+    }
+print(f"Days with fewer than {DAILY_MIN_POSTS} posts have no share; calibration status: {dated_rates['status']}")
+pd.DataFrame(daily_summary).T.map(lambda value: "—" if value is None or (isinstance(value, float) and np.isnan(value))
+                                  else (round(value, 3) if isinstance(value, float) else value))
+
+# %% [markdown]
+# ### The bullish share per day as a chart
+#
+# One panel per layer: the counted share and the calibrated share of every day that is not marked too few, and, as thinner lines, the same two shares over the 7 days up to each day (the posts and bullish calls of those 7 days added up, drawn only where they reach `DAILY_MIN_POSTS`). The brief stores the daily values only. A layer whose days are all too few, such as the media layer most of the time, has gaps instead of lines.
+#
+# ***
+#
+# ### 每天的看多比例：画成图
+#
+# 每层一张小图：每个不标「不够」的日子的直接数比例和校正后比例；细线是截至每一天的 7 天合起来的同样两个比例（把这 7 天的条数和看多条数加起来再除，合起来够 `DAILY_MIN_POSTS` 条才画）。简报里只存每天的数。一层的日子都「不够」时（媒体层大多如此），图上就是空的，不画线。
+
+# %%
+# The counted and calibrated bullish share per UTC day, one panel per layer, with the same shares over 7 days.
+figure, axes = plt.subplots(len(daily_layers), 1, figsize=(11, 3 * len(daily_layers)), squeeze=False)
+for axis, (layer, record) in zip(axes[:, 0], daily_layers.items()):
+    dates = pd.to_datetime([day["date"] for day in record["days"]])
+    for field, label, color in [("half_bullish_share", "counted at 0.5", "tab:blue"),
+                                ("calibrated_bullish_share", "calibrated", "tab:orange")]:
+        values = [np.nan if day[field] is None else day[field] for day in record["days"]]
+        axis.plot(dates, values, linewidth=0.8, color=color, label=f"{label}, per day")
+    week = daily_tables[layer][["posts", "bullish"]].rolling(7, min_periods=1).sum()  # the 7 days up to each day
+    week_counted = [daily_shares(int(posts), int(bullish))[1:] for posts, bullish in week.to_numpy()]
+    for position, (label, color) in enumerate([("counted at 0.5", "tab:blue"), ("calibrated", "tab:orange")]):
+        values = [np.nan if shares[position] is None else shares[position] for shares in week_counted]
+        axis.plot(dates, values, linewidth=1.6, alpha=0.5, color=color, label=f"{label}, 7 days")
+    axis.set_ylim(0, 1)
+    axis.set_title(f"{layer}: bullish share per UTC day ({record['date_from']} to {record['date_to']}; "
+                   f"no share below {DAILY_MIN_POSTS} posts)")
+    axis.set_ylabel("bullish share")
+    axis.legend(loc="upper right", fontsize="small", ncol=2)
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### The whole period of every layer
+#
+# The row for the whole period of every layer: first the share of every emotion; then, for every drawer, its share of the layer's posts and its two bullish shares (with "too few" where the drawer has fewer posts than `DAILY_MIN_POSTS`).
+#
+# ***
+#
+# ### 每层的整个时段
+#
+# 每层整个时段那一行：先是每种情绪的占比；再是每个抽屉占这一层帖子的比例，以及它的两个看多比例（这个抽屉不到 `DAILY_MIN_POSTS` 条时写「不够」）。
+
+# %%
+# Emotions and drawers over the whole period of every layer.
+emotion_shares = pd.DataFrame({layer: {label: safe_ratio(record["overall"]["emotion_counts"][label],
+                                                         record["overall"]["n_posts"]) for label in emotion_classes}
+                               for layer, record in daily_layers.items()}).T
+print("Share of each emotion over the whole period (the network's calls)")
+print(emotion_shares.map(lambda value: "—" if value is None else round(value, 3)).to_string())
+drawer_lines = []
+for layer, record in daily_layers.items():
+    for drawer in DRAWER_IDS + ["any drawer", "no drawer"]:
+        if drawer in DRAWER_IDS:
+            pile = record["overall"]["drawers"][drawer]
+            line = {"posts": pile["n_posts"], "counted": pile["half_bullish_share"],
+                    "calibrated": pile["calibrated_bullish_share"], "too few": "yes" if pile["too_few_posts"] else "no"}
+        else:
+            posts = record["overall"]["n_in_any_drawer" if drawer == "any drawer" else "n_in_no_drawer"]
+            line = {"posts": posts, "counted": None, "calibrated": None, "too few": ""}
+        drawer_lines.append({"layer": layer, "drawer": drawer, **line,
+                             "share of posts": safe_ratio(line["posts"], record["overall"]["n_posts"])})
+pd.DataFrame(drawer_lines).set_index(["layer", "drawer"]).map(
+    lambda value: "—" if value is None else (round(value, 3) if isinstance(value, float) else value))
+
+# %% [markdown]
+# ### New words
+#
+# For every layer and every day, a **new word** is a word that suddenly appears in many more posts than on the days before:
+#
+# - **Words** are the pieces of the cleaned text (`clean_text`) between spaces. A word counts once per post, however often the post repeats it; a word's **count** on a day is the number of the layer's posts that day whose cleaned text contains it.
+# - The **past daily mean** of a word on a day is its counts on the `NEW_WORD_WINDOW` (7) calendar days before that day, added up and divided by `NEW_WORD_WINDOW`; a day without posts counts as 0.
+# - A word is new when its count is at least `NEW_WORD_MIN_COUNT` (10) **and** at least `NEW_WORD_RATIO` (3) times its past daily mean. When the past daily mean is 0, only the first condition applies and the ratio is `null` (not infinity).
+# - The first `NEW_WORD_WINDOW` days of a layer have fewer days before them, so they are **not judged** and have no new words.
+# - **Words that never count** (`NEW_WORD_IGNORED`): the stop words of NLTK's English list, which cleaning has mostly removed already, including the negations that cleaning keeps (not, no, nor), and never; `bitcoin` and `btc`, which almost every post contains; `user` and `http`, which account names and links became in chapter 12; and, by rule, words without a letter and words of a single character.
+# - **Order and limit.** A day reports at most `NEW_WORD_MAX_PER_DAY` (5) new words: the words in the most posts first; on equal counts the higher ratio first (a ratio of `null` counts as the highest); then in alphabetical order. The words that many posts of a day share say most about that day, while a word that ten posts use for the first time may be one writer's habit.
+# - **Example posts.** Every new word gets up to `NEW_WORD_QUOTES` (3) posts of that layer and day whose cleaned text contains it: their texts, in which account names and links are already replaced, every text once, taken in the order of `post_id`. The ids are fingerprints, so this is a fixed draw that no model influences.
+#
+# **Why these defaults.** They were set before any new word was looked at, by rules of thumb. Below about 10 posts, one writer posting several times or one story copied by a few sites can make a word new by itself; and a word whose usual count is a third of 10 reaches 10 by chance on about 1 day in 400 (Poisson). An ordinary word that passes that minimum swings from day to day by well under a factor of 2 (two standard deviations of a Poisson count of 10 are about 6), so three times its usual count stands out. Five words fit on one line per day. A week puts every weekday into the past once.
+#
+# Only the cleaned words are used and no model, so the same switches always give the same new words. The program gives no names to events: it reports words, counts and example posts, for a person to read.
+#
+# ***
+#
+# ### 新词
+#
+# 对每一层的每一天，**新词**指比前几天突然多出很多帖子在用的词：
+#
+# - **词**是清洗后正文（`clean_text`）里用空格隔开的一段段文字。一条帖子里不管重复几次，一个词只算一次；一个词某天的**当天次数**，是这一层那天清洗后正文里含这个词的帖子条数。
+# - 一个词某天的**过去日均**，是那天之前 `NEW_WORD_WINDOW`（7）个日历日的当天次数加起来，再除以 `NEW_WORD_WINDOW`；没有帖子的日子算 0。
+# - 当天次数不少于 `NEW_WORD_MIN_COUNT`（10），**并且**不少于过去日均的 `NEW_WORD_RATIO`（3）倍，就是新词。过去日均为 0 时只看第一条，倍数写 `null`（不写无穷大）。
+# - 每层最开头的 `NEW_WORD_WINDOW` 天，前面不满这么多天，所以**不判**，没有新词。
+# - **不算的词**（`NEW_WORD_IGNORED`）：NLTK 英文停用词表里的词（清洗已经删掉了大部分，其中包括清洗留下来的否定词 not、no、nor），以及 never；几乎每条帖子都有的 `bitcoin` 和 `btc`；第 12 章把账号名、链接替换成的 `user` 和 `http`；另外按规则，不含字母的词和只有一个字符的词也不算。
+# - **排序和上限。** 每层每天最多报 `NEW_WORD_MAX_PER_DAY`（5）个新词：含这个词的帖子最多的排前面；一样多时倍数大的排前面（倍数为 `null` 的算最大）；再按字母顺序。一天里很多帖子都在用的词，最能说明这一天；而十条帖子头一回用的词，可能只是某一个人的习惯。
+# - **例句。** 每个新词给最多 `NEW_WORD_QUOTES`（3）条这一层那天清洗后正文含这个词的帖子：给的是正文（账号名和链接已经替换过），同一段正文只出现一次，按 `post_id` 的顺序取。编号本身是指纹，所以这是一次固定的抽取，不受任何模型影响。
+#
+# **默认值为什么这样定。** 它们是在看任何新词之前，按经验规则定下的。不到 10 条帖子时，一个人连发几条，或者一条新闻被几个网站转载，就能单独让一个词变成新词；而一个平时每天 10 条的三分之一（3.3 条）的词，光靠偶然达到 10 条，大约 400 天才有一天（泊松分布）。过了这个下限的普通词，每天的起伏远不到 2 倍（泊松分布下 10 条的两个标准差约是 6 条），所以 3 倍才算突出。每天 5 个词，一行就放得下。一周 7 天，过去的日子里每个星期几各出现一次。
+#
+# 这里只用清洗后的词，不用任何模型，所以开关一样，新词就一模一样。程序不给事件起名：它只报词、条数和例句，留给人看。
+
+# %%
+# New words per layer and day: counts of posts per word against the past daily mean, with example posts.
+from collections import Counter, deque  # standard library: word counts, and the days of the moving window
+
+NEW_WORD_QUOTES = 3  # example posts per new word, at most
+NEW_WORD_IGNORED = sorted(NLTK_STOP_WORDS | {"never", "bitcoin", "btc", "user", "http"})  # words that never count
+NEW_WORD_IGNORED_SET = frozenset(NEW_WORD_IGNORED)
+
+
+def countable_word(word):
+    """A word that may be a new word: not in NEW_WORD_IGNORED, at least two characters, at least one letter."""
+    return word not in NEW_WORD_IGNORED_SET and len(word) > 1 and any(character.isalpha() for character in word)
+
+
+def new_word_order(found):
+    """Most posts first; then the higher ratio (None, a past daily mean of 0, counts as the highest); then the word."""
+    return (-found["n_posts"], 0 if found["ratio"] is None else 1, -(found["ratio"] or 0.0), found["word"])
+
+
+def layer_new_words(scores, days):
+    """The new words of one layer, day by day over days (every calendar day of the layer), with example posts."""
+    by_day = {day: rows for day, rows in scores.groupby("date", sort=False)}
+    window, window_counts, result = deque(), Counter(), []
+    for position, day in enumerate(days):
+        rows = by_day.get(day)
+        post_words = [] if rows is None else [set(text.split()) for text in rows["clean_text"]]
+        today = Counter(word for words in post_words for word in words)
+        judged = position >= NEW_WORD_WINDOW
+        found = []
+        if judged:
+            for word, count in today.items():
+                if count < NEW_WORD_MIN_COUNT or not countable_word(word):
+                    continue
+                past = window_counts.get(word, 0)  # posts with the word on the window's days, added up
+                if past == 0:
+                    found.append({"word": word, "n_posts": count, "past_daily_mean": 0.0, "ratio": None})
+                elif count * NEW_WORD_WINDOW >= NEW_WORD_RATIO * past:  # count >= ratio x past daily mean
+                    found.append({"word": word, "n_posts": count, "past_daily_mean": past / NEW_WORD_WINDOW,
+                                  "ratio": count * NEW_WORD_WINDOW / past})
+            found = sorted(found, key=new_word_order)[:NEW_WORD_MAX_PER_DAY]
+            for item in found:  # example posts: the day's posts with the word, in post_id order, every text once
+                quotes, seen = [], set()
+                for (post_id, text), words in zip(zip(rows["post_id"], rows["text"]), post_words):
+                    if item["word"] in words and text not in seen:
+                        seen.add(text)
+                        quotes.append({"post_id": post_id, "text": text})
+                        if len(quotes) == NEW_WORD_QUOTES:
+                            break
+                item["quotes"] = quotes
+        result.append({"date": day, "n_posts": len(post_words), "judged": judged, "new_words": found})
+        window.append(today)
+        window_counts.update(today)
+        if len(window) > NEW_WORD_WINDOW:  # keep exactly the NEW_WORD_WINDOW days before the next day
+            for word, count in window.popleft().items():
+                window_counts[word] -= count
+                if window_counts[word] == 0:
+                    del window_counts[word]
+    return result
+
+
+scored_posts = dated_scores.assign(text=dated_posts["text"].to_numpy())  # the scores with the replaced texts
+started = time.perf_counter()
+new_word_layers = {}
+for layer, days in days_per_layer.items():
+    layer_days_list = layer_new_words(scored_posts[scored_posts["layer"] == layer], list(days.index))
+    new_word_layers[layer] = {
+        "date_from": days.index[0], "date_to": days.index[-1],
+        "n_days_judged": sum(day["judged"] for day in layer_days_list),
+        "n_days_with_new_words": sum(bool(day["new_words"]) for day in layer_days_list),
+        "n_new_words": sum(len(day["new_words"]) for day in layer_days_list),
+        "days": layer_days_list,
+    }
+daily_seconds["new_words"] = time.perf_counter() - started
+brief["new_words"] = {
+    "post_table": "dated_posts",
+    "text": "clean_text",
+    "word_rule": "words are the pieces of the cleaned text between spaces; a word counts once per post; a word's count "
+                 "on a day is the layer's posts that day whose cleaned text contains it",
+    "day": "UTC",
+    "date_from": brief["dated_data"]["date_from"],
+    "date_to": brief["dated_data"]["date_to"],
+    "window_days": NEW_WORD_WINDOW,
+    "min_count": NEW_WORD_MIN_COUNT,
+    "ratio": NEW_WORD_RATIO,
+    "max_per_day": NEW_WORD_MAX_PER_DAY,
+    "quotes_per_word": NEW_WORD_QUOTES,
+    "new_word_rule": "count at least min_count and at least ratio x the past daily mean (the counts of the window_days "
+                     "calendar days before, added up, divided by window_days); with a past daily mean of 0 only the "
+                     "first condition, and the ratio is null; the first window_days days of a layer are not judged",
+    "ignored_words": NEW_WORD_IGNORED,
+    "ignored_rule": "the words in ignored_words, words without a letter and words of a single character never count",
+    "order": "most posts first, then the higher ratio (null first), then the word in alphabetical order",
+    "quote_rule": "posts of the layer and day whose cleaned text contains the word, in post_id order, every text once",
+    "layers": new_word_layers,
+}
+print(f"[daily] new words: found in {daily_seconds['new_words']:.1f} s", flush=True)
+new_word_lines = [{"layer": layer, "date": day["date"], "posts": day["n_posts"],
+                   "new words (posts / past daily mean / ratio)": ", ".join(
+                       f"{item['word']} ({item['n_posts']} / {item['past_daily_mean']:.1f} / "
+                       f"{'—' if item['ratio'] is None else round(item['ratio'], 1)})" for item in day["new_words"])}
+                  for layer, record in new_word_layers.items() for day in record["days"] if day["new_words"]]
+for layer, record in new_word_layers.items():
+    print(f"{layer}: {record['n_days_judged']:,} days judged, {record['n_days_with_new_words']:,} of them with new "
+          f"words, {record['n_new_words']:,} new words in all")
+pd.DataFrame(new_word_lines, columns=["layer", "date", "posts", "new words (posts / past daily mean / ratio)"])
+
+# %% [markdown]
+# ### Event days
+#
+# For every day of `EVENT_DAYS` (by default 9 May 2022, in the week of the LUNA crash, and 9 November 2022, in the week of the FTX collapse) and every layer, the posts the model is most confident about:
+#
+# - **bullish**: up to `EVENT_EXAMPLES` posts with a probability of bullish at or above `BULLISH_THRESHOLD` (0.7), highest first;
+# - **bearish**: up to `EVENT_EXAMPLES` posts with a probability of bullish at or below `BEARISH_THRESHOLD` (0.3), lowest first;
+#
+# every text once, equal probabilities in `post_id` order, each with its probability of bullish; and that day's new words. These two thresholds are used only here, to pick examples: every share of this chapter is split at 0.5. A day outside a layer's period is marked as such for that layer (`in_period` is false) and has no examples; it is not an error. A day inside the period always has its entry, even when it has no post or no confident post.
+#
+# ***
+#
+# ### 事件日
+#
+# 对 `EVENT_DAYS` 里的每一天（默认是 2022 年 5 月 9 日，LUNA 崩盘那一周；和 2022 年 11 月 9 日，FTX 倒闭那一周）和每一层，给出模型最有把握的帖子：
+#
+# - **看多**：看多的概率不低于 `BULLISH_THRESHOLD`（0.7）的帖子，最多 `EVENT_EXAMPLES` 条，概率最高的排前面；
+# - **看空**：看多的概率不高于 `BEARISH_THRESHOLD`（0.3）的帖子，最多 `EVENT_EXAMPLES` 条，概率最低的排前面；
+#
+# 同一段正文只出现一次，概率相同的按 `post_id` 排，每条附上它看多的概率；再附上那天的新词。这两个门槛只在这里用来挑例句：本章所有的比例都是按 0.5 分的。某一天不在某一层的时段里，就在这一层标出来（`in_period` 为假），不给例句，也不算出错。落在时段里的日子一定有它那一份，哪怕那天没有帖子、或者没有模型有把握的帖子。
+
+# %%
+# Example posts the model is confident about, and the new words, on every event day and in every layer.
+def confident_posts(rows, side):
+    """Up to EVENT_EXAMPLES posts of rows on one side ("bullish" or "bearish"), most confident first, every text once."""
+    if side == "bullish":
+        chosen = rows[rows["bullish_proba"] >= BULLISH_THRESHOLD].sort_values(["bullish_proba", "post_id"],
+                                                                              ascending=[False, True], kind="stable")
+    else:
+        chosen = rows[rows["bullish_proba"] <= BEARISH_THRESHOLD].sort_values(["bullish_proba", "post_id"],
+                                                                              ascending=[True, True], kind="stable")
+    quotes, seen = [], set()
+    for post_id, text, probability in zip(chosen["post_id"], chosen["text"], chosen["bullish_proba"]):
+        if text in seen:
+            continue
+        seen.add(text)
+        quotes.append({"post_id": post_id, "text": text, "bullish_probability": float(probability)})
+        if len(quotes) == EVENT_EXAMPLES:
+            break
+    return quotes
+
+
+event_items = []
+for day in EVENT_DAYS:
+    layers = {}
+    for layer, record in daily_layers.items():
+        if not record["date_from"] <= day <= record["date_to"]:
+            layers[layer] = {"in_period": False, "n_posts": 0, "bullish": [], "bearish": [], "new_words": []}
+            continue
+        rows = scored_posts[(scored_posts["layer"] == layer) & (scored_posts["date"] == day)]
+        new_day = next(item for item in new_word_layers[layer]["days"] if item["date"] == day)
+        layers[layer] = {"in_period": True, "n_posts": int(len(rows)), "bullish": confident_posts(rows, "bullish"),
+                         "bearish": confident_posts(rows, "bearish"),
+                         "new_words": [item["word"] for item in new_day["new_words"]]}
+    event_items.append({"date": day, "layers": layers})
+brief["daily"]["events"] = {
+    "days": list(EVENT_DAYS),
+    "examples_per_side": EVENT_EXAMPLES,
+    "bullish_at_or_above": BULLISH_THRESHOLD,
+    "bearish_at_or_below": BEARISH_THRESHOLD,
+    "items": event_items,
+}
+for item in event_items:
+    for layer, entry in item["layers"].items():
+        if not entry["in_period"]:
+            print(f"{item['date']} {layer}: not in this layer's period")
+            continue
+        print(f"{item['date']} {layer}: {entry['n_posts']:,} posts; new words: {', '.join(entry['new_words']) or '(none)'}")
+        for side in ["bullish", "bearish"]:
+            for quote in entry[side]:
+                print(f"    [{side} {quote['bullish_probability']:.2f}] {quote['text']}")
+
+# %% [markdown]
 # ## 14. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
@@ -4790,14 +5215,14 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.4",
+  "title": "Ledger Eyes brief, format 1.5",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
-               "dated_data"],
+               "dated_data", "daily", "new_words"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.4"},
+    "format_version": {"type": "string", "const": "1.5"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -5850,6 +6275,170 @@ BRIEF_SCHEMA_TEXT = r"""{
           }
         }
       }
+    },
+    "daily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "score_table", "day", "date_from", "date_to", "min_posts", "half_rule", "scoring", "calibration",
+                   "emotion_classes", "drawer_ids", "word_list_version", "layers", "events"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "score_table": {"type": "string"},
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "min_posts": {"$ref": "#/$defs/positive"},
+        "half_rule": {"type": "string"},
+        "scoring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "sentiment_model", "emotion_model", "n_scored", "n_distinct_clean_texts"],
+          "properties": {
+            "text": {"type": "string"},
+            "sentiment_model": {"type": "string"},
+            "emotion_model": {"type": "string"},
+            "n_scored": {"$ref": "#/$defs/count"},
+            "n_distinct_clean_texts": {"$ref": "#/$defs/count"}
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "rates_from", "subset_rule", "true_bullish_rate", "false_bullish_rate", "rate_gap", "rate_posts",
+                       "min_rate_gap", "formula", "assumption"],
+          "properties": {
+            "status": {"type": "string", "enum": ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]},
+            "rates_from": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "subset"],
+              "properties": {"model": {"type": "string"}, "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]}}
+            },
+            "subset_rule": {"type": "string"},
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "rate_gap": {"$ref": "#/$defs/gap_or_null"},
+            "rate_posts": {"$ref": "#/$defs/bearish_bullish_counts"},
+            "min_rate_gap": {"$ref": "#/$defs/share"},
+            "formula": {"type": "string"},
+            "assumption": {"type": "string"}
+          }
+        },
+        "emotion_classes": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/emotion"}},
+        "drawer_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "word_list_version": {"type": "string"},
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "overall", "days"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "overall": {"$ref": "#/$defs/daily_row"},
+              "days": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/daily_day"}}
+            }
+          }
+        },
+        "events": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["days", "examples_per_side", "bullish_at_or_above", "bearish_at_or_below", "items"],
+          "properties": {
+            "days": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+            "examples_per_side": {"$ref": "#/$defs/positive"},
+            "bullish_at_or_above": {"$ref": "#/$defs/share"},
+            "bearish_at_or_below": {"$ref": "#/$defs/share"},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["date", "layers"],
+                "properties": {
+                  "date": {"$ref": "#/$defs/day"},
+                  "layers": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["in_period", "n_posts", "bullish", "bearish", "new_words"],
+                      "properties": {
+                        "in_period": {"type": "boolean"},
+                        "n_posts": {"$ref": "#/$defs/count"},
+                        "bullish": {"type": "array", "items": {"$ref": "#/$defs/event_quote"}},
+                        "bearish": {"type": "array", "items": {"$ref": "#/$defs/event_quote"}},
+                        "new_words": {"type": "array", "items": {"type": "string"}}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "new_words": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "text", "word_rule", "day", "date_from", "date_to", "window_days", "min_count", "ratio", "max_per_day",
+                   "quotes_per_word", "new_word_rule", "ignored_words", "ignored_rule", "order", "quote_rule", "layers"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "text": {"type": "string"},
+        "word_rule": {"type": "string"},
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "window_days": {"$ref": "#/$defs/positive"},
+        "min_count": {"$ref": "#/$defs/positive"},
+        "ratio": {"type": "number", "exclusiveMinimum": 0},
+        "max_per_day": {"$ref": "#/$defs/positive"},
+        "quotes_per_word": {"type": "integer", "minimum": 1, "maximum": 3},
+        "new_word_rule": {"type": "string"},
+        "ignored_words": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "ignored_rule": {"type": "string"},
+        "order": {"type": "string"},
+        "quote_rule": {"type": "string"},
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "n_days_judged", "n_days_with_new_words", "n_new_words", "days"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "n_days_judged": {"$ref": "#/$defs/count"},
+              "n_days_with_new_words": {"$ref": "#/$defs/count"},
+              "n_new_words": {"$ref": "#/$defs/count"},
+              "days": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["date", "n_posts", "judged", "new_words"],
+                  "properties": {
+                    "date": {"$ref": "#/$defs/day"},
+                    "n_posts": {"$ref": "#/$defs/count"},
+                    "judged": {"type": "boolean"},
+                    "new_words": {"type": "array", "items": {"$ref": "#/$defs/new_word"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -6030,6 +6619,83 @@ BRIEF_SCHEMA_TEXT = r"""{
         "quotes_per_class": {"$ref": "#/$defs/count"},
         "quotes": {"$ref": "#/$defs/emotion_quotes"}
       }
+    },
+    "amount": {"type": "number", "minimum": 0},
+    "daily_drawer_pile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "n_half_bullish", "half_bullish_share", "calibrated_bullish_share", "too_few_posts"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_half_bullish": {"$ref": "#/$defs/count"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"}
+      }
+    },
+    "daily_drawers": {"type": "object", "propertyNames": {"title": "drawer"}, "additionalProperties": {"$ref": "#/$defs/daily_drawer_pile"}},
+    "daily_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "half_counts", "half_bullish_share", "calibrated_bullish_share", "too_few_posts", "emotion_counts",
+                   "n_in_any_drawer", "n_in_no_drawer", "drawers"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"},
+        "emotion_counts": {"$ref": "#/$defs/emotion_counts"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "drawers": {"$ref": "#/$defs/daily_drawers"}
+      }
+    },
+    "daily_day": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "n_posts", "half_counts", "half_bullish_share", "calibrated_bullish_share", "too_few_posts",
+                   "emotion_counts", "n_in_any_drawer", "n_in_no_drawer", "drawers"],
+      "properties": {
+        "date": {"$ref": "#/$defs/day"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"},
+        "emotion_counts": {"$ref": "#/$defs/emotion_counts"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "drawers": {"$ref": "#/$defs/daily_drawers"}
+      }
+    },
+    "event_quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_id", "text", "bullish_probability"],
+      "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}, "bullish_probability": {"$ref": "#/$defs/share"}}
+    },
+    "new_word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["word", "n_posts", "past_daily_mean", "ratio", "quotes"],
+      "properties": {
+        "word": {"type": "string"},
+        "n_posts": {"$ref": "#/$defs/positive"},
+        "past_daily_mean": {"$ref": "#/$defs/amount"},
+        "ratio": {"$ref": "#/$defs/amount_or_null"},
+        "quotes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["post_id", "text"],
+            "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}}
+          }
+        }
+      }
     }
   }
 }
@@ -6083,12 +6749,39 @@ def non_finite_numbers(value, parts=()):
     return []
 
 
+DATED_SECTIONS = ["dated_data", "daily", "new_words"]  # sections whose layers carry a period and a list of days
+
+
+def days_outside_period(document):
+    """(path parts, day, first day, last day) for every day of a layer's days outside the layer's period.
+
+    JSON Schema cannot compare two fields, so this rule of the format is checked here.
+    """
+    found = []
+    for section in DATED_SECTIONS:
+        content = document.get(section) if isinstance(document, dict) else None
+        layers = content.get("layers") if isinstance(content, dict) else None
+        for layer, record in (layers.items() if isinstance(layers, dict) else []):
+            if not isinstance(record, dict) or not isinstance(record.get("days"), list):
+                continue
+            first, last = record.get("date_from"), record.get("date_to")
+            if not isinstance(first, str) or not isinstance(last, str):
+                continue
+            for index, day in enumerate(record["days"]):
+                date = day.get("date") if isinstance(day, dict) else None
+                if isinstance(date, str) and not first <= date <= last:
+                    found.append(((section, "layers", layer, "days", index, "date"), date, first, last))
+    return found
+
+
 def brief_problems(document):
     """Every way in which document breaks the format rules, one line each; an empty list means it passes."""
     problems = [f"{field_path(parts)}: {number!r} is not allowed (a number that cannot be computed is null)"
                 for parts, number in non_finite_numbers(document)]
     errors = sorted(BRIEF_VALIDATOR.iter_errors(document), key=lambda error: [str(part) for part in error.absolute_path])
     problems += [f"{field_path(error.absolute_path)}: {error.message}" for error in errors]
+    problems += [f"{field_path(parts)}: {day!r} is outside the layer's period {first} to {last}"
+                 for parts, day, first, last in days_outside_period(document)]
     return problems
 
 

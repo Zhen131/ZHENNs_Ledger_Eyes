@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.4",
+  "title": "Ledger Eyes brief, format 1.5",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
-               "dated_data"],
+               "dated_data", "daily", "new_words"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.4"},
+    "format_version": {"type": "string", "const": "1.5"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -1060,6 +1060,170 @@
           }
         }
       }
+    },
+    "daily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "score_table", "day", "date_from", "date_to", "min_posts", "half_rule", "scoring", "calibration",
+                   "emotion_classes", "drawer_ids", "word_list_version", "layers", "events"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "score_table": {"type": "string"},
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "min_posts": {"$ref": "#/$defs/positive"},
+        "half_rule": {"type": "string"},
+        "scoring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "sentiment_model", "emotion_model", "n_scored", "n_distinct_clean_texts"],
+          "properties": {
+            "text": {"type": "string"},
+            "sentiment_model": {"type": "string"},
+            "emotion_model": {"type": "string"},
+            "n_scored": {"$ref": "#/$defs/count"},
+            "n_distinct_clean_texts": {"$ref": "#/$defs/count"}
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "rates_from", "subset_rule", "true_bullish_rate", "false_bullish_rate", "rate_gap", "rate_posts",
+                       "min_rate_gap", "formula", "assumption"],
+          "properties": {
+            "status": {"type": "string", "enum": ["applied", "rates_missing", "rate_gap_too_small", "three_classes"]},
+            "rates_from": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "subset"],
+              "properties": {"model": {"type": "string"}, "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]}}
+            },
+            "subset_rule": {"type": "string"},
+            "true_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "false_bullish_rate": {"$ref": "#/$defs/share_or_null"},
+            "rate_gap": {"$ref": "#/$defs/gap_or_null"},
+            "rate_posts": {"$ref": "#/$defs/bearish_bullish_counts"},
+            "min_rate_gap": {"$ref": "#/$defs/share"},
+            "formula": {"type": "string"},
+            "assumption": {"type": "string"}
+          }
+        },
+        "emotion_classes": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/emotion"}},
+        "drawer_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "word_list_version": {"type": "string"},
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "overall", "days"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "overall": {"$ref": "#/$defs/daily_row"},
+              "days": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/daily_day"}}
+            }
+          }
+        },
+        "events": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["days", "examples_per_side", "bullish_at_or_above", "bearish_at_or_below", "items"],
+          "properties": {
+            "days": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+            "examples_per_side": {"$ref": "#/$defs/positive"},
+            "bullish_at_or_above": {"$ref": "#/$defs/share"},
+            "bearish_at_or_below": {"$ref": "#/$defs/share"},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["date", "layers"],
+                "properties": {
+                  "date": {"$ref": "#/$defs/day"},
+                  "layers": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["in_period", "n_posts", "bullish", "bearish", "new_words"],
+                      "properties": {
+                        "in_period": {"type": "boolean"},
+                        "n_posts": {"$ref": "#/$defs/count"},
+                        "bullish": {"type": "array", "items": {"$ref": "#/$defs/event_quote"}},
+                        "bearish": {"type": "array", "items": {"$ref": "#/$defs/event_quote"}},
+                        "new_words": {"type": "array", "items": {"type": "string"}}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "new_words": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_table", "text", "word_rule", "day", "date_from", "date_to", "window_days", "min_count", "ratio", "max_per_day",
+                   "quotes_per_word", "new_word_rule", "ignored_words", "ignored_rule", "order", "quote_rule", "layers"],
+      "properties": {
+        "post_table": {"type": "string"},
+        "text": {"type": "string"},
+        "word_rule": {"type": "string"},
+        "day": {"type": "string", "enum": ["UTC"]},
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "window_days": {"$ref": "#/$defs/positive"},
+        "min_count": {"$ref": "#/$defs/positive"},
+        "ratio": {"type": "number", "exclusiveMinimum": 0},
+        "max_per_day": {"$ref": "#/$defs/positive"},
+        "quotes_per_word": {"type": "integer", "minimum": 1, "maximum": 3},
+        "new_word_rule": {"type": "string"},
+        "ignored_words": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "ignored_rule": {"type": "string"},
+        "order": {"type": "string"},
+        "quote_rule": {"type": "string"},
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "n_days_judged", "n_days_with_new_words", "n_new_words", "days"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "n_days_judged": {"$ref": "#/$defs/count"},
+              "n_days_with_new_words": {"$ref": "#/$defs/count"},
+              "n_new_words": {"$ref": "#/$defs/count"},
+              "days": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["date", "n_posts", "judged", "new_words"],
+                  "properties": {
+                    "date": {"$ref": "#/$defs/day"},
+                    "n_posts": {"$ref": "#/$defs/count"},
+                    "judged": {"type": "boolean"},
+                    "new_words": {"type": "array", "items": {"$ref": "#/$defs/new_word"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -1239,6 +1403,83 @@
         "shares": {"$ref": "#/$defs/emotion_shares"},
         "quotes_per_class": {"$ref": "#/$defs/count"},
         "quotes": {"$ref": "#/$defs/emotion_quotes"}
+      }
+    },
+    "amount": {"type": "number", "minimum": 0},
+    "daily_drawer_pile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "n_half_bullish", "half_bullish_share", "calibrated_bullish_share", "too_few_posts"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_half_bullish": {"$ref": "#/$defs/count"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"}
+      }
+    },
+    "daily_drawers": {"type": "object", "propertyNames": {"title": "drawer"}, "additionalProperties": {"$ref": "#/$defs/daily_drawer_pile"}},
+    "daily_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "half_counts", "half_bullish_share", "calibrated_bullish_share", "too_few_posts", "emotion_counts",
+                   "n_in_any_drawer", "n_in_no_drawer", "drawers"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"},
+        "emotion_counts": {"$ref": "#/$defs/emotion_counts"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "drawers": {"$ref": "#/$defs/daily_drawers"}
+      }
+    },
+    "daily_day": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "n_posts", "half_counts", "half_bullish_share", "calibrated_bullish_share", "too_few_posts",
+                   "emotion_counts", "n_in_any_drawer", "n_in_no_drawer", "drawers"],
+      "properties": {
+        "date": {"$ref": "#/$defs/day"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "half_counts": {"$ref": "#/$defs/half_calls"},
+        "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
+        "too_few_posts": {"type": "boolean"},
+        "emotion_counts": {"$ref": "#/$defs/emotion_counts"},
+        "n_in_any_drawer": {"$ref": "#/$defs/count"},
+        "n_in_no_drawer": {"$ref": "#/$defs/count"},
+        "drawers": {"$ref": "#/$defs/daily_drawers"}
+      }
+    },
+    "event_quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["post_id", "text", "bullish_probability"],
+      "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}, "bullish_probability": {"$ref": "#/$defs/share"}}
+    },
+    "new_word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["word", "n_posts", "past_daily_mean", "ratio", "quotes"],
+      "properties": {
+        "word": {"type": "string"},
+        "n_posts": {"$ref": "#/$defs/positive"},
+        "past_daily_mean": {"$ref": "#/$defs/amount"},
+        "ratio": {"$ref": "#/$defs/amount_or_null"},
+        "quotes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["post_id", "text"],
+            "properties": {"post_id": {"type": "string"}, "text": {"type": "string"}}
+          }
+        }
       }
     }
   }
