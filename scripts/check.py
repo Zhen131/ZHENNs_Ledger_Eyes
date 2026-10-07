@@ -56,7 +56,7 @@ from notebook_build import NOTEBOOK, SOURCE, build_notebook_text  # noqa: E402
 REQUIREMENTS = REPO_DIR / "requirements.txt"
 SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
 FULL_SOURCE = "data/raw/st-data-full.xlsx"
-TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why"]
+TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers"]
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -109,6 +109,9 @@ DRAWER_PROBES = [
 DRAWER_FILE_PROBE = {"version": "probe-1", "drawers": [
     {"drawer": "moon", "name": "Moon shots", "words": ["moon shot"], "exclude": ["no moon shot"]}]}
 DRAWER_FILE_PROBES = [("moon shot soon", ["moon"]), ("no moon shot today", [])]
+DRAWER_QUOTES = 5  # spot-check quotes per drawer, at most
+DRAWER_STABLE_ROW_FIELDS = ["drawer", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
+                            "label_vs_overall_pp", "too_few_bullish_bearish"]  # why.drawers fields that ignore training
 # Chapter 11: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
@@ -1181,7 +1184,7 @@ def compare_why(report, first, again):
                  "label shares; too-few-bullish-or-bearish marks, the calibration's test subset and test posts)", detail)
 
 
-def threshold_run(report, defaults, overrides, default_brief, rules=None):
+def threshold_run(report, defaults, overrides, default_brief, rules=None, built_in=None):
     """Both thresholds at 0.5 and MIN_TOPIC_POSTS above the topic post table: no post unsure, every topic too small."""
     table = as_dict(as_dict(default_brief).get("topics")).get("n_posts")
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
@@ -1201,6 +1204,7 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None):
         return
     check_why(report, THRESHOLD_LABEL, brief, switches)
     check_calibration(report, THRESHOLD_LABEL, brief, switches)
+    check_drawers(report, THRESHOLD_LABEL, brief, switches, built_in)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -1663,6 +1667,271 @@ def check_drawer_words(report):
     return word_list
 
 
+def check_drawers(report, label, brief, switches, built_in):
+    """The drawers section and the drawer rows of why: the word list as used, counts that add up, spot checks that
+    follow the rule, the groups of the posts in no drawer, and rows that pass the checks of every why row."""
+    drawers = brief.get("drawers")
+    if not report.check(isinstance(drawers, dict) and isinstance(drawers.get("drawers"), list) and bool(drawers["drawers"]),
+                        f"{label}: drawers section has content"):
+        return
+    topics, why = as_dict(brief.get("topics")), as_dict(brief.get("why"))
+    items = [item for item in drawers["drawers"] if isinstance(item, dict)]
+    n, any_n, none_n = drawers.get("n_posts"), drawers.get("n_in_any_drawer"), drawers.get("n_in_no_drawer")
+
+    # The word list as used: source, version and a fingerprint that follows from the drawers in the brief.
+    file_value = switches.get("DRAWER_WORDS_FILE")
+    listed = [{"drawer": item.get("drawer"), "name": item.get("name"), "words": item.get("words"),
+               "exclude": item.get("excluded_phrases")} for item in items]
+    fingerprint = drawer_fingerprint_of(listed)
+    list_ok = (drawers.get("post_table") == "topic_posts" and drawers.get("text") == "text"
+               and len(items) == len(drawers["drawers"]) and drawers.get("word_list_fingerprint") == fingerprint
+               and drawers.get("word_list_source") == (BUILT_IN_SOURCE if file_value == "" else file_value))
+    if file_value == "":
+        list_ok = (list_ok and isinstance(built_in, dict) and drawers.get("word_list_version") == built_in.get("version")
+                   and listed == built_in.get("drawers") and DRAWER_FINGERPRINTS.get(drawers.get("word_list_version")) == fingerprint)
+    report.check(list_ok, f"{label}: drawers record the word list as used (source, version, and a fingerprint that "
+                 "follows from the drawers listed; with DRAWER_WORDS_FILE \"\" exactly the built-in list and its pinned "
+                 "fingerprint)", f"source {drawers.get('word_list_source')!r}, version {drawers.get('word_list_version')!r}, "
+                 f"fingerprint {drawers.get('word_list_fingerprint')!r} (from the drawers: {fingerprint})")
+
+    # Counts: every post is in 0 or more drawers; in a drawer + in none = all posts; drawer sizes overlap.
+    memberships = drawers.get("memberships_per_post")
+    keys = sorted(int(key) for key in memberships if re.fullmatch(r"0|[1-9][0-9]*", key)) \
+        if isinstance(memberships, dict) else []
+    memberships_ok = (isinstance(memberships, dict) and len(keys) == len(memberships) and keys == list(range(len(keys)))
+                      and bool(keys) and all(is_count(value) for value in memberships.values()))
+    sizes = [item.get("n_posts") for item in items]
+    counts_ok = (is_count(n) and n == topics.get("n_posts") and is_count(any_n) and is_count(none_n)
+                 and any_n + none_n == n and memberships_ok and sum(memberships.values()) == n
+                 and memberships["0"] == none_n and all(is_count(size) and size <= any_n for size in sizes)
+                 and sum(int(key) * value for key, value in memberships.items()) == sum(sizes)
+                 and same_value(drawers.get("share_in_any_drawer"), share_of(any_n, n))
+                 and same_value(drawers.get("share_in_no_drawer"), share_of(none_n, n))
+                 and all(same_value(item.get("share"), share_of(item.get("n_posts"), n)) for item in items))
+    report.check(counts_ok, f"{label}: drawer counts add up: posts in a drawer + posts in none = all posts = the topic "
+                 "post table; posts by number of drawers add up to all posts and \"0\" equals the posts in none; the "
+                 "drawer sizes add up to the sum of k x posts in k drawers; shares follow from the counts",
+                 f"{n!r} posts (topic table {topics.get('n_posts')!r}), {any_n!r} in a drawer, {none_n!r} in none, "
+                 f"by number of drawers {memberships!r}, drawer sizes {sizes} (sum {sum(s for s in sizes if is_count(s))})")
+
+    # Spot checks: at most DRAWER_QUOTES different posts of the drawer, with the words the rule finds in them.
+    problems = []
+    if drawers.get("quotes_per_drawer") != DRAWER_QUOTES:
+        problems.append(f"quotes_per_drawer {drawers.get('quotes_per_drawer')!r}")
+    for item in items:
+        quotes, size = item.get("quotes"), item.get("n_posts")
+        quotes = quotes if isinstance(quotes, list) else None
+        if quotes is None or not is_count(size) or not (min(1, size) <= len(quotes) <= min(DRAWER_QUOTES, size)):
+            problems.append(f"{item.get('drawer')}: {len(quotes) if quotes is not None else quotes!r} quotes for {size!r} posts")
+            continue
+        if not all(isinstance(quote, dict) for quote in quotes) or \
+                len({quote.get("post_id") for quote in quotes}) != len(quotes) or \
+                len({quote.get("text") for quote in quotes}) != len(quotes):
+            problems.append(f"{item.get('drawer')}: quotes are not different posts with different texts")
+            continue
+        for quote in quotes:
+            words = quote.get("matched_words")
+            found = rule_matches(quote.get("text"), item.get("words") or [], item.get("excluded_phrases") or [])
+            if not (isinstance(quote.get("post_id"), str) and quote.get("label") in (0, 1, 2) and isinstance(words, list)
+                    and words and set(words) <= set(item.get("words") or []) and words == found):
+                problems.append(f"{item.get('drawer')}: {quote.get('post_id')!r} matched words {words!r}, the rule "
+                                f"finds {found!r} in {quote.get('text')!r}")
+    report.check(not problems, f"{label}: every drawer has up to {DRAWER_QUOTES} spot checks: different posts with "
+                 "different texts that belong to the drawer, each with the non-empty list of words the rule finds in it "
+                 "(words of that drawer, in word-list order)", "; ".join(problems[:5]))
+
+    # The posts in no drawer, grouped like the topics.
+    other = as_dict(drawers.get("other"))
+    groups = other.get("groups") if isinstance(other.get("groups"), list) else None
+    wanted, distinct, made, other_n = (switches.get("N_OTHER_GROUPS"), other.get("n_distinct_vectors"),
+                                       other.get("n_groups"), other.get("n_posts"))
+    group_problems = []
+    if not (other_n == none_n and is_count(other_n) and other.get("method") == "kmeans" and is_count(wanted)
+            and other.get("n_groups_requested") == wanted and is_count(distinct) and distinct <= other_n
+            and (other_n == 0 or distinct >= 1) and made == min(wanted, distinct) and groups is not None
+            and len(groups) == made and other.get("quotes_per_group") == topics.get("quotes_per_topic")):
+        group_problems.append(f"{other_n!r} posts (in none: {none_n!r}), method {other.get('method')!r}, groups "
+                              f"{made!r} of {other.get('n_groups_requested')!r} (switch {wanted!r}), {distinct!r} "
+                              f"distinct vectors, {len(groups) if groups is not None else None} listed")
+    groups = [group for group in groups or [] if isinstance(group, dict)]
+    if [group.get("group") for group in groups] != list(range(len(groups))):
+        group_problems.append(f"group numbers {[group.get('group') for group in groups]}")
+    for group in groups:
+        size, words, quotes = group.get("n_posts"), group.get("top_words"), group.get("quotes")
+        if not (is_count(size) and size > 0 and is_count(other_n) and same_value(group.get("share"), share_of(size, other_n))
+                and isinstance(words, list) and all(isinstance(word, str) and word for word in words)
+                and is_count(topics.get("name_words")) and len(words) <= topics["name_words"]
+                and group.get("name") == " / ".join(words)
+                and not (switches.get("TOPIC_SCOPE") == "btc" and SELECTION_WORDS & set(words))
+                and isinstance(quotes, list) and 1 <= len(quotes) <= min(other.get("quotes_per_group") or 0, size)
+                and all(isinstance(quote, dict) and isinstance(quote.get("post_id"), str) and quote.get("label") in (0, 1, 2)
+                        and isinstance(quote.get("text"), str) for quote in quotes)
+                and len({quote["post_id"] for quote in quotes}) == len(quotes)
+                and len({quote["text"] for quote in quotes}) == len(quotes)):
+            group_problems.append(f"group {group.get('group')}: {size!r} posts, share {group.get('share')!r}, name "
+                                  f"{group.get('name')!r}, {len(quotes) if isinstance(quotes, list) else quotes!r} quotes")
+    if sum(group.get("n_posts") for group in groups if is_count(group.get("n_posts"))) != other_n:
+        group_problems.append(f"group sizes do not add up to {other_n!r}")
+    report.check(not group_problems, f"{label}: the posts in no drawer are grouped like the topics: N_OTHER_GROUPS groups "
+                 "(fewer only with fewer distinct vectors, none without posts) numbered from 0, sizes adding up to the posts "
+                 "in no drawer, shares from the sizes, names from the top words, different quotes",
+                 "; ".join(group_problems[:5]))
+
+    # The why rows: one per drawer, plus the posts in a drawer and in none, which add up to the overall row.
+    rows = [row for row in why.get("drawers") or [] if isinstance(row, dict)] if isinstance(why.get("drawers"), list) else []
+    any_row, no_row, overall = as_dict(why.get("any_drawer")), as_dict(why.get("no_drawer")), as_dict(why.get("overall"))
+    report.check(len(rows) == len(items) == len(why.get("drawers") or [])
+                 and [(row.get("drawer"), row.get("name"), row.get("n_posts")) for row in rows]
+                 == [(item.get("drawer"), item.get("name"), item.get("n_posts")) for item in items]
+                 and any_row.get("n_posts") == any_n and no_row.get("n_posts") == none_n and bool(overall),
+                 f"{label}: why has one row per drawer of the drawers section (same order, ids, names and sizes), and "
+                 "any_drawer and no_drawer hold the posts in a drawer and in none",
+                 f"why drawers {[(row.get('drawer'), row.get('n_posts')) for row in rows]}; any {any_row.get('n_posts')!r} "
+                 f"({any_n!r}), none {no_row.get('n_posts')!r} ({none_n!r})")
+    calibration = as_dict(why.get("calibration"))
+    min_posts, min_bb = switches.get("MIN_TOPIC_POSTS"), switches.get("MIN_BULLISH_BEARISH_POSTS")
+    identity, marks = [], []
+    overall_share = label_share_from(overall)
+    for where, row in [("any drawer", any_row), ("no drawer", no_row)] + [(f"drawer {row.get('drawer')}", row) for row in rows]:
+        row_identity, row_shares, row_fair = why_row_problems(row, where)
+        row_half, row_marks = half_row_problems(row, where, calibration, min_bb)
+        identity += row_identity + row_shares + row_fair + row_half
+        marks += row_marks
+    for row in rows:
+        if not same_value(row.get("label_vs_overall_pp"), points(label_share_from(row), overall_share)):
+            identity.append(f"drawer {row.get('drawer')}: label_vs_overall_pp {row.get('label_vs_overall_pp')!r}")
+        if row.get("too_few_posts") is not (is_count(min_posts) and is_count(row.get("n_posts")) and row["n_posts"] < min_posts):
+            marks.append(f"drawer {row.get('drawer')}: too_few_posts {row.get('too_few_posts')!r} with {row.get('n_posts')!r} posts")
+    report.check(not identity, f"{label}: every drawer row and the rows any_drawer and no_drawer pass the checks of a why "
+                 "row (counts add up, shares and differences follow from them, calls at 0.5 and the calibrated share "
+                 "follow the calibration; label_vs_overall_pp from the shares)", "; ".join(identity[:5]))
+    report.check(not marks, f"{label}: drawer rows are marked too few by MIN_TOPIC_POSTS (posts) and every row by "
+                 "MIN_BULLISH_BEARISH_POSTS (bearish + bullish posts by label)", "; ".join(marks[:5]))
+
+    def adds_up(part, key, keys):
+        parts = [counts_of(as_dict(row.get(part) if part else row).get(key), keys) for row in (any_row, no_row)]
+        whole = counts_of(as_dict(overall.get(part) if part else overall).get(key), keys)
+        return None not in parts and whole is not None and {k: parts[0][k] + parts[1][k] for k in keys} == whole
+
+    sums_ok = (all(adds_up(None, key, keys) for key, keys in
+                   (("label_counts", TOPIC_CLASSES), ("model_counts", MODEL_CALLS), ("half_counts", HALF_CALLS)))
+               and all(adds_up("fair", key, keys) for key, keys in
+                       (("label_counts", FAIR_CLASSES), ("model_counts", MODEL_CALLS), ("half_counts", HALF_CALLS)))
+               and is_count(any_row.get("n_posts")) and is_count(no_row.get("n_posts"))
+               and any_row["n_posts"] + no_row["n_posts"] == overall.get("n_posts")
+               and is_count(as_dict(any_row.get("fair")).get("n_posts")) and is_count(as_dict(no_row.get("fair")).get("n_posts"))
+               and as_dict(any_row.get("fair"))["n_posts"] + as_dict(no_row.get("fair"))["n_posts"]
+               == as_dict(overall.get("fair")).get("n_posts"))
+    report.check(sums_ok, f"{label}: any_drawer + no_drawer = the overall row (posts, label classes, model calls, calls at "
+                 "0.5, and the fair comparison's posts, labels, calls and calls at 0.5)")
+
+
+def stable_drawers(brief):
+    """The drawers section and the parts of the drawer rows of why that do not depend on training, or None."""
+    if not isinstance(brief, dict) or not isinstance(brief.get("drawers"), dict):
+        return None
+    why = as_dict(brief.get("why"))
+
+    def part(row, keys):
+        row = as_dict(row)
+        return {**{key: row.get(key) for key in keys},
+                "fair": {key: as_dict(row.get("fair")).get(key) for key in WHY_STABLE_FAIR_FIELDS}}
+
+    rows = why.get("drawers") if isinstance(why.get("drawers"), list) else []
+    totals = ["n_posts", "label_counts", "label_bullish_share", "too_few_bullish_bearish"]
+    return {"drawers": brief["drawers"], "rows": [part(row, DRAWER_STABLE_ROW_FIELDS) for row in rows],
+            "any_drawer": part(why.get("any_drawer"), totals), "no_drawer": part(why.get("no_drawer"), totals)}
+
+
+def compare_drawers(report, first, again):
+    """Two runs with the same switches: identical drawers sections and drawer rows apart from what training changes."""
+    left, right = stable_drawers(first), stable_drawers(again)
+    detail = ""
+    if left is None or right is None:
+        detail = "a brief or its drawers section is missing"
+    elif left != right:
+        detail = "differing parts: " + ", ".join(key for key in left if left[key] != right[key])
+    report.check(left is not None and left == right,
+                 "default switches run twice: identical drawers sections (counts, spot checks, groups of the posts in no "
+                 "drawer), and the drawer rows of why agree on everything that does not depend on training", detail)
+
+
+def print_drawers(brief):
+    """Print the word list, the drawer table with its three bullish shares and marks, the spot checks and the groups
+    of the posts in no drawer (full run)."""
+    drawers, why = as_dict(brief.get("drawers")), as_dict(brief.get("why"))
+    if not drawers:
+        return
+
+    def share(value):
+        return f"{value:.4f}" if is_number(value) else "-"
+
+    def pp(value):
+        return f"{value:+.2f}" if is_number(value) else "-"
+
+    print("\nDrawers (full run)")
+    print(f"  word list:                     {drawers.get('word_list_version')} ({drawers.get('word_list_source')}), "
+          f"fingerprint {drawers.get('word_list_fingerprint')}")
+    print(f"  posts:                         {drawers.get('n_posts')}   in at least one drawer: "
+          f"{drawers.get('n_in_any_drawer')} ({share(drawers.get('share_in_any_drawer'))})   in none: "
+          f"{drawers.get('n_in_no_drawer')} ({share(drawers.get('share_in_no_drawer'))})")
+    print(f"  posts by number of drawers:    {drawers.get('memberships_per_post')}")
+    print("  columns: drawer, posts, share of all posts, too few posts, too few bullish + bearish, label bearish / neutral /")
+    print("           bullish, bullish share by label, at 0.5, calibrated, label minus all (pp), fair posts, fair share by")
+    print("           label, fair at 0.5, fair calibrated, fair calibrated minus label (pp); - = null; word-list order")
+    print(f"  {'drawer':>15} {'posts':>6} {'share':>7} {'few':>3} {'fbb':>3} {'bear':>6} {'neut':>6} {'bull':>6} "
+          f"{'label':>7} {'half':>7} {'calib':>7} {'vs all':>7} {'fair':>6} {'f-label':>7} {'f-half':>7} {'f-calib':>7} "
+          f"{'c-l pp':>7}")
+    sizes = {item.get("drawer"): item.get("share") for item in drawers.get("drawers") or [] if isinstance(item, dict)}
+    overall_share = as_dict(why.get("overall")).get("label_bullish_share")
+    rows = [("all", as_dict(why.get("overall")), "", 1.0), ("any drawer", as_dict(why.get("any_drawer")), "",
+                                                           drawers.get("share_in_any_drawer")),
+            ("no drawer", as_dict(why.get("no_drawer")), "", drawers.get("share_in_no_drawer"))]
+    rows += [(row.get("drawer"), row, "yes" if row.get("too_few_posts") else "no", sizes.get(row.get("drawer")))
+             for row in why.get("drawers") or [] if isinstance(row, dict)]
+    for name, row, few, size in rows:
+        labels, fair = as_dict(row.get("label_counts")), as_dict(row.get("fair"))
+        label_share = row.get("label_bullish_share")
+        versus = row.get("label_vs_overall_pp") if "label_vs_overall_pp" in row else (
+            None if name == "all" or not (is_number(label_share) and is_number(overall_share))
+            else 100 * (label_share - overall_share))
+        print(f"  {name:>15} {str(row.get('n_posts')):>6} {share(size):>7} {few:>3} "
+              f"{'yes' if row.get('too_few_bullish_bearish') else 'no':>3} "
+              f"{str(labels.get('0')):>6} {str(labels.get('1')):>6} {str(labels.get('2')):>6} "
+              f"{share(label_share):>7} {share(row.get('half_bullish_share')):>7} "
+              f"{share(row.get('calibrated_bullish_share')):>7} {pp(versus):>7} {str(fair.get('n_posts')):>6} "
+              f"{share(fair.get('label_bullish_share')):>7} {share(fair.get('half_bullish_share')):>7} "
+              f"{share(fair.get('calibrated_bullish_share')):>7} {pp(fair.get('calibrated_minus_label_pp')):>7}")
+    calibration = as_dict(why.get("calibration"))
+    true_rate, false_rate = calibration.get("true_bullish_rate"), calibration.get("false_bullish_rate")
+    clipped = []
+    if calibration.get("status") == "applied" and is_number(true_rate) and is_number(false_rate):
+        for name, row, _, _ in rows[1:]:
+            for where, part in (("row", row), ("fair", as_dict(row.get("fair")))):
+                half = part.get("half_bullish_share")
+                if is_number(half):
+                    raw = (half - false_rate) / (true_rate - false_rate)
+                    if raw < 0 or raw > 1:
+                        clipped.append(f"{name} {where} {raw:.4f} -> {min(1.0, max(0.0, raw)):.0f}")
+    print(f"  calibrated share clipped to 0 or 1: {', '.join(clipped) or 'none'}")
+    print("  spot checks per drawer ([label, post_id; words found] text):")
+    for item in drawers.get("drawers") or []:
+        print(f"    {item.get('drawer')}: {item.get('name')} ({item.get('n_posts')} posts)")
+        for quote in item.get("quotes") or []:
+            print(f"        [{quote.get('label')}, {quote.get('post_id')}; {', '.join(quote.get('matched_words') or [])}] "
+                  f"{quote.get('text')}")
+    other = as_dict(drawers.get("other"))
+    print(f"  posts in no drawer:            {other.get('n_posts')}, {other.get('n_groups')} groups (asked for "
+          f"{other.get('n_groups_requested')}, {other.get('n_distinct_vectors')} distinct vectors), largest first; "
+          "share of the posts in no drawer:")
+    groups = [group for group in other.get("groups") or [] if isinstance(group, dict)]
+    for group in sorted(groups, key=lambda group: (-(group.get("n_posts") or 0), group.get("group") or 0)):
+        print(f"    group {group.get('group')}: {group.get('n_posts')} posts, share {share(group.get('share'))} | "
+              f"{group.get('name')}")
+        for quote in group.get("quotes") or []:
+            print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
+
+
 # ---------------------------------------------------------------- the brief's format and the panel (chapter 11)
 
 def code_cells():
@@ -2005,6 +2274,13 @@ BROKEN_BRIEFS = [
     ("6 null not allowed, or an unknown field", ("why", "extra_field"), lambda old: 1, "why", "extra_field"),
     ("6 null not allowed, or an unknown field", ("why", "overall", "too_few_bullish_bearish"), lambda old: None,
      "why.overall.too_few_bullish_bearish", "None"),
+    ("2 required field missing in a section", ("drawers", "other"), DELETE, "drawers", "other"),
+    ("2 required field missing in a section", ("why", "no_drawer"), DELETE, "why", "no_drawer"),
+    ("2 required field missing in a section", ("why", "drawers", 0, "fair", "calibrated_bullish_share"), DELETE,
+     "why.drawers[0].fair", "calibrated_bullish_share"),
+    ("3 wrong type", ("drawers", "memberships_per_post"), lambda old: [], "drawers.memberships_per_post", "object"),
+    ("6 null not allowed, or an unknown field", ("drawers", "drawers", 0, "n_posts"), lambda old: None,
+     "drawers.drawers[0].n_posts", "None"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2014,6 +2290,8 @@ NULL_ALLOWED = [
     ("why", "overall", "fair", "model_minus_label_pp"),
     ("why", "topics", 0, "label_vs_overall_pp"),
     ("why", "overall", "fair", "calibrated_minus_label_pp"),
+    ("drawers", "share_in_any_drawer"),
+    ("why", "drawers", 0, "label_vs_overall_pp"),
 ]
 
 
@@ -2285,7 +2563,7 @@ def compare_topics(report, first, again):
                  "default switches run twice: the two briefs have identical topics sections", detail)
 
 
-def quick(report, defaults, others, overrides, rules=None):
+def quick(report, defaults, others, overrides, rules=None, built_in=None):
     runs = [("default switches", {}, "quick-default"),
             ("other switches", dict(others), "quick-other"),
             (REPEAT_LABEL, {}, "quick-default-again")]
@@ -2307,6 +2585,7 @@ def quick(report, defaults, others, overrides, rules=None):
         if brief is not None:
             check_why(report, label, brief, switches)
             check_calibration(report, label, brief, switches)
+            check_drawers(report, label, brief, switches, built_in)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -2316,10 +2595,11 @@ def quick(report, defaults, others, overrides, rules=None):
             check_save_refuses(report, label, brief, rules)
     compare_topics(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_why(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
-    threshold_run(report, defaults, overrides, briefs.get("default switches"), rules)
+    compare_drawers(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
 
 
-def full(report, defaults, overrides, rules=None):
+def full(report, defaults, overrides, rules=None, built_in=None):
     parameters = {"DATA_SOURCE": FULL_SOURCE, **overrides}
     parameters = panel_settings(report, "full run", parameters, overrides)
     switches = {**defaults, **parameters}
@@ -2344,6 +2624,7 @@ def full(report, defaults, overrides, rules=None):
     check_why(report, "full run", brief, switches)
     check_calibration(report, "full run", brief, switches)
     check_calibration_narrows(report, "full run", brief)
+    check_drawers(report, "full run", brief, switches, built_in)
     check_format(report, "full run", brief, rules)
     check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     check_panel(report, "full run", brief_path, brief)
@@ -2366,6 +2647,7 @@ def full(report, defaults, overrides, rules=None):
     print_topics(brief)
     print_why(brief)
     print_calibration(brief)
+    print_drawers(brief)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
@@ -2398,9 +2680,9 @@ def main():
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
         if args.mode == "quick":
-            quick(report, defaults, others, overrides, rules)
+            quick(report, defaults, others, overrides, rules, built_in_drawers)
         else:
-            full(report, defaults, overrides, rules)
+            full(report, defaults, overrides, rules, built_in_drawers)
 
     print()
     if report.failures:
