@@ -119,6 +119,7 @@ REQUIRED_PACKAGES = {
     "keras": "keras==3.15.1",
     "jsonschema": "jsonschema==4.26.0",
     "gradio": "gradio==6.17.3",
+    "yfinance": "yfinance==1.7.0",
 }
 missing = [requirement for module, requirement in REQUIRED_PACKAGES.items() if importlib.util.find_spec(module) is None]
 if missing:
