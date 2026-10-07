@@ -1,0 +1,904 @@
+{
+ "name": "Fear and Greed Index",
+ "attribution": "Crypto Fear and Greed Index, data from alternative.me (https://alternative.me/crypto/fear-and-greed-index/)",
+ "data": [
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1665360000"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1665273600"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1665187200"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1665100800"
+  },
+  {
+   "value": "26",
+   "value_classification": "Fear",
+   "timestamp": "1665014400"
+  },
+  {
+   "value": "25",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664928000"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664841600"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664755200"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664668800"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664582400"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664496000"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664409600"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664323200"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664236800"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664150400"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1664064000"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663977600"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663891200"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663804800"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663718400"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663632000"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663545600"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1663459200"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663372800"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1663286400"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1663200000"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1663113600"
+  },
+  {
+   "value": "34",
+   "value_classification": "Fear",
+   "timestamp": "1663027200"
+  },
+  {
+   "value": "25",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662940800"
+  },
+  {
+   "value": "26",
+   "value_classification": "Fear",
+   "timestamp": "1662854400"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1662768000"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662681600"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662595200"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662508800"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662422400"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662336000"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662249600"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662163200"
+  },
+  {
+   "value": "25",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1662076800"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1661990400"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1661904000"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1661817600"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1661731200"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1661644800"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1661558400"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1661472000"
+  },
+  {
+   "value": "25",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1661385600"
+  },
+  {
+   "value": "25",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1661299200"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1661212800"
+  },
+  {
+   "value": "29",
+   "value_classification": "Fear",
+   "timestamp": "1661126400"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1661040000"
+  },
+  {
+   "value": "29",
+   "value_classification": "Fear",
+   "timestamp": "1660953600"
+  },
+  {
+   "value": "33",
+   "value_classification": "Fear",
+   "timestamp": "1660867200"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1660780800"
+  },
+  {
+   "value": "41",
+   "value_classification": "Fear",
+   "timestamp": "1660694400"
+  },
+  {
+   "value": "44",
+   "value_classification": "Fear",
+   "timestamp": "1660608000"
+  },
+  {
+   "value": "45",
+   "value_classification": "Fear",
+   "timestamp": "1660521600"
+  },
+  {
+   "value": "47",
+   "value_classification": "Neutral",
+   "timestamp": "1660435200"
+  },
+  {
+   "value": "46",
+   "value_classification": "Fear",
+   "timestamp": "1660348800"
+  },
+  {
+   "value": "42",
+   "value_classification": "Fear",
+   "timestamp": "1660262400"
+  },
+  {
+   "value": "41",
+   "value_classification": "Fear",
+   "timestamp": "1660176000"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1660089600"
+  },
+  {
+   "value": "42",
+   "value_classification": "Fear",
+   "timestamp": "1660003200"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1659916800"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1659830400"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1659744000"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1659657600"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1659571200"
+  },
+  {
+   "value": "34",
+   "value_classification": "Fear",
+   "timestamp": "1659484800"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1659398400"
+  },
+  {
+   "value": "33",
+   "value_classification": "Fear",
+   "timestamp": "1659312000"
+  },
+  {
+   "value": "39",
+   "value_classification": "Fear",
+   "timestamp": "1659225600"
+  },
+  {
+   "value": "42",
+   "value_classification": "Fear",
+   "timestamp": "1659139200"
+  },
+  {
+   "value": "39",
+   "value_classification": "Fear",
+   "timestamp": "1659052800"
+  },
+  {
+   "value": "32",
+   "value_classification": "Fear",
+   "timestamp": "1658966400"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1658880000"
+  },
+  {
+   "value": "26",
+   "value_classification": "Fear",
+   "timestamp": "1658793600"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1658707200"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1658620800"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1658534400"
+  },
+  {
+   "value": "33",
+   "value_classification": "Fear",
+   "timestamp": "1658448000"
+  },
+  {
+   "value": "34",
+   "value_classification": "Fear",
+   "timestamp": "1658361600"
+  },
+  {
+   "value": "31",
+   "value_classification": "Fear",
+   "timestamp": "1658275200"
+  },
+  {
+   "value": "30",
+   "value_classification": "Fear",
+   "timestamp": "1658188800"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1658102400"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1658016000"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657929600"
+  },
+  {
+   "value": "15",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657843200"
+  },
+  {
+   "value": "18",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657756800"
+  },
+  {
+   "value": "15",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657670400"
+  },
+  {
+   "value": "16",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657584000"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657497600"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657411200"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657324800"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657238400"
+  },
+  {
+   "value": "18",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657152000"
+  },
+  {
+   "value": "18",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1657065600"
+  },
+  {
+   "value": "19",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656979200"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656892800"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656806400"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656720000"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656633600"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656547200"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656460800"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656374400"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656288000"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656201600"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656115200"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1656028800"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655942400"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655856000"
+  },
+  {
+   "value": "9",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655769600"
+  },
+  {
+   "value": "9",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655683200"
+  },
+  {
+   "value": "6",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655596800"
+  },
+  {
+   "value": "6",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655510400"
+  },
+  {
+   "value": "9",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655424000"
+  },
+  {
+   "value": "7",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655337600"
+  },
+  {
+   "value": "7",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655251200"
+  },
+  {
+   "value": "8",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655164800"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1655078400"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654992000"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654905600"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654819200"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654732800"
+  },
+  {
+   "value": "17",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654646400"
+  },
+  {
+   "value": "15",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654560000"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654473600"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654387200"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654300800"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654214400"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654128000"
+  },
+  {
+   "value": "17",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1654041600"
+  },
+  {
+   "value": "16",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653955200"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653868800"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653782400"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653696000"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653609600"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653523200"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653436800"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653350400"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653264000"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653177600"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653091200"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1653004800"
+  },
+  {
+   "value": "13",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652918400"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652832000"
+  },
+  {
+   "value": "8",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652745600"
+  },
+  {
+   "value": "14",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652659200"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652572800"
+  },
+  {
+   "value": "9",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652486400"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652400000"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652313600"
+  },
+  {
+   "value": "12",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652227200"
+  },
+  {
+   "value": "10",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652140800"
+  },
+  {
+   "value": "11",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1652054400"
+  },
+  {
+   "value": "18",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651968000"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651881600"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651795200"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1651708800"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651622400"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1651536000"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1651449600"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651363200"
+  },
+  {
+   "value": "20",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651276800"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651190400"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651104000"
+  },
+  {
+   "value": "21",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1651017600"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1650931200"
+  },
+  {
+   "value": "23",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1650844800"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1650758400"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1650672000"
+  },
+  {
+   "value": "26",
+   "value_classification": "Fear",
+   "timestamp": "1650585600"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1650499200"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1650412800"
+  },
+  {
+   "value": "27",
+   "value_classification": "Fear",
+   "timestamp": "1650326400"
+  },
+  {
+   "value": "24",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1650240000"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1650153600"
+  },
+  {
+   "value": "28",
+   "value_classification": "Fear",
+   "timestamp": "1650067200"
+  },
+  {
+   "value": "22",
+   "value_classification": "Extreme Fear",
+   "timestamp": "1649980800"
+  }
+ ],
+ "metadata": {
+  "error": null
+ }
+}
