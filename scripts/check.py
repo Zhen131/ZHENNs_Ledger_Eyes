@@ -30,6 +30,15 @@ quick: static checks, then the notebook runs three times on the bundled
        and its reading cells are checked, the latter on the sample with
        counterexamples (a changed fingerprint, the full pre-labels with the
        sample, a missing file) and a hand-written review table.
+       The dated data chapter (12) reads the dated samples in samples/ with a
+       small daily cap in every run; its dated_data section is checked in
+       every brief (steps, time kinds, every layer's days, the cap, the
+       Bitcoin rule, the news labels against a second count from the news
+       sample) and compared between the runs. Before any run, its switches,
+       the shape of the dated post table against docs/dated-posts.md and
+       against broken tables, the way it reads, and its tweet cells on the
+       sample (shuffled, split, cached, changed) are checked, and the samples
+       are scanned for account names and links.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
@@ -38,7 +47,9 @@ full:  static checks, then one run on the full dataset with the default
        fingerprints) and its rows per label are printed. The emotion chapter
        reads the full pre-labels; every emotion network must beat both
        baselines, and its numbers, emotions per group and example posts are
-       printed.
+       printed. The dated data chapter reads the downloaded copies in
+       data/raw/dlt-tweets/ and data/raw/dlt-news/; its dated_data section
+       is checked and its numbers are printed.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -81,7 +92,7 @@ REQUIREMENTS = REPO_DIR / "requirements.txt"
 SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
 FULL_SOURCE = "data/raw/st-data-full.xlsx"
 TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers",
-                    "emotions"]
+                    "emotions", "dated_data"]
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -1215,7 +1226,7 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
     settings["MIN_BULLISH_BEARISH_POSTS"] = settings["MIN_TOPIC_POSTS"]  # above every row's bullish + bearish posts
     parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
-                  "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
+                  **DATED_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
     parameters = panel_settings(report, THRESHOLD_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
     report.info(f"{THRESHOLD_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
@@ -1232,6 +1243,7 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     check_calibration(report, THRESHOLD_LABEL, brief, switches)
     check_drawers(report, THRESHOLD_LABEL, brief, switches, built_in)
     check_emotions(report, THRESHOLD_LABEL, brief, switches)
+    check_dated_data(report, THRESHOLD_LABEL, brief, switches, quick_default=True)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -2321,6 +2333,16 @@ BROKEN_BRIEFS = [
     ("6 null not allowed, or an unknown field", ("emotions", "labels_file", "n_matched"), lambda old: None,
      "emotions.labels_file.n_matched", "None"),
     ("6 null not allowed, or an unknown field", ("emotions", "extra_field"), lambda old: 1, "emotions", "extra_field"),
+    ("2 required field missing in a section", ("dated_data", "date_from"), DELETE, "dated_data", "date_from"),
+    ("7 value the format does not allow", ("dated_data", "layers", "retail", "date_from"), lambda old: "2022/05/01",
+     "dated_data.layers.retail.date_from", "2022/05/01"),
+    ("7 value the format does not allow", ("dated_data", "layers"),
+     lambda old: {("whale" if key == "retail" else key): value for key, value in old.items()}, "dated_data.layers", "whale"),
+    ("3 wrong type", ("dated_data", "layers", "retail", "days", 0, "n_posts"), lambda old: 1.5,
+     "dated_data.layers.retail.days[0].n_posts", "integer"),
+    ("3 wrong type", ("dated_data", "layers", "retail", "days", 0, "n_posts"), lambda old: "12",
+     "dated_data.layers.retail.days[0].n_posts", "integer"),
+    ("6 null not allowed, or an unknown field", ("dated_data", "extra_field"), lambda old: 1, "dated_data", "extra_field"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2335,6 +2357,8 @@ NULL_ALLOWED = [
     ("emotions", "evaluation", "rows", 0, "macro_f1"),
     ("emotions", "human_review", "agreement"),
     ("emotions", "selection", "validation_macro_f1", "count_network"),
+    ("dated_data", "switches", "date_end"),
+    ("dated_data", "switches", "language"),
 ]
 
 
@@ -3792,6 +3816,543 @@ def print_emotions(brief):
           f"agreement {review.get('agreement')}")
 
 
+# ---------------------------------------------------------------- dated data (chapter 12)
+# Two dated datasets (tweets: retail layer, news: media layer) read into one dated post table and counted per layer
+# and UTC day. The quick check reads the samples in samples/, the full check the copies in data/raw/; neither reads
+# Hugging Face.
+
+DATED_SWITCH_DEFAULTS = {
+    "DATED_TWEETS_SOURCE": "hf://datasets/ExponentialScience/DLT-Tweets@c7d979394488bbd94bd6f493af1775d6b6159176/data",
+    "DATED_NEWS_SOURCE": ("hf://datasets/ExponentialScience/DLT-Sentiment-News@b52bfb8b3ec099924a52f6f4bfd1a8ac6c89c9e1/"
+                          "data"),
+    "DATED_START": "2021-01-01", "DATED_END": None, "DATED_DAILY_CAP": 2000, "DATED_BTC_ONLY": True,
+    "DATED_LANGUAGE": "en", "NEWS_TEXT": "title", "NEWS_LABEL": "market_direction",
+}
+DATED_OTHER_VALUES = {"DATED_BTC_ONLY": False, "DATED_LANGUAGE": None, "NEWS_TEXT": "text", "NEWS_LABEL": "votes"}
+DATED_TWEETS_SAMPLE = "samples/dlt-tweets-sample.parquet"
+DATED_NEWS_SAMPLE = "samples/dlt-news-sample.parquet"
+DATED_TWEETS_FULL = "data/raw/dlt-tweets/data"  # written by scripts/download_data.sh --dated
+DATED_NEWS_FULL = "data/raw/dlt-news/data"
+DATED_QUICK_CAP = 80  # below the busiest sample day after the default filters (120 tweets that mention Bitcoin)
+DATED_SAMPLE_SETTINGS = {"DATED_TWEETS_SOURCE": DATED_TWEETS_SAMPLE, "DATED_NEWS_SOURCE": DATED_NEWS_SAMPLE,
+                         "DATED_DAILY_CAP": DATED_QUICK_CAP}
+DATED_FULL_SETTINGS = {"DATED_TWEETS_SOURCE": DATED_TWEETS_FULL, "DATED_NEWS_SOURCE": DATED_NEWS_FULL}
+DATED_DOC = REPO_DIR / "docs" / "dated-posts.md"
+DATED_DOC_HEADER = "| Column | Type | Null | Meaning |"
+DATED_LAYER_NAMES = ["media", "kol", "retail"]
+DATED_STEP_NAMES = ["read", "time_parsed", "in_dates", "language", "mentions_btc", "unique", "daily_cap"]
+DATED_TIME_KINDS = ["with_zone", "without_zone", "date_only", "unparseable"]
+DATED_DATASET_RECORDS = {  # what the brief must say about each dataset
+    "tweets": {"name": "ExponentialScience/DLT-Tweets", "revision": "c7d979394488bbd94bd6f493af1775d6b6159176",
+               "license": "CC BY-NC 4.0", "layer": "retail"},
+    "news": {"name": "ExponentialScience/DLT-Sentiment-News", "revision": "b52bfb8b3ec099924a52f6f4bfd1a8ac6c89c9e1",
+             "license": "CC BY-NC 4.0", "layer": "media"},
+}
+DATED_PROBE_DIR = REPO_DIR / "data" / "checks" / "dated-probe"
+# Locked (only add): switch values the switch check cell must accept (True) or stop at with the switch's name (False).
+DATED_SWITCH_PROBES = [
+    ({"DATED_END": "2022-06-30"}, True), ({"DATED_LANGUAGE": None}, True), ({"DATED_DAILY_CAP": 1}, True),
+    ({"NEWS_TEXT": "text", "NEWS_LABEL": "votes", "DATED_BTC_ONLY": False}, True),
+    ({"DATED_START": "2021/01/01"}, False), ({"DATED_START": "2021-02-30"}, False), ({"DATED_START": 20210101}, False),
+    ({"DATED_END": "2020-12-31"}, False), ({"DATED_END": "end"}, False), ({"DATED_DAILY_CAP": 0}, False),
+    ({"DATED_DAILY_CAP": 2.5}, False), ({"DATED_DAILY_CAP": True}, False), ({"DATED_BTC_ONLY": "yes"}, False),
+    ({"DATED_LANGUAGE": ""}, False), ({"DATED_LANGUAGE": 5}, False), ({"NEWS_TEXT": "body"}, False),
+    ({"NEWS_LABEL": "label"}, False), ({"DATED_TWEETS_SOURCE": ""}, False), ({"DATED_NEWS_SOURCE": None}, False),
+]
+# Locked (only add): ways to break a valid dated post table, and the column the problem must name.
+DATED_SHAPE_PROBES = [
+    ("a column missing", lambda table: table.drop(columns="source"), "source"),
+    ("an extra column", lambda table: table.assign(author="x"), "author"),
+    ("an empty value where none is allowed", lambda table: table.assign(text=[None] + list(table["text"][1:])), "text"),
+    ("a layer that is not one of the three", lambda table: table.assign(layer=["whale"] + list(table["layer"][1:])),
+     "layer"),
+    ("a repeated post_id", lambda table: table.assign(post_id=[table["post_id"][0]] * len(table)), "post_id"),
+    ("a date not written YYYY-MM-DD", lambda table: table.assign(date=["2022/05/01"] + list(table["date"][1:])), "date"),
+    ("a date that does not exist", lambda table: table.assign(date=["2022-02-30"] + list(table["date"][1:])), "date"),
+    ("label as text", lambda table: table.assign(label=["1"] * len(table)), "label"),
+    ("mentions_btc as text", lambda table: table.assign(mentions_btc=["yes"] * len(table)), "mentions_btc"),
+    ("time without the UTC time zone", lambda table: table.assign(time=table["time"].dt.tz_localize(None)), "time"),
+    ("a date that is not the UTC day of the time", lambda table: table.assign(date=["2022-05-03"] + list(table["date"][1:])),
+     "date"),
+]
+# A second implementation of the two replacements (links, then account names), for scanning the samples.
+DATED_LINK = re.compile(r"(?:https?://|www\.)\S+", flags=re.IGNORECASE)
+DATED_HANDLE = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9_]+")
+DATED_BTC = re.compile(r"\b(?:bitcoin|btc)\b", flags=re.IGNORECASE)
+NEWS_FROM_DATASET = {0: 1, 1: 0, 2: 2}  # the news dataset's market_direction -> this project's label
+
+
+def dated_mask(text):
+    return DATED_HANDLE.sub("@user", DATED_LINK.sub("http", "" if text is None else str(text)))
+
+
+def check_dated_switches(report, defaults, others):
+    """The nine switches of chapter 12 with their defaults, the four two-state ones, and the switch check cell."""
+    wrong = [f"{name}={defaults.get(name, 'missing')!r}" for name, value in DATED_SWITCH_DEFAULTS.items()
+             if name not in defaults or defaults[name] != value]
+    two_state = {name: others[name] for name in DATED_SWITCH_DEFAULTS if name in others}
+    report.check(not wrong and two_state == DATED_OTHER_VALUES,
+                 "switches of the dated data chapter are present with their defaults (both datasets on Hugging Face at "
+                 "their pinned revisions, from 2021-01-01 to the end, at most 2000 posts per layer and day, Bitcoin only, "
+                 "English tweets, news headlines, the dataset's news label); DATED_BTC_ONLY, DATED_LANGUAGE, NEWS_TEXT and "
+                 "NEWS_LABEL are two-state (other values False, None, \"text\", \"votes\")",
+                 f"other defaults {wrong}; two-state {two_state}")
+    wrong = []
+    for overrides, accepted in DATED_SWITCH_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace.update(overrides)
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{overrides} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and any(name in stopped[0] for name in overrides)):
+            wrong.append(f"{overrides} not refused with its name: {problems[:1]}")
+    report.check(not wrong, f"the switch check cell accepts good dated data switches and stops at bad ones with the "
+                 f"switch's name ({len(DATED_SWITCH_PROBES)} cases: dates not written YYYY-MM-DD or not existing, an end "
+                 "before the start, a cap that is not a positive integer, a wrong true/false, language or news choice, "
+                 "an empty source)", "; ".join(wrong[:3]))
+
+
+def dated_doc_columns():
+    """[(column, type, may be empty)] from the column table of docs/dated-posts.md; and problems found."""
+    rows, problems, inside = [], [], False
+    text = DATED_DOC.read_text(encoding="utf-8") if DATED_DOC.exists() else ""
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.strip() == DATED_DOC_HEADER:
+            inside = True
+            continue
+        if inside and not line.startswith("|"):
+            inside = False
+        if not inside:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if all(set(cell) <= {"-", " ", ":"} for cell in cells):
+            continue
+        if len(cells) < 4 or not re.fullmatch(r"`[a-z_]+`", cells[0]) or cells[2] not in ("yes", "no"):
+            problems.append(f"line {number}: not a column row")
+            continue
+        rows.append((cells[0].strip("`"), cells[1], cells[2] == "yes"))
+    return rows, problems
+
+
+def dated_shape_cells():
+    """DATED_POST_SHAPE, DATED_LAYERS and dated_table_problems, executed from the notebook source; (namespace, problems)."""
+    import pandas as pd
+    namespace = {"__name__": "notebook_cells", "pd": pd}
+    return namespace, run_cells(["DATED_POST_SHAPE"], namespace)
+
+
+def dated_probe_table():
+    """A small dated post table that fits the shape."""
+    import pandas as pd
+    return pd.DataFrame({
+        "post_id": ["dlt-news:0000000000000001", "dlt-tweets:0000000000000002", "dlt-tweets:0000000000000003"],
+        "date": ["2022-05-01", "2022-05-01", "2022-05-02"],
+        "time": pd.to_datetime(["2022-05-01 08:00:00", "2022-05-01 23:59:59", None], utc=True),
+        "text": ["Bitcoin falls", "@user btc http", ""], "layer": ["media", "retail", "retail"],
+        "source": ["example.com", "twitter", "twitter"], "language": [None, "en", "en"],
+        "mentions_btc": [True, True, False], "label": pd.array([0, None, None], dtype="Int64"),
+        "votes_bullish": pd.array([1, None, None], dtype="Int64"), "votes_bearish": pd.array([4, None, None], dtype="Int64"),
+    })
+
+
+def check_dated_shape(report):
+    """The shape constant and docs/dated-posts.md list the same columns; dated_table_problems rejects broken tables."""
+    namespace, problems = dated_shape_cells()
+    if not report.check(not problems, "dated data: the shape of the dated post table and its check load from the notebook "
+                        "source", "; ".join(problems)):
+        return
+    shape = [tuple(row) for row in namespace["DATED_POST_SHAPE"]]
+    documented, doc_problems = dated_doc_columns()
+    doc_text = DATED_DOC.read_text(encoding="utf-8") if DATED_DOC.exists() else ""
+    layers_named = all(f"`{layer}`" in doc_text for layer in DATED_LAYER_NAMES)
+    report.check(shape == documented and not doc_problems and namespace["DATED_LAYERS"] == DATED_LAYER_NAMES
+                 and layers_named,
+                 f"{shown(DATED_DOC)} lists exactly the columns of DATED_POST_SHAPE, in the same order, with the same type "
+                 f"and the same null ({len(documented)} of {len(shape)} columns), and the layers are media, kol and retail",
+                 f"notebook {shape}; document {documented}; {doc_problems}; layers {namespace['DATED_LAYERS']}, named in "
+                 f"the document: {layers_named}")
+    problems_of = namespace["dated_table_problems"]
+    good = dated_probe_table()
+    wrong = [] if not problems_of(good) else [f"the valid table is refused: {problems_of(good)}"]
+    for description, change, column in DATED_SHAPE_PROBES:
+        found = problems_of(change(good.copy()))
+        if not any(problem.startswith(f"{column}: ") for problem in found):
+            wrong.append(f"{description}: {found or 'not refused'}")
+        report.info(f"dated table probe, {description}: {found[:1]}")
+    report.check(not wrong, f"dated_table_problems accepts a valid dated post table and refuses each of "
+                 f"{len(DATED_SHAPE_PROBES)} broken ones naming the column (a missing or extra column, an empty value, a "
+                 "layer whale, a repeated id, a date not YYYY-MM-DD or not existing, a wrong type, a time without UTC, a "
+                 "date that is not the day of its time)", "; ".join(wrong[:3]))
+
+
+def check_dated_chapter(report):
+    """Chapter 12 reads both datasets through one function each, which read files only through parquet_files and
+    parquet_batches; it has no way of reading meant for the samples, reads the tweets in batches of three columns,
+    imports no network package and never loads the datasets library."""
+    chapters = chapter_cells()
+    code = "\n".join(cell.source for cell in chapters.get(12, []) if cell.cell_type == "code")
+    tree = ast.parse(code)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    names = [ast.unparse(node.func) for node in calls]
+    readers = sorted(ast.unparse(node) for node in calls
+                     if ast.unparse(node.func) in ("read_dated_tweets", "read_dated_news"))
+    reads = sorted({name for name in names if re.search(r"(?:^|\.)(?:read_parquet|read_table|read_csv|read_excel|"
+                                                      r"ParquetFile|ParquetDataset|load_dataset|url_to_fs)$", name)})
+    imports = sorted({alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                      for alias in (node.names if isinstance(node, ast.Import) else [ast.alias(node.module or "")])})
+    network = [name for name in imports if name.split(".")[0] in ("requests", "http", "socket", "httpx", "urllib3",
+                                                                  "aiohttp", "datasets")
+               or name.startswith("urllib.request")]
+    samples = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+               and "sample" in node.value.lower()]
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    tweet_reader = ast.unparse(functions["read_dated_tweets"]) if "read_dated_tweets" in functions else ""
+    columns = re.search(r'TWEET_COLUMNS = (\[[^\]]*\])', code)
+    report.check(readers == ["read_dated_news(DATED_NEWS_SOURCE)", "read_dated_tweets(DATED_TWEETS_SOURCE, WORK_DIR)"]
+                 and reads == ["fsspec.core.url_to_fs", "pq.ParquetFile", "pq.read_table"]
+                 and not network and not samples
+                 and "parquet_batches(fs, file, TWEET_COLUMNS, DATED_BATCH_ROWS)" in tweet_reader
+                 and columns is not None and ast.literal_eval(columns.group(1)) == ["timestamp", "tweet", "language"],
+                 "chapter 12 reads the tweets only through read_dated_tweets(DATED_TWEETS_SOURCE, WORK_DIR) and the news "
+                 "only through read_dated_news(DATED_NEWS_SOURCE), both through parquet_files and parquet_batches (the "
+                 "cache is read with pq.read_table), with no way of reading meant for the samples; the tweets are read "
+                 "in batches of three columns (timestamp, tweet, language); no network package and no datasets library",
+                 f"reader calls {readers}; reading calls {reads}; network imports {network}; strings naming a sample "
+                 f"{samples}; tweet columns {columns.group(1) if columns else None}")
+
+
+def dated_notebook_cells(namespace_extra):
+    """Chapter 12's code cells up to the tweets, executed from the source with the given switches; (namespace, problems)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import pandas as pd
+    namespace = {"__name__": "notebook_cells", "pd": pd, "re": re, "brief": {},
+                 "BTC_PATTERN": DATED_BTC, "RANDOM_SEED": 42, **DATED_SWITCH_DEFAULTS, **namespace_extra}
+    problems = run_cells(["DATED_POST_SHAPE", "MASK_LINK_PATTERN", "TIME_KINDS", "post_ids", "parquet_files",
+                          "TWEETS_DATASET"], namespace)
+    return namespace, problems
+
+
+def check_dated_probes(report):
+    """Chapter 12 on the tweet sample, in data/checks/dated-probe/: its self-checks pass; the same tweets are kept, with
+    the same counts, when the sample's rows are shuffled or split into two files read in the other order; a second
+    read comes from the cache; a changed file is read again. The samples hold no account name and no link."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    shutil.rmtree(DATED_PROBE_DIR, ignore_errors=True)
+    DATED_PROBE_DIR.mkdir(parents=True)
+    work = DATED_PROBE_DIR / "work"
+    settings = {"DATED_TWEETS_SOURCE": str(REPO_DIR / DATED_TWEETS_SAMPLE), "DATED_DAILY_CAP": DATED_QUICK_CAP,
+                "WORK_DIR": str(work)}
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        namespace, problems = dated_notebook_cells(settings)
+    if not report.check(not problems, "dated probes: chapter 12's cells run from the source on the tweet sample, and their "
+                        "self-checks pass (replacements, times, the daily cap in either row order)", "; ".join(problems)):
+        return
+    examples = namespace["MASK_EXAMPLES"]
+    email_kept = any("@" in text and text == expected and re.search(r"[A-Za-z0-9]@", text) for text, expected in examples)
+    report.check(email_kept, "the replacement examples include an e-mail address that stays as it is",
+                 f"{[text for text, _ in examples]}")
+    read = namespace["read_dated_tweets"]
+    first_rows, first_info = namespace["tweet_rows"], namespace["tweet_info"]
+    table = pq.read_table(REPO_DIR / DATED_TWEETS_SAMPLE)
+    order = list(range(table.num_rows))
+    random.Random(7).shuffle(order)
+    shuffled = DATED_PROBE_DIR / "shuffled" / "part.parquet"
+    shuffled.parent.mkdir()
+    pq.write_table(table.take(order), shuffled)
+    split = DATED_PROBE_DIR / "split"
+    split.mkdir()
+    half = table.num_rows // 2
+    pq.write_table(table.slice(half), split / "a.parquet")  # the second half first in name order
+    pq.write_table(table.slice(0, half), split / "b.parquet")
+    results = {}
+    with contextlib.redirect_stdout(output):
+        for name, source in [("shuffled rows", shuffled.parent), ("two files, halves swapped", split)]:
+            rows, info = read(str(source), str(work))
+            results[name] = (rows, info)
+    def same(rows, info):
+        return (sorted(rows["post_id"]) == sorted(first_rows["post_id"]) and info == first_info)
+    differing = [name for name, (rows, info) in results.items() if not same(rows, info)]
+    report.check(not differing and first_info["steps"]["daily_cap"] > 0,
+                 "dated probes: shuffling the tweet sample's rows, or splitting it into two files read in the other "
+                 "order, keeps exactly the same tweets with the same counts (ids and the daily cap do not depend on the "
+                 "position of a row)", f"differ: {differing}; kept {first_info['steps']['daily_cap']}")
+    # The cache: a second read of the same source comes from the cache; a changed file is read again.
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        again_rows, again_info = read(str(shuffled.parent), str(work))
+    hit = "cache hit" in log.getvalue()
+    grown = DATED_PROBE_DIR / "grown" / "part.parquet"
+    grown.parent.mkdir()
+    pq.write_table(pa.concat_tables([table, table.slice(0, 1).set_column(
+        table.schema.get_field_index("tweet"), table.schema.field("tweet"),
+        pa.array(["bitcoin probe row"], type=table.schema.field("tweet").type))]), grown)
+    log2 = io.StringIO()
+    with contextlib.redirect_stdout(log2):
+        grown_rows, grown_info = read(str(grown.parent), str(work))
+        grown_again_rows, grown_again_info = read(str(grown.parent), str(work))
+    report.check(hit and same(again_rows, again_info) and "cache hit" not in log2.getvalue().splitlines()[0]
+                 and grown_info["steps"]["read"] == first_info["steps"]["read"] + 1
+                 and "cache hit" in log2.getvalue().splitlines()[-1] and grown_again_info == grown_info,
+                 "dated probes: reading the same tweets again comes from the cache in WORK_DIR/cache (no file opened); "
+                 "a copy with one more row is read again and counts it, and is then cached in turn",
+                 f"second read: {log.getvalue().strip()[:160]}; changed copy: {log2.getvalue().strip()[:300]}; rows read "
+                 f"{first_info['steps']['read']} -> {grown_info['steps']['read']}")
+    # The samples hold no account name (other than @user) and no link, by a second implementation of the rule.
+    leftovers = []
+    for path, columns in [(DATED_TWEETS_SAMPLE, ["tweet"]), (DATED_NEWS_SAMPLE, ["title", "description", "text"])]:
+        frame = pd.read_parquet(REPO_DIR / path, columns=columns)
+        for column in columns:
+            for text in frame[column].fillna(""):
+                if DATED_LINK.search(text) or any(found != "@user" for found in DATED_HANDLE.findall(text)) \
+                        or dated_mask(text) != text:
+                    leftovers.append(f"{path} {column}: {text[:60]!r}")
+    report.check(not leftovers, "the dated samples hold no link and no account name other than @user (texts already "
+                 "replaced; replacing again changes nothing)", "; ".join(leftovers[:3]))
+    shutil.rmtree(DATED_PROBE_DIR, ignore_errors=True)
+
+
+def expected_news(path, switches):
+    """A second implementation of chapter 12 for the news: the news kept and their market_direction and labels."""
+    import pandas as pd
+    news = pd.read_parquet(REPO_DIR / path)
+    times = pd.to_datetime(news["timestamp"], format="ISO8601", utc=True, errors="coerce")
+    news = news.assign(day=times.dt.strftime("%Y-%m-%d"))[times.notna()]
+    news = news[news["day"] >= switches["DATED_START"]]
+    if switches["DATED_END"] is not None:
+        news = news[news["day"] <= switches["DATED_END"]]
+    text = news[switches["NEWS_TEXT"]].map(dated_mask)
+    if switches["DATED_BTC_ONLY"]:
+        news = news[text.map(lambda value: DATED_BTC.search(value) is not None)]
+    news = news.assign(post_id=[hashlib.sha256((str(time) + "\x1f" + str(url)).encode("utf-8")).hexdigest()[:16]
+                                for time, url in zip(news["timestamp"], news["url"])])
+    news = news.drop_duplicates("post_id")  # rows with the same id are the same item (the counts below agree)
+    news = news.assign(key=[hashlib.sha256(f"{switches['RANDOM_SEED']}:dlt-news:{post_id}".encode("utf-8")).hexdigest()[:16]
+                            for post_id in news["post_id"]])
+    news = news.sort_values(["day", "key", "post_id"]).groupby("day").head(switches["DATED_DAILY_CAP"])
+    bullish = news["vote_counts"].map(lambda votes: (votes or {}).get("bullish") or 0)
+    bearish = news["vote_counts"].map(lambda votes: (votes or {}).get("bearish") or 0)
+    if switches["NEWS_LABEL"] == "market_direction":
+        labels = news["market_direction"].map(NEWS_FROM_DATASET)
+    else:
+        labels = [2 if up > down else 0 if down > up else 1 for up, down in zip(bullish, bearish)]
+    count = lambda values: {str(label): int(sum(1 for value in values if value == label)) for label in (0, 1, 2)}
+    return len(news), count(list(news["market_direction"])), count(list(labels))
+
+
+def day_after(day):
+    from datetime import date, timedelta
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+
+
+def check_dated_data(report, label, brief, switches, quick_default=False):
+    """The dated_data section: the switches as set, both datasets' steps and time kinds, every layer's period and days,
+    the daily cap, the Bitcoin rule and the news labels."""
+    dated = as_dict(brief.get("dated_data"))
+    if not report.check(bool(dated), f"{label}: dated_data section has content"):
+        return
+    problems = []
+    recorded = as_dict(dated.get("switches"))
+    expected = {"date_start": switches["DATED_START"], "date_end": switches["DATED_END"],
+                "language": switches["DATED_LANGUAGE"], "btc_only": switches["DATED_BTC_ONLY"],
+                "daily_cap": switches["DATED_DAILY_CAP"], "seed": switches["RANDOM_SEED"]}
+    if recorded != expected:
+        problems.append(f"switches {recorded} (expected {expected})")
+    cap = switches["DATED_DAILY_CAP"]
+    layers = as_dict(dated.get("layers"))
+    if set(layers) - set(DATED_LAYER_NAMES):
+        problems.append(f"layer keys {sorted(layers)}")
+    datasets = as_dict(dated.get("datasets"))
+    for key, fixed in DATED_DATASET_RECORDS.items():
+        record = as_dict(datasets.get(key))
+        source = switches["DATED_TWEETS_SOURCE" if key == "tweets" else "DATED_NEWS_SOURCE"]
+        column = "tweet" if key == "tweets" else switches["NEWS_TEXT"]
+        wrong = {name: record.get(name) for name, value in {**fixed, "source": source, "text_column": column}.items()
+                 if record.get(name) != value}
+        if wrong:
+            problems.append(f"datasets.{key}: {wrong}")
+        steps = record.get("steps") or []
+        names = [as_dict(step).get("step") for step in steps]
+        counts = [as_dict(step).get("n_posts") for step in steps]
+        kinds = as_dict(record.get("time_kinds"))
+        if names != DATED_STEP_NAMES or not all(is_count(count) for count in counts):
+            problems.append(f"datasets.{key}.steps {names}")
+            continue
+        step = dict(zip(names, counts))
+        if any(later > earlier for earlier, later in zip(counts, counts[1:])):
+            problems.append(f"datasets.{key}: a step has more posts than the one before it {counts}")
+        if sorted(kinds) != sorted(DATED_TIME_KINDS) or sum(kinds.values()) != step["read"] \
+                or step["time_parsed"] != step["read"] - kinds.get("unparseable", -1):
+            problems.append(f"datasets.{key}: time kinds {kinds} do not add up to the rows read {step['read']} and "
+                            f"the parsed rows {step['time_parsed']}")
+        if record.get("n_duplicates") != step["mentions_btc"] - step["unique"]:
+            problems.append(f"datasets.{key}: n_duplicates {record.get('n_duplicates')} is not mentions_btc - unique")
+        if not switches["DATED_BTC_ONLY"] and step["mentions_btc"] != step["language"]:
+            problems.append(f"datasets.{key}: with DATED_BTC_ONLY False the Bitcoin step dropped posts")
+        if (key == "news" or switches["DATED_LANGUAGE"] is None) and step["language"] != step["in_dates"]:
+            problems.append(f"datasets.{key}: the language step dropped posts although it filters nothing here")
+        layer = as_dict(layers.get(fixed["layer"]))
+        if step["daily_cap"] != (layer.get("n_posts") if layer else 0):
+            problems.append(f"datasets.{key}: daily_cap {step['daily_cap']} is not the {fixed['layer']} layer's posts "
+                            f"{layer.get('n_posts')}")
+        if quick_default and key == "tweets" and not step["time_parsed"] > step["in_dates"]:
+            problems.append("the date step dropped no tweet of the sample (it has tweets from before 2021)")
+    news = as_dict(datasets.get("news"))
+    direction, labels = as_dict(news.get("market_direction_counts")), as_dict(news.get("label_counts"))
+    media_posts = as_dict(layers.get("media")).get("n_posts", 0)
+    if news.get("label_rule") != switches["NEWS_LABEL"] or sum(direction.values()) != media_posts \
+            or sum(labels.values()) != media_posts:
+        problems.append(f"news labels: rule {news.get('label_rule')}, counts {direction} / {labels}, media posts "
+                        f"{media_posts}")
+    elif switches["NEWS_LABEL"] == "market_direction" and not (
+            labels.get("1") == direction.get("0") and labels.get("0") == direction.get("1")
+            and labels.get("2") == direction.get("2")):
+        problems.append(f"news labels not converted one by one: market_direction {direction}, labels {labels}")
+    for name, layer in layers.items():
+        layer = as_dict(layer)
+        days = layer.get("days") or []
+        dates = [as_dict(day).get("date") for day in days]
+        posts = [as_dict(day).get("n_posts") for day in days]
+        if not days or not all(is_count(n) for n in posts) or not all(isinstance(day, str) for day in dates):
+            problems.append(f"layers.{name}: days malformed")
+            continue
+        try:
+            calendar = [dates[0]]
+            while calendar[-1] < dates[-1] and len(calendar) <= len(dates):
+                calendar.append(day_after(calendar[-1]))
+        except ValueError:
+            calendar = []
+        if dates != calendar or dates[0] != layer.get("date_from") or dates[-1] != layer.get("date_to"):
+            problems.append(f"layers.{name}: days are not every calendar day from {layer.get('date_from')} to "
+                            f"{layer.get('date_to')} in order")
+        if posts[0] == 0 or posts[-1] == 0:
+            problems.append(f"layers.{name}: the first or last day has no post")
+        if max(posts) > cap:
+            problems.append(f"layers.{name}: a day has {max(posts)} posts, more than the cap {cap}")
+        if sum(posts) != layer.get("n_posts") or max(posts) != layer.get("max_posts_per_day") \
+                or sum(1 for n in posts if n > 0) != layer.get("n_days_with_posts"):
+            problems.append(f"layers.{name}: n_posts, max_posts_per_day or n_days_with_posts do not follow from days")
+        capped = layer.get("n_days_capped")
+        if not is_count(capped) or capped > sum(1 for n in posts if n == cap):
+            problems.append(f"layers.{name}: n_days_capped {capped} is more than the days with exactly the cap")
+        mentions = layer.get("n_mentions_btc")
+        if not is_count(mentions) or mentions > layer.get("n_posts", 0) \
+                or (switches["DATED_BTC_ONLY"] and mentions != layer.get("n_posts")):
+            problems.append(f"layers.{name}: n_mentions_btc {mentions} for {layer.get('n_posts')} posts")
+        top = layer.get("top_sources") or []
+        top_posts = [as_dict(item).get("n_posts") for item in top]
+        if not top or len(top) > 10 or len(top) != min(10, layer.get("n_sources", 0)) \
+                or top_posts != sorted(top_posts, reverse=True) or sum(top_posts) > layer.get("n_posts", 0):
+            problems.append(f"layers.{name}: top_sources {top[:3]}")
+        if not is_count(layer.get("n_unknown_source")) or layer["n_unknown_source"] > layer.get("n_posts", 0):
+            problems.append(f"layers.{name}: n_unknown_source {layer.get('n_unknown_source')}")
+        if name == "retail" and (layer.get("n_sources") != 1 or layer.get("n_unknown_source") != 0
+                                 or [as_dict(item).get("source") for item in top] != ["twitter"]):
+            problems.append("layers.retail: the tweets' only source must be twitter")
+    report.check(not problems, f"{label}: dated_data follows the switches; every dataset's steps never grow and end at its "
+                 "layer's posts, its time kinds add up to the rows read, its repeated posts are mentions_btc - unique; "
+                 "every layer lists every calendar day from its date_from to its date_to, no day above the cap, the days "
+                 "add up to its posts; with DATED_BTC_ONLY every post mentions Bitcoin; the news labels are the dataset's "
+                 "classes converted one by one (0 -> 1, 1 -> 0, 2 -> 2)", "; ".join(problems[:5]))
+    starts = [as_dict(layer).get("date_from") for layer in layers.values()]
+    ends = [as_dict(layer).get("date_to") for layer in layers.values()]
+    period_ok = (bool(layers) and dated.get("date_from") == min(starts) and dated.get("date_to") == max(ends)
+                 and dated["date_from"] >= switches["DATED_START"]
+                 and (switches["DATED_END"] is None or dated["date_to"] <= switches["DATED_END"])
+                 and dated.get("n_posts") == sum(as_dict(layer).get("n_posts", 0) for layer in layers.values()))
+    report.check(period_ok, f"{label}: dated_data's date_from and date_to are the earliest and latest of its layers, "
+                 "within DATED_START and DATED_END, and its posts are the layers' posts",
+                 f"{dated.get('date_from')} to {dated.get('date_to')}; layers {list(zip(layers, starts, ends))}")
+    default_dates = switches["DATED_START"] == DATED_SWITCH_DEFAULTS["DATED_START"] and switches["DATED_END"] is None
+    if default_dates:
+        report.check(sorted(layers) == ["media", "retail"],
+                     f"{label}: with the default dates both the media and the retail layer have posts (kol has no data)",
+                     f"layers {sorted(layers)}")
+    if quick_default:
+        report.check(any(as_dict(layer).get("n_days_capped", 0) > 0 for layer in layers.values()),
+                     f"{label}: on the sample the daily cap ({cap}) left posts out on at least one day",
+                     f"days capped {[(name, as_dict(layer).get('n_days_capped')) for name, layer in layers.items()]}")
+    if switches["DATED_NEWS_SOURCE"] == DATED_NEWS_SAMPLE:
+        n_kept, direction_expected, labels_expected = expected_news(DATED_NEWS_SAMPLE, switches)
+        report.check(media_posts == n_kept and direction == direction_expected and labels == labels_expected,
+                     f"{label}: the news kept, counted again by the check from {DATED_NEWS_SAMPLE} (a second "
+                     "implementation of the steps), have the same market_direction counts and the same labels as the "
+                     "brief", f"brief {media_posts} posts, market_direction {direction}, labels {labels}; check {n_kept}, "
+                     f"{direction_expected}, {labels_expected}")
+
+
+def compare_dated(report, first, again, other):
+    """Two runs with the default switches: identical dated_data. The run with the other switches: more posts in a
+    layer, and not more Bitcoin posts than posts."""
+    left = as_dict(as_dict(first).get("dated_data"))
+    right = as_dict(as_dict(again).get("dated_data"))
+    report.check(bool(left) and left == right, "default switches run twice: the two dated_data sections are identical",
+                 "" if left == right else "differing parts: " + ", ".join(key for key in left if left.get(key) != right.get(key)))
+    flipped = as_dict(as_dict(other).get("dated_data"))
+    layers, flipped_layers = as_dict(left.get("layers")), as_dict(flipped.get("layers"))
+    more = [name for name in flipped_layers
+            if as_dict(flipped_layers[name]).get("n_posts", 0) > as_dict(layers.get(name)).get("n_posts", 0)]
+    within = all(as_dict(layer).get("n_mentions_btc", 0) <= as_dict(layer).get("n_posts", 0)
+                 for layer in flipped_layers.values())
+    report.check(bool(flipped) and bool(more) and within,
+                 "other switches (DATED_BTC_ONLY False and the rest): at least one layer has more posts than with the "
+                 "defaults, and no layer has more Bitcoin posts than posts",
+                 f"layers with more posts: {more}; " + ", ".join(
+                     f"{name} {as_dict(flipped_layers[name]).get('n_mentions_btc')}/{as_dict(flipped_layers[name]).get('n_posts')}"
+                     for name in flipped_layers))
+
+
+def check_dated_copies(report, switches):
+    """The full check reads the downloaded copies; they must be there."""
+    missing = [switches[name] for name in ("DATED_TWEETS_SOURCE", "DATED_NEWS_SOURCE")
+               if "://" not in switches[name] and not (REPO_DIR / switches[name]).exists()]
+    return report.check(not missing, "dated datasets available locally",
+                        f"{missing} not found; run scripts/download_data.sh --dated" if missing else
+                        f"{switches['DATED_TWEETS_SOURCE']}, {switches['DATED_NEWS_SOURCE']}")
+
+
+def print_dated(brief, brief_path):
+    """Print chapter 12's numbers (full run)."""
+    import statistics
+    dated = as_dict(brief.get("dated_data"))
+    if not dated:
+        return
+    print("\nDated data (full run)")
+    print(f"  switches:                      {dated.get('switches')}")
+    print(f"  whole table:                   {dated.get('n_posts')} posts, {dated.get('date_from')} to {dated.get('date_to')}")
+    for key, record in as_dict(dated.get("datasets")).items():
+        print(f"  {key} ({record.get('name')}@{record.get('revision')}, layer {record.get('layer')}, text column "
+              f"{record.get('text_column')}):")
+        print("    posts left after each step:  " + ", ".join(f"{as_dict(step).get('step')} {as_dict(step).get('n_posts')}"
+                                                         for step in record.get("steps") or []))
+        print(f"    time kinds:                  {record.get('time_kinds')}")
+        print(f"    repeated posts dropped:      {record.get('n_duplicates')}")
+        if key == "news":
+            print(f"    label rule:                  {record.get('label_rule')}; class names found in the file: "
+                  f"{record.get('class_names_found')}")
+            print(f"    market_direction (dataset):  {record.get('market_direction_counts')}  (0 neutral, 1 bearish, 2 bullish)")
+            print(f"    labels (this project):       {record.get('label_counts')}  (0 bearish, 1 neutral, 2 bullish)")
+    for name, layer in as_dict(dated.get("layers")).items():
+        posts = [as_dict(day).get("n_posts", 0) for day in layer.get("days") or []]
+        with_posts = [n for n in posts if n > 0]
+        print(f"  layer {name}: {layer.get('date_from')} to {layer.get('date_to')} ({len(posts)} calendar days), "
+              f"{layer.get('n_posts')} posts, {layer.get('n_mentions_btc')} mention Bitcoin")
+        print(f"    days with posts {layer.get('n_days_with_posts')}, days capped {layer.get('n_days_capped')}, most on "
+              f"one day {layer.get('max_posts_per_day')}")
+        if posts:
+            print(f"    posts per calendar day: min {min(posts)}, median {statistics.median(posts):g}, max {max(posts)}; "
+                  f"per day with posts: min {min(with_posts)}, median {statistics.median(with_posts):g}, max {max(with_posts)}")
+        print(f"    sources {layer.get('n_sources')}, unknown {layer.get('n_unknown_source')}; top: " + ", ".join(
+            f"{as_dict(item).get('source')} {as_dict(item).get('n_posts')}" for item in layer.get("top_sources") or []))
+    print(f"  brief file size:               {brief_path.stat().st_size:,} bytes")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -3841,7 +4402,7 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     briefs = {}
     for label, flipped, folder in runs:
         parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
-                      "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
+                      **DATED_SAMPLE_SETTINGS, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
         parameters = panel_settings(report, label, parameters, overrides)
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
@@ -3859,6 +4420,7 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             check_calibration(report, label, brief, switches)
             check_drawers(report, label, brief, switches, built_in)
             check_emotions(report, label, brief, switches)
+            check_dated_data(report, label, brief, switches, quick_default=not flipped)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -3870,11 +4432,13 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     compare_why(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_drawers(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_emotions(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    compare_dated(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL), briefs.get("other switches"))
     threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
-    parameters = {"DATA_SOURCE": FULL_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_FULL_FILE, **overrides}
+    parameters = {"DATA_SOURCE": FULL_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_FULL_FILE, **DATED_FULL_SETTINGS,
+                  **overrides}
     parameters = panel_settings(report, "full run", parameters, overrides)
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
@@ -3885,6 +4449,8 @@ def full(report, defaults, overrides, rules=None, built_in=None):
                             f"{source} not found; run scripts/download_data.sh or pass -p DATA_SOURCE <address>"):
             return
         report.info(f"data file {source}: {path.stat().st_size:,} bytes, sha256 {sha256_of(path)}")
+    if not check_dated_copies(report, switches):
+        return
     report.info("full run: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
     brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
     brief_path.unlink(missing_ok=True)
@@ -3901,6 +4467,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     check_calibration_narrows(report, "full run", brief)
     check_drawers(report, "full run", brief, switches, built_in)
     check_emotions(report, "full run", brief, switches, full_run=True)
+    check_dated_data(report, "full run", brief, switches)
     check_format(report, "full run", brief, rules)
     check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     check_panel(report, "full run", brief_path, brief)
@@ -3925,6 +4492,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     print_calibration(brief)
     print_drawers(brief)
     print_emotions(brief)
+    print_dated(brief, brief_path)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
@@ -3960,6 +4528,10 @@ def main():
     check_emotion_switches(report, defaults, others)
     check_emotion_chapter(report)
     check_emotion_probes(report)
+    check_dated_switches(report, defaults, others)
+    check_dated_shape(report)
+    check_dated_chapter(report)
+    check_dated_probes(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
