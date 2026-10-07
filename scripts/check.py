@@ -178,6 +178,11 @@ DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of e
 PANEL_SWITCH = "LAUNCH_PANEL"
 CHECK_SETTINGS = {PANEL_SWITCH: False}  # every run of both checks: the panel is built, never started
 PANEL_TABLES = ["scope", "evaluation", "topics", "why"]  # the panel's tables, in tab order
+PANEL_MORE_TABLES = ["calibration", "calibrated", "drawers", "emotions", "new_words", "validation",
+                     "sources"]  # the panel's tables after the first four, in tab order
+PANEL_CHART_LABELS = ["Bullish share by day", "The two layers side by side"]  # the panel's two charts, in tab order
+PANEL_EMOTION_COLUMNS = ["row", "name", "posts"]  # the emotion table's first columns; one column per class follows
+PANEL_DASH = "—"  # what the panel shows where the brief has null
 LOOPBACK_HOST = "127.0.0.1"  # the only address the panel may listen on
 
 # Text scan. Each pattern is written so that it does not match its own source line
@@ -2538,6 +2543,8 @@ def check_save_refuses(report, label, brief, rules):
 # Run in a separate Python with an audit hook that records every network connection and name lookup to a
 # host other than this machine. It executes the notebook's panel cell, then builds the panel from a brief file
 # and from a copy with marked values, and prints the tables and the page's table components as JSON.
+# It also reports every image on the page (label, size, colours, a hash of its pixels) for both, and builds the
+# panel from two more copies next to the marked one, each with one number of one chart changed.
 PANEL_PROBE = r'''
 import json, os, sys
 LOOPBACK = {"127.0.0.1", "::1", "localhost", b"127.0.0.1", b"::1", b"localhost"}
@@ -2555,6 +2562,28 @@ sys.addaudithook(audit)
 cell_file, brief_file, marked_file = sys.argv[1:4]
 namespace = {"__name__": "panel_cell"}
 exec(compile(open(cell_file, encoding="utf-8").read(), "panel cell", "exec"), namespace)
+
+
+def chart_images(page):  # every image on the page: label, file size, pixel size, colours and a hash of the pixels
+    import hashlib
+    from PIL import Image
+    found = []
+    for block in page.blocks.values():
+        if type(block).__name__ != "Image":
+            continue
+        value = block.value if isinstance(block.value, dict) else {}
+        item = {"label": block.label, "sha256": None, "bytes": 0, "size": None, "colours": 0}
+        if value.get("path") and os.path.isfile(value["path"]):
+            with Image.open(value["path"]) as picture:
+                pixels = picture.convert("RGB")
+            colours = pixels.getcolors(maxcolors=4096)
+            item.update(sha256=hashlib.sha256(repr(pixels.size).encode() + pixels.tobytes()).hexdigest(),
+                        bytes=os.path.getsize(value["path"]), size=list(pixels.size),
+                        colours=4097 if colours is None else len(colours))
+        found.append(item)
+    return found
+
+
 result = {"environment": os.environ.get("GRADIO_ANALYTICS_ENABLED")}
 for key, path in (("brief", brief_file), ("marked", marked_file)):
     tables = namespace["panel_tables"](path)
@@ -2570,6 +2599,11 @@ for key, path in (("brief", brief_file), ("marked", marked_file)):
                         "rows": [[str(cell) for cell in row] for row in value.get("data", [])]}
                        for value in components],
     }
+    result[key]["images"] = chart_images(page)
+for key in ("daily_changed", "layers_changed"):  # copies with one number of a chart changed, next to the marked copy
+    path = os.path.join(os.path.dirname(marked_file), key + "-brief.json")
+    if os.path.isfile(path):
+        result[key] = {"images": chart_images(namespace["build_panel"](path))}
 result["network"] = network
 print("PANEL-PROBE " + json.dumps(result))
 '''
@@ -2578,7 +2612,25 @@ PANEL_MARKS = [  # (path in the brief, marker, table that must show it)
     (("sentiment", "evaluation", "rows", 0, "model"), "PANEL-MARK-MODEL", "evaluation"),
     (("topics", "topics", 0, "name"), "PANEL-MARK-TOPIC", "topics"),
     (("why", "topics", 0, "name"), "PANEL-MARK-WHY", "why"),
+    (("why", "calibration", "rates_from", "subset"), "PANEL-MARK-RATES", "calibration"),
+    (("why", "topics", 0, "topic"), "PANEL-MARK-CALIBRATED", "calibrated"),
+    (("drawers", "drawers", 0, "name"), "PANEL-MARK-DRAWER", "drawers"),
+    (("emotions", "drawers", 0, "name"), "PANEL-MARK-EMOTION", "emotions"),
+    (("validation", "layers", "retail", "date_from"), "PANEL-MARK-LAYER", "validation"),
+    (("validation", "price", "source"), "PANEL-MARK-PRICE", "sources"),
 ]
+PANEL_NEW_WORD_PATH = ("new_words", "layers", "retail", "days", 0, "new_words")  # a day that every brief has
+PANEL_NEW_WORD = {"word": "PANEL-MARK-NEW-WORD", "n_posts": 1, "past_daily_mean": 0.0, "ratio": None,
+                  "quotes": [{"post_id": "panel-probe", "text": "PANEL-MARK-NEW-WORD"}]}  # added to it in the copy
+PANEL_CHART_CHANGES = [  # (copy, the number changed in it, the chart that must change: position in PANEL_CHART_LABELS)
+    ("daily_changed", ("daily", "layers", "retail", "days", 0, "calibrated_bullish_share"), 0),
+    ("layers_changed", ("layers", "days", 0, "calibrated_bullish_share", "media"), 1),
+]
+
+
+def panel_chart_value(old):
+    """A share far from the old one (or from nothing): what a copy of the brief gets for one number of a chart."""
+    return 0.95 if old is None or old < 0.5 else 0.05
 
 
 def check_panel(report, label, brief_path, brief):
@@ -2594,6 +2646,18 @@ def check_panel(report, label, brief_path, brief):
     except (KeyError, IndexError, TypeError) as exc:
         report.check(False, f"{label}: panel probe", f"cannot mark the brief: {exc}")
         return
+    try:  # a made-up new word on the first day of the retail layer: a brief may have no new word at all
+        marked = changed_copy(marked, PANEL_NEW_WORD_PATH, lambda old: [PANEL_NEW_WORD] + list(old))
+    except (KeyError, IndexError, TypeError) as exc:
+        report.check(False, f"{label}: panel probe", f"cannot add a new word to the brief: {exc}")
+    for key, path, _ in PANEL_CHART_CHANGES:  # read by the probe from the marked copy's folder
+        chart_file = folder / f"{key}-brief.json"
+        chart_file.unlink(missing_ok=True)
+        try:
+            chart_file.write_text(json.dumps(changed_copy(brief, path, panel_chart_value), ensure_ascii=False),
+                                  encoding="utf-8")
+        except (KeyError, IndexError, TypeError) as exc:
+            report.check(False, f"{label}: panel probe", f"cannot change {path} in a copy of the brief: {exc}")
     marked_file.write_text(json.dumps(marked, ensure_ascii=False), encoding="utf-8")
     started = time.perf_counter()
     completed = subprocess.run([sys.executable, "-c", PANEL_PROBE, str(cell_file), str(brief_path), str(marked_file)],
@@ -2612,15 +2676,16 @@ def check_panel(report, label, brief_path, brief):
                      "topics": len(topics.get("topics") or []), "why": 1 + len(why.get("topics") or [])}
     rows = {name: len(table["rows"]) for name, table in tables.items()}
     scope_values = [row[-1] for row in as_dict(tables.get("scope")).get("rows", [])]
-    report.check(list(tables) == PANEL_TABLES and all(rows[name] == count for name, count in expected_rows.items())
+    report.check(list(tables) == PANEL_TABLES + PANEL_MORE_TABLES
+                 and all(rows[name] == count for name, count in expected_rows.items())
                  and brief.get("format_version") in scope_values and as_dict(brief.get("scope")).get("source") in scope_values
                  and built["page"] == "Blocks"
-                 and built["components"] == [tables[name] for name in PANEL_TABLES],
+                 and built["components"] == [tables[name] for name in PANEL_TABLES + PANEL_MORE_TABLES],
                  f"{label}: the panel shows the scope, evaluation, topic and topic x bullish tables with one row per "
                  "row of the brief, on one tab each",
                  f"tables {rows}, expected {expected_rows}; page {built['page']}; "
                  f"{len(built['components'])} table components matching the tables: "
-                 f"{built['components'] == [tables[name] for name in PANEL_TABLES]}")
+                 f"{built['components'] == [tables[name] for name in PANEL_TABLES + PANEL_MORE_TABLES]}")
     marks = []
     for _, marker, table in PANEL_MARKS:
         shown_marked = any(marker in cell for row in probe["marked"]["tables"][table]["rows"] for cell in row)
@@ -2638,6 +2703,151 @@ def check_panel(report, label, brief_path, brief):
                  "(usage statistics off)",
                  f"connections {probe['network'][:5]}, GRADIO_ANALYTICS_ENABLED {probe['environment']!r}, "
                  f"analytics_enabled {built['analytics_enabled']!r}")
+    report.info(f"panel probe output: {len(completed.stdout):,} characters")
+    check_panel_more(report, label, brief, probe)
+
+
+def panel_more_expected(brief):
+    """For the panel's tables after the first four, computed from the brief: their rows; per checked column, the
+    rows whose value is null in the brief (True) or not (False); and the emotion classes."""
+    why, drawers, emotions = (as_dict(brief.get(name)) for name in ("why", "drawers", "emotions"))
+    daily, new_words, validation = (as_dict(brief.get(name)) for name in ("daily", "new_words", "validation"))
+    shares = [("label share", "label_bullish_share"), ("share at 0.5", "half_bullish_share"),
+              ("calibrated share", "calibrated_bullish_share")]
+    calibrations = [as_dict(why.get("calibration")), as_dict(daily.get("calibration"))]
+    calibrated = [as_dict(why.get("overall"))] + [as_dict(row) for row in why.get("topics") or []]
+    by_drawer = {as_dict(row).get("drawer"): as_dict(row) for row in why.get("drawers") or []}
+    drawer_rows = [(as_dict(item).get("share"), by_drawer.get(as_dict(item).get("drawer"), {}))
+                   for item in drawers.get("drawers") or []]
+    drawer_rows.append((drawers.get("share_in_no_drawer"), as_dict(why.get("no_drawer"))))
+    groups = [as_dict(emotions.get("overall"))] + [as_dict(item) for item in emotions.get("drawers") or []]
+    classes = emotions.get("classes") or []
+    word_layers = as_dict(new_words.get("layers"))
+    order = list(word_layers)
+    words = sorted(((day.get("date"), order.index(layer), position, as_dict(item))
+                    for layer, record in word_layers.items() for day in as_dict(record).get("days") or []
+                    for position, item in enumerate(day.get("new_words") or [])), key=lambda entry: entry[:3])
+    layers = [as_dict(item) for item in as_dict(validation.get("layers")).values()]
+    sources = [as_dict(validation.get("price")), as_dict(validation.get("fear_greed"))]
+    fair = [("fair label", "label_bullish_share"), ("fair at 0.5", "half_bullish_share"),
+            ("fair calibrated", "calibrated_bullish_share"), ("fair at 0.5 − label (pp)", "half_minus_label_pp"),
+            ("fair calibrated − label (pp)", "calibrated_minus_label_pp")]
+    nulls = {
+        "calibration": {column: [item.get(field) is None for item in calibrations]
+                        for column, field in [("true bullish rate", "true_bullish_rate"),
+                                              ("false bullish rate", "false_bullish_rate"), ("rate gap", "rate_gap")]},
+        "calibrated": {**{column: [row.get(field) is None for row in calibrated] for column, field in shares},
+                       **{column: [as_dict(row.get("fair")).get(field) is None for row in calibrated]
+                          for column, field in fair}},
+        "drawers": {"share of topic posts": [share is None for share, _ in drawer_rows],
+                    **{column: [row.get(field) is None for _, row in drawer_rows] for column, field in shares}},
+        "emotions": {label: [as_dict(group.get("shares")).get(label) is None for group in groups] for label in classes},
+        "new_words": {"ratio": [entry[3].get("ratio") is None for entry in words]},
+        "validation": {"Fear and Greed Index (alternative.me): Spearman":
+                       [as_dict(item.get("fear_greed")).get("spearman") is None for item in layers],
+                       "next day's BTC change: Spearman":
+                       [as_dict(item.get("next_day_change")).get("spearman") is None for item in layers]},
+        "sources": {column: [item.get(field) is None for item in sources]
+                    for column, field in [("address", "address"), ("first day", "date_from"), ("last day", "date_to"),
+                                          ("fetched on", "fetched_on"), ("why not obtained", "reason")]},
+    }
+    rows = {"calibration": len(calibrations), "calibrated": len(calibrated), "drawers": len(drawer_rows),
+            "emotions": len(groups), "new_words": len(words), "validation": len(layers), "sources": len(sources)}
+    return rows, nulls, classes
+
+
+def check_panel_more(report, label, brief, probe):
+    """The panel after its first four tables: the new tables with their rows from the brief and "—" for null, the
+    two charts, drawn from the file's numbers only, and a new word added in a copy of the file."""
+    built = probe["brief"]
+    tables = built["tables"]
+    expected_rows, nulls, classes = panel_more_expected(brief)
+    rows = {name: len(as_dict(tables.get(name)).get("rows") or []) for name in PANEL_MORE_TABLES}
+    emotion_columns = as_dict(tables.get("emotions")).get("columns") or []
+    after_four = list(tables)[len(PANEL_TABLES):]
+    report.check(after_four == PANEL_MORE_TABLES and rows == expected_rows
+                 and emotion_columns == PANEL_EMOTION_COLUMNS + classes,
+                 f"{label}: after the first four, the panel shows the tables {', '.join(PANEL_MORE_TABLES)} with one "
+                 "row per row of the brief (the calibrations of chapters 10 and 13; all topic posts and every topic; "
+                 "every drawer and the posts in no drawer; all topic posts and every drawer, with one column per "
+                 "emotion class learned; every new word; every layer; the prices and the index)",
+                 f"tables {after_four}; rows {rows}, expected {expected_rows}; emotion columns "
+                 f"{emotion_columns[len(PANEL_EMOTION_COLUMNS):]}, classes {classes}")
+
+    wrong, checked, null_cells = [], 0, 0
+    for name, columns in nulls.items():
+        table = as_dict(tables.get(name))
+        header = table.get("columns") or []
+        for column, expected in columns.items():
+            if column not in header:
+                wrong.append(f"{name}: no column {column!r}")
+                continue
+            shown = [row[header.index(column)] == PANEL_DASH for row in table.get("rows") or []]
+            checked, null_cells = checked + len(expected), null_cells + expected.count(True)
+            if shown != expected:
+                wrong.append(f"{name} / {column}: {shown.count(True)} dashes where the brief has "
+                             f"{expected.count(True)} nulls (rows differ: {shown != expected})")
+    report.check(not wrong, f"{label}: in the new tables a value that is null in the brief shows as \"{PANEL_DASH}\" "
+                 f"and no other value does ({checked:,} cells checked, {null_cells:,} of them null)",
+                 "; ".join(wrong[:5]))
+
+    images = built.get("images") or []
+    for image in images:
+        report.info(f"panel chart {image.get('label')!r}: {image.get('size')} pixels, {image.get('bytes'):,} bytes, "
+                    f"{image.get('colours')} colours (4097: more than 4096), pixels sha256 {image.get('sha256')}")
+    report.check([image.get("label") for image in images] == PANEL_CHART_LABELS
+                 and all(image.get("sha256") and image.get("bytes", 0) > 0 and image.get("colours", 0) > 1
+                         for image in images),
+                 f"{label}: the panel shows its two charts ({'; '.join(PANEL_CHART_LABELS)}) as pictures that are not "
+                 "empty (a file with more than one colour)",
+                 f"{[(image.get('label'), image.get('size'), image.get('bytes'), image.get('colours')) for image in images]}")
+
+    def hashes(key):
+        return [image.get("sha256") for image in as_dict(probe.get(key)).get("images") or []]
+
+    original = hashes("brief")
+    outcome = {"marked": len(original) == len(PANEL_CHART_LABELS) and hashes("marked") == original}
+    for key, _, changed_chart in PANEL_CHART_CHANGES:
+        changed = hashes(key)
+        outcome[key] = (len(changed) == len(original) == len(PANEL_CHART_LABELS)
+                        and all((before != after) == (position == changed_chart)
+                                for position, (before, after) in enumerate(zip(original, changed))))
+    report.check(all(outcome.values()),
+                 f"{label}: the charts are drawn from the brief file: a daily share changed in a copy changes only the "
+                 "chart by day, a share of the two layers changed in a copy changes only the chart of the two layers, "
+                 "and the copy with the marked texts changes neither", f"{outcome}")
+
+    marker = PANEL_NEW_WORD["word"]
+    marked_rows = as_dict(probe["marked"]["tables"].get("new_words")).get("rows") or []
+    shown = any(marker in cell for row in marked_rows for cell in row)
+    on_page = any(marker in cell for component in probe["marked"]["components"] for row in component["rows"]
+                  for cell in row)
+    before = any(marker in cell for table in tables.values() for row in table["rows"] for cell in row)
+    report.info(f"panel new word {marker}: in the new_words table {shown}, on the page {on_page}, before {before}")
+    report.check(shown and on_page and not before,
+                 f"{label}: a new word added in a copy of the file shows up in the new word table of the panel built "
+                 "from that copy", f"shown {shown}, on the page {on_page}, before {before}")
+
+
+def check_panel_charts_source(report):
+    """The panel cell draws its charts with Matplotlib in memory and writes no file."""
+    panel_cell = cell_defining("build_panel") or ""
+    tree = ast.parse(panel_cell)
+    imports = ({alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+               | {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)})
+    calls = {node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+             for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    functions = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    writing = sorted(calls & {"savefig", "imsave", "write_text", "write_bytes", "to_csv", "to_json", "dump", "open",
+                              "mkdir", "show", "print_png"})
+    pyplot = sorted(name for name in imports if name and "pyplot" in name)
+    report.check(panel_cell != "" and {"matplotlib.figure", "matplotlib.backends.backend_agg"} <= imports
+                 and not pyplot and not writing and {"panel_charts", "Image"} <= calls | functions,
+                 "the panel cell draws its two charts with Matplotlib in memory (a Figure on the Agg canvas, no pyplot) "
+                 "and writes no file (no savefig, imsave, write_text, write_bytes, to_csv, to_json, dump, open, mkdir, "
+                 "show or print_png); the pictures go to Gradio as arrays of pixels",
+                 f"imports {sorted(name for name in imports if name and name.startswith('matplotlib'))}; pyplot {pyplot}; "
+                 f"writing calls {writing}")
 
 
 def check_panel_output(report, label, executed):
@@ -5989,6 +6199,7 @@ def main():
     rules = load_format_rules(report)
     built_in_drawers = check_drawer_words(report)
     check_panel_source(report, defaults, others)
+    check_panel_charts_source(report)
     check_prelabel_script(report)
     check_prelabel_reading(report)
     check_prelabel_fake_model(report)
