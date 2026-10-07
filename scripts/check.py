@@ -2743,7 +2743,7 @@ def panel_more_expected(brief):
                     **{column: [row.get(field) is None for _, row in drawer_rows] for column, field in shares}},
         "emotions": {label: [as_dict(group.get("shares")).get(label) is None for group in groups] for label in classes},
         "new_words": {"ratio": [entry[3].get("ratio") is None for entry in words]},
-        "validation": {"Fear and Greed Index (alternative.me): Spearman":
+        "validation": {"Fear and Greed Index: Spearman":
                        [as_dict(item.get("fear_greed")).get("spearman") is None for item in layers],
                        "next day's BTC change: Spearman":
                        [as_dict(item.get("next_day_change")).get("spearman") is None for item in layers]},

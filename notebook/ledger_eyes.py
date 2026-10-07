@@ -7848,10 +7848,10 @@ PANEL_MORE_TABS = [  # after the first four tabs: (tab title, note above, the ta
     ("Two layers", "Chapter 14: the calibrated bullish share of the media and the retail layer on the days both cover; "
                    "grey bands mark the days on which they lean opposite ways, dashed lines the bars of a lean. A day on "
                    "which a layer has no share takes no part.", ["layers_chart"]),
-    ("Market", "Chapter 15: every layer's daily calibrated share against the Fear and Greed Index of alternative.me and "
-               "against the next day's change of the BTC close, as Spearman rank correlations with the days that took "
-               "part. They describe the past only: no test and no forecast. Below, where the prices and the index came "
-               "from.", ["validation", "sources"]),
+    ("Market", "Chapter 15: every layer's daily calibrated share against the Fear and Greed Index (whose source is "
+               "named next to it) and against the next day's change of the BTC close, as Spearman rank correlations "
+               "with the days that took part. They describe the past only: no test and no forecast. Below, where the "
+               "prices and the index came from.", ["validation", "sources"]),
 ]
 PANEL_TABLE_TITLES = {  # heading above a table on a tab that holds more than one item
     "calibration": "The recognition rates used", "calibrated": "Bullish shares overall and per topic",
@@ -8005,8 +8005,9 @@ def panel_more_tables(content):
     validation_rows = [{
         "layer": layer, "first day": item["date_from"], "last day": item["date_to"],
         "days with a share": panel_count(item["n_days_with_share"]),
-        "Fear and Greed Index (alternative.me): Spearman": panel_rho(item["fear_greed"]["spearman"]),
+        "Fear and Greed Index: Spearman": panel_rho(item["fear_greed"]["spearman"]),
         "Fear and Greed Index: days": panel_count(item["fear_greed"]["n_days"]),
+        "Fear and Greed Index: credit": validation["fear_greed"]["attribution"],  # the brief names its source
         "next day's BTC change: Spearman": panel_rho(item["next_day_change"]["spearman"]),
         "next day's BTC change: days": panel_count(item["next_day_change"]["n_days"]),
     } for layer, item in validation["layers"].items()]
