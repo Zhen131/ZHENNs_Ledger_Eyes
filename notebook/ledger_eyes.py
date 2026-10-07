@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 The brief: format, check, save and panel.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 Dated data · 13 The brief: format, check, save and panel.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 简报：格式、校验、保存和面板。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 带时间的数据 · 13 简报：格式、校验、保存和面板。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -187,18 +187,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 12 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 12 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 13 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 12 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 12 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 13 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.3",  # the format of chapter 12's rules (docs/brief-format.md in the repository)
+    "format_version": "1.3",  # the format of chapter 13's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -3692,7 +3692,170 @@ print(f"Review table: {EMOTION_REVIEW_SOURCE or '(none)'}; rows reviewed by a pe
 pd.DataFrame.from_dict(human_review["by_prelabel"], orient="index").rename_axis("prelabel")
 
 # %% [markdown]
-# ## 12. The brief: format, check, save and panel
+# ## 12. Dated data: what was written on which day?
+#
+# Every chapter so far used StockTwits posts, which carry no date, so every result describes the whole dataset at once. This chapter reads two public datasets **with dates**, so that results can later be given day by day:
+#
+# | Dataset | What it holds | Layer |
+# | --- | --- | --- |
+# | `ExponentialScience/DLT-Tweets` | about 22 million English tweets about blockchains and crypto, from 2013 to mid-2023 (almost all from 2021 on); no tweet ids and no authors | `retail`: what ordinary people write |
+# | `ExponentialScience/DLT-Sentiment-News` | about 23,000 crypto news headlines with short summaries, collected on CryptoPanic from January 2021 to May 2025, with the votes of CryptoPanic's readers | `media`: what the news says |
+#
+# A third layer, `kol` (accounts with a large audience), is an allowed value of the table, but it has no data yet: the tweets come without their authors.
+#
+# **One table for all dated posts.** Both datasets are turned into the same **dated post table**, one row per post, whose shape is fixed in the next cell and described column by column in the repository's `docs/dated-posts.md`. Any later source of dated posts is turned into the same table. The unit of every daily result is the **UTC day**: the date of the post's time in Coordinated Universal Time.
+#
+# **This chapter only reads and counts.** It keeps posts by date, language and Bitcoin, caps the posts per layer and day, and shows how many posts each layer has on each day and which days it covers. It cleans nothing and scores nothing. The tweet dataset also carries sentiment columns made by someone else's model; they are not labels given by people, and they are not read.
+#
+# **The two layers cover different periods.** The tweets end in mid-2023 and the news run until May 2025, so the days after the last tweet have news only. Each layer reports its own first and last day.
+#
+# **License and citation.** Both datasets are published under the Creative Commons Attribution-NonCommercial 4.0 license (CC BY-NC 4.0): they may be used for non-commercial purposes, with credit to their authors. The authors ask to cite Hernandez Cruz et al., *DLT-Corpus: A Large-Scale Text Collection for the Distributed Ledger Technology Domain*, 2026, <https://arxiv.org/abs/2602.22045>. This license covers only the data of the dated chapters; the StockTwits data of the earlier chapters keeps its MIT license.
+#
+# ***
+#
+# ## 12. 带时间的数据：哪一天写了什么？
+#
+# 前面各章用的都是 StockTwits 的帖子，它们不带日期，所以每个结果说的都是整份数据。这一章读两份**带日期**的公开数据，好让以后的结果能按天给出：
+#
+# | 数据 | 里面有什么 | 层 |
+# | --- | --- | --- |
+# | `ExponentialScience/DLT-Tweets` | 约 2,200 万条讲区块链和币圈的英文推文，从 2013 年到 2023 年年中（几乎都在 2021 年以后）；没有推文编号，也没有作者 | `retail`（散户层）：普通人写的 |
+# | `ExponentialScience/DLT-Sentiment-News` | 约 23,000 条币圈新闻的标题和简短摘要，2021 年 1 月到 2025 年 5 月收集自 CryptoPanic，带着 CryptoPanic 读者投的票 | `media`（媒体层）：新闻说的 |
+#
+# 第三层 `kol`（粉丝多的大号）是表里允许的取值，但现在还没有数据：推文不带作者。
+#
+# **所有带时间的帖子都整成一张表。** 两份数据都整成同一张「带时间的帖子表」，一行一条帖子；它的形状在下一格里写死，仓库里的 `docs/dated-posts.md` 逐列写了说明。以后再有带时间的数据，也整成这张表。所有按天的结果都以 **UTC 日**为单位：帖子时间换成协调世界时以后的那个日期。
+#
+# **这一章只读数据、只数条数。** 它按日期、语言、提没提到比特币筛帖子，每层每天封顶，然后给出每层每天有几条、覆盖哪段日子。它不清洗，也不打分。推文数据还带着几列别人用模型打的情绪，那不是人标的标签，这里不读。
+#
+# **两层覆盖的日子不一样长。** 推文到 2023 年年中就没有了，新闻一直到 2025 年 5 月，所以最后一条推文之后的日子只有新闻。每一层各报自己的第一天和最后一天。
+#
+# **许可证与引用。** 两份数据都用知识共享「署名－非商业性使用 4.0」许可证（CC BY-NC 4.0）发布：非商业用途可以用，要注明作者。作者要求引用 Hernandez Cruz 等人的论文 *DLT-Corpus: A Large-Scale Text Collection for the Distributed Ledger Technology Domain*（2026），<https://arxiv.org/abs/2602.22045>。这个许可证只管带时间的这几章用的数据；前面各章的 StockTwits 数据仍是 MIT 许可证。
+
+# %% [markdown]
+# ### The shape of the dated post table
+#
+# One row per post. The columns, in this order:
+#
+# | Column | Type | May be empty | Meaning |
+# | --- | --- | --- | --- |
+# | `post_id` | text | no | The post's id, unique in the table: `<dataset>:<fingerprint>` (see the ids below). |
+# | `date` | date | no | The UTC day of the post, as text `YYYY-MM-DD`. Every daily result is counted by this column. |
+# | `time` | UTC time | yes | The post's time in UTC, to the second; empty when the data gives only a date. |
+# | `text` | text | no | The text, with account names and links replaced (see below); may be an empty string. |
+# | `layer` | text | no | `media`, `kol` or `retail`, nothing else. |
+# | `source` | text | no | Where the post comes from: the news site's domain for news, `twitter` for tweets. |
+# | `language` | text | yes | The language the data gives for the post; empty when the data gives none. |
+# | `mentions_btc` | true/false | no | The text mentions `bitcoin` or `btc` as a whole word (the rule of chapter 1). |
+# | `label` | whole number | yes | The layer's own label in this project's coding (0 bearish, 1 neutral, 2 bullish); empty for tweets, which have none. |
+# | `votes_bullish`, `votes_bearish` | whole number | yes | The readers' bullish and bearish votes of a news item; empty for tweets. |
+#
+# `DATED_POST_SHAPE` writes this down for the program, and `dated_table_problems(table)` lists every way in which a table does not fit it: a missing or extra column, an empty value where none is allowed, a value of the wrong type, a `layer` other than the three, a repeated `post_id`, a `date` that is not a real day written `YYYY-MM-DD`, or a `date` that is not the UTC day of the row's `time`. Each problem names its column. The table is checked with it before anything else uses it.
+#
+# ***
+#
+# ### 带时间的帖子表的形状
+#
+# 一行一条帖子。各列依次是：
+#
+# | 列 | 类型 | 能不能空 | 意思 |
+# | --- | --- | --- | --- |
+# | `post_id` | 文字 | 不能 | 帖子编号，全表不重复：`<数据简称>:<指纹>`（编号怎么来见下文）。 |
+# | `date` | 日期 | 不能 | 帖子的 UTC 日，写成文字 `YYYY-MM-DD`。所有按天的结果都按这一列数。 |
+# | `time` | UTC 时间 | 能 | 帖子的 UTC 时间，到秒；数据只给了日期时空着。 |
+# | `text` | 文字 | 不能 | 正文，账号名和链接已经替换（见下文）；可以是空串。 |
+# | `layer` | 文字 | 不能 | `media`、`kol` 或 `retail`，不许别的。 |
+# | `source` | 文字 | 不能 | 帖子从哪来：新闻写新闻网站的域名，推文写 `twitter`。 |
+# | `language` | 文字 | 能 | 数据给这条帖子标的语言；数据没给时空着。 |
+# | `mentions_btc` | 真假 | 不能 | 正文里有没有整词 `bitcoin` 或 `btc`（第 1 章的规则）。 |
+# | `label` | 整数 | 能 | 这一层自带的标签，用本项目的编码（0 看空、1 中性、2 看多）；推文没有标签，空着。 |
+# | `votes_bullish`、`votes_bearish` | 整数 | 能 | 读者给一条新闻投的看多票、看空票；推文空着。 |
+#
+# `DATED_POST_SHAPE` 把这个形状写给程序看，`dated_table_problems(table)` 列出一张表不合形状的每一处：缺列或多列、不许空的地方空了、值的类型不对、`layer` 不是那三个词、`post_id` 重复、`date` 不是写成 `YYYY-MM-DD` 的真实日期、`date` 不是这一行 `time` 的 UTC 日。每一处都说出是哪一列。表在给任何后面的步骤用之前，先拿它核一遍。
+
+# %%
+# The shape of the dated post table, and a check that lists every way in which a table does not fit it.
+import re  # standard library: regular expressions
+from datetime import date as calendar_date  # standard library: tells whether a date exists
+
+DATED_SHAPE_VERSION = "dated-posts-v1"  # the version of the shape below (also part of the tweet cache's fingerprint)
+DATED_LAYERS = ["media", "kol", "retail"]  # the only values allowed in the layer column
+DATED_POST_SHAPE = [  # (column, type, may be empty), in table order; docs/dated-posts.md describes the same shape
+    ("post_id", "string", False),
+    ("date", "date", False),
+    ("time", "utc_time", True),
+    ("text", "string", False),
+    ("layer", "string", False),
+    ("source", "string", False),
+    ("language", "string", True),
+    ("mentions_btc", "boolean", False),
+    ("label", "integer", True),
+    ("votes_bullish", "integer", True),
+    ("votes_bearish", "integer", True),
+]
+DATED_POST_COLUMNS = [column for column, _, _ in DATED_POST_SHAPE]
+DAY_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # a UTC day written YYYY-MM-DD
+
+
+def is_day_text(value):
+    """True when value is text of the form YYYY-MM-DD that names a real day."""
+    if not isinstance(value, str) or not DAY_TEXT.fullmatch(value):
+        return False
+    try:
+        calendar_date.fromisoformat(value)
+    except ValueError:  # for example 2021-02-30
+        return False
+    return True
+
+
+def dated_table_problems(table):
+    """Every way in which table does not fit DATED_POST_SHAPE, one line each starting with the column; [] when it fits."""
+    problems = [f"{column}: column missing" for column in DATED_POST_COLUMNS if column not in table.columns]
+    problems += [f"{column}: column not in the shape" for column in table.columns if column not in DATED_POST_COLUMNS]
+    if not problems and list(table.columns) != DATED_POST_COLUMNS:
+        problems.append(f"columns: not in the order of the shape ({list(table.columns)})")
+    for column, kind, may_be_empty in DATED_POST_SHAPE:
+        if column not in table.columns:
+            continue
+        values = table[column]
+        empty = values.isna()
+        if not may_be_empty and empty.any():
+            problems.append(f"{column}: {int(empty.sum())} empty value(s) in a column that may not be empty")
+        present = values[~empty]
+        if kind in ("string", "date"):
+            not_text = int((~present.map(lambda value: isinstance(value, str))).sum())
+            if not_text:
+                problems.append(f"{column}: {not_text} value(s) that are not text")
+            elif kind == "date" and not present.map(is_day_text).all():
+                problems.append(f"{column}: {int((~present.map(is_day_text)).sum())} value(s) that are not a day "
+                                "written YYYY-MM-DD")
+        elif kind == "utc_time":
+            if not (isinstance(values.dtype, pd.DatetimeTZDtype) and str(values.dtype.tz) == "UTC"):
+                problems.append(f"{column}: type {values.dtype}, not a time with the UTC time zone")
+        elif kind == "boolean" and not pd.api.types.is_bool_dtype(values.dtype):
+            problems.append(f"{column}: type {values.dtype}, not true/false")
+        elif kind == "integer" and not pd.api.types.is_integer_dtype(values.dtype):
+            problems.append(f"{column}: type {values.dtype}, not whole numbers")
+    if "layer" in table.columns:
+        others = sorted({str(value) for value in table["layer"].dropna() if value not in DATED_LAYERS})
+        if others:
+            problems.append(f"layer: values other than {', '.join(DATED_LAYERS)}: {others[:5]}")
+    if "post_id" in table.columns and table["post_id"].duplicated().any():
+        problems.append(f"post_id: {int(table['post_id'].duplicated().sum())} id(s) appear more than once")
+    if "label" in table.columns and pd.api.types.is_integer_dtype(table["label"].dtype):
+        if not table["label"].dropna().isin([0, 1, 2]).all():
+            problems.append("label: values other than 0, 1 and 2")
+    for column in ["votes_bullish", "votes_bearish"]:
+        if column in table.columns and pd.api.types.is_integer_dtype(table[column].dtype) and (table[column].dropna() < 0).any():
+            problems.append(f"{column}: negative values")
+    if {"date", "time"} <= set(table.columns) and isinstance(table["time"].dtype, pd.DatetimeTZDtype):
+        timed = table["time"].notna()
+        if timed.any() and (table.loc[timed, "time"].dt.strftime("%Y-%m-%d") != table.loc[timed, "date"]).any():
+            problems.append("date: some rows' date is not the UTC day of their time")
+    return problems
+
+# %% [markdown]
+# ## 13. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
 #
@@ -3705,7 +3868,7 @@ pd.DataFrame.from_dict(human_review["by_prelabel"], orient="index").rename_axis(
 #
 # ***
 #
-# ## 12. 简报：格式、校验、保存和面板
+# ## 13. 简报：格式、校验、保存和面板
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，分四步：
 #
