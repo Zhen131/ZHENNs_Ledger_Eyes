@@ -51,6 +51,11 @@ BEARISH_THRESHOLD = 0.3  # default: 0.3; or any number from 0 to 1, not above BU
 MIN_TOPIC_POSTS = 200  # default: 200; or any positive integer (chapter 10 marks a topic with fewer posts than this as too small)
 MIN_RATE_GAP = 0.2  # default: 0.2; or any number from 0 to 1 (chapter 10 calibrates the bullish share only when the bullish recall plus the bearish recall of chapter 8, minus 1, is at least this and above 0)
 MIN_BULLISH_BEARISH_POSTS = 100  # default: 100; or any positive integer (chapter 10 marks a row with fewer bearish + bullish posts by label than this; 1 marks none)
+EMOTION_LABELS_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/labels/emotions-prelabel-v1.csv"  # default: the repository's emotion pre-label file on GitHub; or a local path or another address of a file with the same columns, such as "labels/emotions-prelabel-v1.csv" (chapter 11)
+EMOTION_NAMES = ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence"]  # default: the eight emotions in this order; or some of them, in any order, each at most once (chapter 11)
+EMOTION_KEEP_NONE = True  # default: True (chapter 11 also learns "none": nine classes); two-state, other: False (posts labelled none are left out: eight classes)
+EMOTION_MIN_CLASS_POSTS = 10  # default: 10; or any integer of at least 10 (chapter 11 leaves out an emotion with fewer posts)
+EMOTION_REVIEW_SOURCE = ""  # default: "" (no review table is read); or the path or address of a review table filled in by a person (chapter 11)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -163,6 +168,20 @@ if not isinstance(DRAWER_WORDS_FILE, str):
     raise ValueError(f'DRAWER_WORDS_FILE must be "" or the path of a JSON file, got {DRAWER_WORDS_FILE!r}')
 if isinstance(N_OTHER_GROUPS, bool) or not isinstance(N_OTHER_GROUPS, int) or N_OTHER_GROUPS < 1:
     raise ValueError(f"N_OTHER_GROUPS must be a positive integer, got {N_OTHER_GROUPS!r}")
+EMOTION_CHOICES = ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence"]  # chapter 11
+if not isinstance(EMOTION_LABELS_SOURCE, str) or not EMOTION_LABELS_SOURCE.strip():
+    raise ValueError(f"EMOTION_LABELS_SOURCE must be the path or address of a pre-label file, got {EMOTION_LABELS_SOURCE!r}")
+if (not isinstance(EMOTION_NAMES, (list, tuple)) or not EMOTION_NAMES
+        or not all(isinstance(name, str) and name in EMOTION_CHOICES for name in EMOTION_NAMES)
+        or len(set(EMOTION_NAMES)) != len(EMOTION_NAMES)):
+    raise ValueError(f"EMOTION_NAMES must list at least one of {EMOTION_CHOICES}, each at most once, got {EMOTION_NAMES!r}")
+if not isinstance(EMOTION_KEEP_NONE, bool):
+    raise ValueError(f"EMOTION_KEEP_NONE must be True or False, got {EMOTION_KEEP_NONE!r}")
+if isinstance(EMOTION_MIN_CLASS_POSTS, bool) or not isinstance(EMOTION_MIN_CLASS_POSTS, int) or EMOTION_MIN_CLASS_POSTS < 10:
+    raise ValueError("EMOTION_MIN_CLASS_POSTS must be an integer of at least 10 (with fewer posts an emotion cannot be "
+                     f"split into training, validation and test posts), got {EMOTION_MIN_CLASS_POSTS!r}")
+if not isinstance(EMOTION_REVIEW_SOURCE, str):
+    raise ValueError(f'EMOTION_REVIEW_SOURCE must be "" or the path or address of a review table, got {EMOTION_REVIEW_SOURCE!r}')
 print("Switches look fine.")
 
 # %% [markdown]
@@ -2954,6 +2973,165 @@ drawer_table = pd.DataFrame(
 print(f"Drawers x bullish with word list {DRAWER_WORDS_VERSION}; calibration status: {calibration_rates['status']}; "
       f"too few below {MIN_TOPIC_POSTS} posts or {MIN_BULLISH_BEARISH_POSTS} bearish + bullish posts")
 drawer_table
+
+# %% [markdown]
+# ## 11. Emotions: which of eight feelings?
+#
+# Chapters 4 to 8 asked *bullish or bearish?* This chapter asks *how does the writer feel?* It uses eight emotions that are common in crypto talk, plus `none`:
+#
+# | Label | Meaning |
+# | --- | --- |
+# | `panic` | afraid of losing money, rushing to sell, shouting that the price will crash |
+# | `greed` | wanting to get rich fast, fear of missing out, going all in, gambling with leverage |
+# | `excitement` | thrilled by a price rise or good news, cheering the price on |
+# | `anger` | angry at someone or something, such as an exchange, regulators, whales or other posters |
+# | `mockery` | sarcasm or ridicule, laughing at others for losing money or for believing the wrong thing |
+# | `despair` | hopeless after a loss, giving up, feeling that it is all over |
+# | `wait_and_see` | undecided or cautious, waiting for confirmation before acting |
+# | `confidence` | calm certainty, holding for the long term, sure of one's own judgement |
+# | `none` | no emotion: news, a neutral fact, a plain question, or only a link |
+#
+# **The labels are silver labels.** No public dataset labels crypto posts with these emotions. So a language model with 7 billion parameters (`qwen2.5:7b`), running on the project's own computer, gave a few thousand StockTwits posts one label each; it saw only the text of each post, never the dataset's bullish or bearish label. Labels given by a model and not by a person are called **silver labels**: they are cheap to get, but nobody has checked yet how often they are right. The repository keeps them in a small file with post ids, labels and a short fingerprint of each text, and no text at all; this chapter reads that file from `EMOTION_LABELS_SOURCE`.
+#
+# **What the scores mean.** The networks of this chapter learn from silver labels and are tested on silver labels of the same kind. Their scores therefore measure **how well they learned to give the silver labels**, not how well they recognise emotions. Where the silver labels are wrong in a systematic way, a network that copies the mistakes still scores well, so a high score does not show that emotions are recognised correctly. How often the silver labels themselves are right can only be measured after a person has labelled some of the posts; the last section of this chapter is ready for such a review table, but none has been filled in yet.
+#
+# **The steps** are those of chapters 3 to 8, with the emotions in place of bullish and bearish: read the labels and make sure they belong to this data source; leave out what cannot be learned; clean the texts with `clean_texts`; split 80 / 10 / 10; build word-count and TF-IDF vectors learned on the training part only; train a one-layer network on each kind of vector; choose one with the validation part; evaluate it on the test part against the same two baselines as in chapter 8. Then the chosen network gives every topic post of chapter 9 an emotion, and the chapter shows how the emotions are spread over all topic posts and over the drawers, with example posts.
+#
+# ***
+#
+# ## 11. 情绪：八种感受里的哪一种？
+#
+# 第 4～8 章问的是「看多还是看空」，这一章问「写的人是什么情绪」。用八种币圈里常见的情绪，外加 `none`（无情绪）：
+#
+# | 标签 | 意思 |
+# | --- | --- |
+# | `panic` | 恐慌：怕亏钱、急着卖、喊要崩 |
+# | `greed` | 贪婪：想快速暴富、怕踏空、梭哈、上杠杆搏一把 |
+# | `excitement` | 兴奋：为上涨或好消息激动、喊冲 |
+# | `anger` | 愤怒：对某人某事生气，例如交易所、监管、巨鲸、别的发帖人 |
+# | `mockery` | 嘲讽：挖苦、讽刺、笑别人亏钱或信错 |
+# | `despair` | 绝望：亏了之后没有希望、放弃、觉得「完了」 |
+# | `wait_and_see` | 观望：拿不定主意、谨慎、等确认了再动 |
+# | `confidence` | 自信：平静地确信、长期持有、对自己的判断有把握 |
+# | `none` | 无情绪：新闻、中性的事实、单纯的提问，或者只有一个链接 |
+#
+# **这些标签是银标签。** 没有现成的公开数据集给币圈帖子标这些情绪。所以由一个 70 亿参数的语言模型（`qwen2.5:7b`），在项目自己的电脑上，给几千条 StockTwits 帖子各贴了一个标签；它只看帖子的原文，从没看到数据集自带的看多看空标签。由模型、而不是由人贴的标签，叫**银标签**（silver labels）：来得便宜，但还没有人核对过它们有多少是对的。仓库把它们存成一个小文件，里面只有帖子编号、标签和每条原文的一个短「指纹」，没有一个字的原文；本章从 `EMOTION_LABELS_SOURCE` 读这个文件。
+#
+# **分数说明什么。** 本章的网络从银标签学，又拿同一种银标签来考。所以分数量的是**它们学没学会贴这些银标签**，不是它们认情绪认得准不准。银标签如果在某个方向上系统地错了，照着错的网络照样得高分，所以分数高并不说明情绪认得准。银标签本身有多准，要等人亲手标过一部分帖子之后才能量出来；本章最后一节已经为这样一张抽查表准备好了接口，但现在还没有人填过。
+#
+# **步骤**和第 3～8 章一样，只是把看多看空换成情绪：读标签，确认它们属于这份数据来源；去掉学不了的；用 `clean_texts` 清洗；按 80／10／10 切分；只在训练那一份上学词表，做词数统计和 TF-IDF 两种向量；每种向量训一个一层网络；用验证那一份选一个；在测试那一份上评估，对照第 8 章同样的两条对照线。然后用选中的网络给第 9 章话题表里的每条帖子判一个情绪，看情绪在全部话题帖子里、在各个抽屉里怎么分布，并附上例句。
+
+# %% [markdown]
+# ### Reading the pre-labels
+#
+# A pre-label file has five columns: `post_id` (the id of chapter 1), `emotion` (one of the nine labels, or `unparsed` when the labelling model gave no usable answer), `model`, `prompt_version` and `text_hash`, the first 8 hexadecimal digits of the SHA-256 of the post's text. The fingerprint matters because ids come from positions in a file: the bundled sample and the full dataset number their posts separately, so `stocktwits_1:2` is a different post in each, and a label file made for one would silently attach its labels to the wrong posts of the other.
+#
+# So the next two cells read the file and then check every row: the five columns in this order; every id once; every emotion one of the nine labels or `unparsed`; every id a post of `df_all`; every fingerprint that of the post's text. If anything does not fit, the notebook stops here and says that the label file and the data source are not the same set. If the file cannot be read at all, the notebook stops and says where it looked.
+#
+# **The default address** is the label file in the project's repository on GitHub. It can be read only after that file has been pushed there, and only with a network connection. Otherwise set `EMOTION_LABELS_SOURCE` to the copy in the repository, `labels/emotions-prelabel-v1.csv` (on Colab, upload the file first and give its path). These labels belong to the full dataset; the bundled sample has its own, `samples/emotions-prelabel-sample.csv` (its 600 posts), which the repository's quick check uses.
+#
+# ***
+#
+# ### 读预标
+#
+# 预标文件有五列：`post_id`（第 1 章的编号）；`emotion`（九个标签之一，贴标签的模型没给出能用的回答时是 `unparsed`）；`model`；`prompt_version`；`text_hash`，即帖子原文 SHA-256 的前 8 位十六进制数字。要这个指纹，是因为编号来自帖子在文件里的位置：仓库带的样本和完整数据集各编各的号，`stocktwits_1:2` 在两边指的是不同的帖子；给一边做的标签文件拿去配另一边，标签就会悄无声息地贴到别的帖子上。
+#
+# 所以下面两格先读文件，再逐行核对：五列，顺序一致；每个编号只出现一次；每个情绪都是九个标签之一或 `unparsed`；每个编号都是 `df_all` 里的帖子；每个指纹都等于那条帖子原文的指纹。有任何一处对不上，笔记本就在这里停下，说明标签文件和数据来源不是同一套。文件根本读不到时，笔记本也停下，并说明它去哪里读的。
+#
+# **默认地址**是项目在 GitHub 上的仓库里的那份标签文件。要等这份文件推送到那里之后才读得到，而且要联网。否则把 `EMOTION_LABELS_SOURCE` 改成仓库里的那份 `labels/emotions-prelabel-v1.csv`（在 Colab 上先把文件传上去，再填它的路径）。这份标签属于完整数据集；仓库带的样本有自己的一份 `samples/emotions-prelabel-sample.csv`（它那 600 条帖子），仓库的快速检查用的就是它。
+
+# %%
+# Read a small CSV table (local path or web address), and check pre-labels against the posts of a data source.
+import hashlib  # standard library: text fingerprints
+
+EMOTION_FILE_COLUMNS = ["post_id", "emotion", "model", "prompt_version", "text_hash"]  # a pre-label file, in order
+EMOTION_FILE_LABELS = ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence",
+                       "none"]  # the nine labels of the pre-label files, in their order
+EMOTION_UNPARSED = "unparsed"  # the labelling model gave no usable answer; not an emotion
+EMOTION_LOCAL_FILE = "labels/emotions-prelabel-v1.csv"  # the repository's copy of the file at the default address
+EMOTION_LABELS_HINT = ("The default address is the pre-label file in this project's repository on GitHub; it can be "
+                       "read only after that file has been pushed there, and only with a network connection. To use "
+                       f"the copy in the repository instead, set EMOTION_LABELS_SOURCE = {EMOTION_LOCAL_FILE!r} (on "
+                       "Colab, upload that file first and give its path).")
+
+
+def read_emotion_table(source, switch, hint):
+    """Read a CSV table from a local path or a web address, every cell as text (an empty cell as "").
+
+    Stops with a message naming the switch, the path or address and what to do when the table cannot be read.
+    """
+    try:
+        return pd.read_csv(source, dtype=str, keep_default_na=False)
+    except (OSError, pd.errors.EmptyDataError) as error:  # no such file, address not found, no network, empty file
+        raise FileNotFoundError(f"{switch} could not be read from {source!r} ({type(error).__name__}: {error}). "
+                                f"{hint}") from None
+
+
+def text_fingerprint(text):
+    """The text_hash of the pre-label files: the first 8 hexadecimal digits of the SHA-256 of the text (UTF-8)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def check_emotion_labels(labels, posts):
+    """(rows that fit, problems) of a pre-label table against the posts (post_id, text) of a data source.
+
+    A row fits when its id is a post and its fingerprint is that of the post's text; problems has one line for every
+    way in which the table does not fit (wrong columns, repeated ids, unknown emotions, unknown ids, other texts).
+    """
+    if list(labels.columns) != EMOTION_FILE_COLUMNS:
+        return 0, [f"the columns are {list(labels.columns)}, not {EMOTION_FILE_COLUMNS}"]
+    problems = []
+    repeated = labels.loc[labels["post_id"].duplicated(), "post_id"]
+    if len(repeated):
+        problems.append(f"{repeated.nunique():,} ids appear more than once, for example {repeated.iloc[0]!r}")
+    unknown = labels.loc[~labels["emotion"].isin(EMOTION_FILE_LABELS + [EMOTION_UNPARSED]), "emotion"]
+    if len(unknown):
+        problems.append(f"{len(unknown):,} rows have an emotion that is neither one of the nine labels nor "
+                        f"{EMOTION_UNPARSED!r}, for example {unknown.iloc[0]!r}")
+    texts = labels["post_id"].map(posts.set_index("post_id")["text"])  # missing where the id is not a post
+    found = texts.notna()
+    if not found.all():
+        problems.append(f"{int((~found).sum()):,} ids are not posts of this data source, for example "
+                        f"{labels.loc[~found, 'post_id'].iloc[0]!r}")
+    same_text = found & (labels["text_hash"] == texts.where(found, "").map(text_fingerprint))
+    differing = labels.loc[found & ~same_text, "post_id"]
+    if len(differing):
+        problems.append(f"{len(differing):,} rows carry a text fingerprint that is not that of their post's text, "
+                        f"for example {differing.iloc[0]!r}")
+    return int(same_text.sum()), problems
+
+# %%
+# Read the pre-labels from EMOTION_LABELS_SOURCE and stop unless every row fits a post of this data source.
+EMOTION_LABEL_KIND = ("silver labels: given by a language model (7 billion parameters) on the project's own computer, "
+                      "not by a person; the evaluation shows how well the networks learned these labels, not how "
+                      "well they recognise emotions")
+
+emotion_labels = read_emotion_table(EMOTION_LABELS_SOURCE, "EMOTION_LABELS_SOURCE", EMOTION_LABELS_HINT)
+n_matched_labels, label_problems = check_emotion_labels(emotion_labels, df_all)
+if label_problems:
+    listed = "\n".join(f"  - {problem}" for problem in label_problems)
+    raise ValueError(f"The pre-label file {EMOTION_LABELS_SOURCE!r} and the data source {DATA_SOURCE!r} are not the "
+                     f"same set:\n{listed}\nThe bundled sample and the full dataset number their posts separately: "
+                     "use samples/emotions-prelabel-sample.csv with the sample and labels/emotions-prelabel-v1.csv "
+                     "with the full dataset.")
+file_label_counts = emotion_labels["emotion"].value_counts().reindex(EMOTION_FILE_LABELS + [EMOTION_UNPARSED],
+                                                                     fill_value=0)
+brief["emotions"] = {
+    "label_kind": EMOTION_LABEL_KIND,
+    "labels_source": EMOTION_LABELS_SOURCE,
+    "labels_file": {
+        "n_rows": int(len(emotion_labels)),
+        "n_matched": n_matched_labels,  # every row, otherwise the cell has stopped
+        "label_counts": {label: int(count) for label, count in file_label_counts.items()},
+        "models": sorted(set(emotion_labels["model"])),
+        "prompt_versions": sorted(set(emotion_labels["prompt_version"])),
+    },
+}
+print(f"Read {len(emotion_labels):,} pre-labels from {EMOTION_LABELS_SOURCE}; all {n_matched_labels:,} fit a post of "
+      f"the data source (id and text fingerprint). Models: {brief['emotions']['labels_file']['models']}; prompt "
+      f"versions: {brief['emotions']['labels_file']['prompt_versions']}")
+pd.DataFrame({"posts": file_label_counts,
+              "share": file_label_counts / len(emotion_labels) if len(emotion_labels) else None}).rename_axis("label")
 
 # %% [markdown]
 # ## 11. The brief: format, check, save and panel
