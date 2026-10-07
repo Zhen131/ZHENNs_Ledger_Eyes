@@ -1793,17 +1793,28 @@ TOPIC_VOCAB_SIZE = 1000  # most frequent words the topic vectorizer keeps (as in
 TOPIC_BLOCKED_WORDS = sorted(set(NEGATION_WORDS) | {"face"}
                              | ({"bitcoin", "btc"} if TOPIC_SCOPE == "btc" else set()))  # left out of topic vectors
 
-topic_vectorizer = TfidfVectorizer(max_features=TOPIC_VOCAB_SIZE, stop_words=TOPIC_BLOCKED_WORDS)
-try:
-    X_topics = topic_vectorizer.fit_transform(topic_posts["clean_text"])  # learns on every topic post
-    topic_words = topic_vectorizer.get_feature_names_out()  # the word of each column
-except ValueError as error:  # a tiny table can be left without a single word; then every vector is empty
-    if "empty vocabulary" not in str(error):
-        raise
-    topic_vectorizer = None
-    X_topics = csr_matrix((len(topic_posts), 0))
-    topic_words = np.array([], dtype=object)
-X_topics.sort_indices()
+
+def topic_vectors(cleaned_texts):
+    """TF-IDF vectors of cleaned texts with this chapter's settings: (vectorizer, sparse matrix, words of the columns).
+
+    The vectorizer learns on the texts it is given. Texts without a single word of vocabulary give a matrix without
+    columns and no vectorizer (None).
+    """
+    vectorizer = TfidfVectorizer(max_features=TOPIC_VOCAB_SIZE, stop_words=TOPIC_BLOCKED_WORDS)
+    try:
+        matrix = vectorizer.fit_transform(cleaned_texts)  # learns on every text it is given
+        words = vectorizer.get_feature_names_out()  # the word of each column
+    except ValueError as error:  # a tiny table can be left without a single word; then every vector is empty
+        if "empty vocabulary" not in str(error):
+            raise
+        vectorizer = None
+        matrix = csr_matrix((len(cleaned_texts), 0))
+        words = np.array([], dtype=object)
+    matrix.sort_indices()
+    return vectorizer, matrix, words
+
+
+topic_vectorizer, X_topics, topic_words = topic_vectors(topic_posts["clean_text"])  # learns on every topic post
 posts_without_words = X_topics.getnnz(axis=1) == 0  # all-zero vectors
 brief["topics"]["vectorizer"] = {
     "kind": "tfidf",
@@ -1852,19 +1863,30 @@ def count_distinct_rows(matrix):
                 for start, end in zip(matrix.indptr[:-1], matrix.indptr[1:])})
 
 
-n_distinct_vectors = count_distinct_rows(X_topics)
-n_topics = min(N_TOPICS, n_distinct_vectors)  # fewer topics only when there are fewer distinct vectors
-if n_topics and X_topics.shape[1]:
-    with threadpool_limits(limits=1), np.errstate(**QUIET_FLOATS):
-        topic_model = KMeans(n_clusters=n_topics, n_init=TOPIC_N_INIT, random_state=RANDOM_SEED).fit(X_topics)
-    topic_posts["topic"] = topic_model.labels_.astype("int64")
-    topic_centres = topic_model.cluster_centers_  # one row per topic, one column per word
-else:  # no word at all, or no post: at most one topic, holding every post
-    topic_model = None
-    topic_posts["topic"] = np.zeros(len(topic_posts), dtype="int64")
-    topic_centres = np.zeros((n_topics, X_topics.shape[1]))
-if not np.isfinite(topic_centres).all():
-    raise ValueError("A topic centre holds a value that is not a finite number")
+def group_vectors(matrix, n_wanted):
+    """Split the rows of a TF-IDF matrix into n_wanted groups with KMeans, in a single thread.
+
+    Returns (model, group of every row, centres, number of distinct rows, number of groups). Fewer groups only when
+    there are fewer distinct rows; without any word or any row, at most one group holding every row, and no model.
+    """
+    n_distinct = count_distinct_rows(matrix)
+    n_groups = min(n_wanted, n_distinct)  # fewer groups only when there are fewer distinct vectors
+    if n_groups and matrix.shape[1]:
+        with threadpool_limits(limits=1), np.errstate(**QUIET_FLOATS):
+            model = KMeans(n_clusters=n_groups, n_init=TOPIC_N_INIT, random_state=RANDOM_SEED).fit(matrix)
+        groups = model.labels_.astype("int64")
+        centres = model.cluster_centers_  # one row per group, one column per word
+    else:  # no word at all, or no row: at most one group, holding every row
+        model = None
+        groups = np.zeros(matrix.shape[0], dtype="int64")
+        centres = np.zeros((n_groups, matrix.shape[1]))
+    if not np.isfinite(centres).all():
+        raise ValueError("A topic centre holds a value that is not a finite number")
+    return model, groups, centres, n_distinct, n_groups
+
+
+topic_model, topic_groups, topic_centres, n_distinct_vectors, n_topics = group_vectors(X_topics, N_TOPICS)
+topic_posts["topic"] = topic_groups
 print(f"{n_topics} topics (asked for {N_TOPICS}; {n_distinct_vectors:,} distinct post vectors)")
 topic_posts["topic"].value_counts().sort_index().rename("posts")
 
@@ -1896,41 +1918,58 @@ topic_posts["topic"].value_counts().sort_index().rename("posts")
 TOPIC_NAME_WORDS = 5  # words in a topic name
 TOPIC_QUOTES = 3  # original posts shown per topic
 
-topic_of_post = topic_posts["topic"].to_numpy()
-with np.errstate(**QUIET_FLOATS):
-    squared_lengths = np.asarray(X_topics.multiply(X_topics).sum(axis=1)).ravel()  # |x|^2 of every post vector
-topics = []
-for topic in range(n_topics):
-    members = np.flatnonzero(topic_of_post == topic)  # rows of topic_posts in this topic, file order
-    centre = topic_centres[topic]
-    strongest = np.argsort(-centre, kind="stable")[:TOPIC_NAME_WORDS]  # ties keep vocabulary order
-    top_words = [str(topic_words[column]) for column in strongest if centre[column] > 0]
+
+def describe_groups(matrix, words, groups, centres, posts):
+    """Name, size and quotes of every group, by this chapter's rules.
+
+    matrix, words, groups and centres come from topic_vectors and group_vectors; posts is the table whose rows the
+    matrix holds, in the same order (columns post_id, label and text). Returns one dict per group: top_words (the
+    TOPIC_NAME_WORDS largest values of the centre), n_posts, n_posts_without_words and quotes (the original texts of
+    the TOPIC_QUOTES posts closest to the centre, skipping a text already shown).
+    """
+    posts = posts.reset_index(drop=True)  # row numbers of the matrix
+    without_words = matrix.getnnz(axis=1) == 0  # all-zero vectors
     with np.errstate(**QUIET_FLOATS):
-        distances = squared_lengths[members] - 2 * (X_topics[members] @ centre) + centre @ centre  # |x - c|^2
-    if not np.isfinite(distances).all():
-        raise ValueError(f"Topic {topic}: a distance to the centre is not a finite number")
-    readable = ~posts_without_words[members]  # posts with at least one word of the vocabulary
-    if not readable.any():  # quote those only, unless the topic has nothing else
-        readable[:] = True
-    candidates, candidate_distances = members[readable], distances[readable]
-    quotes, seen_texts = [], set()
-    for row in candidates[np.lexsort((candidates, candidate_distances))]:  # closest first; ties in file order
-        text = topic_posts.at[row, "text"]
-        if text in seen_texts:
-            continue
-        seen_texts.add(text)
-        quotes.append({"post_id": topic_posts.at[row, "post_id"], "label": int(topic_posts.at[row, "label"]),
-                       "text": text})
-        if len(quotes) == TOPIC_QUOTES:
-            break
+        squared_lengths = np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel()  # |x|^2 of every post vector
+    described = []
+    for group in range(len(centres)):
+        members = np.flatnonzero(groups == group)  # rows in this group, file order
+        centre = centres[group]
+        strongest = np.argsort(-centre, kind="stable")[:TOPIC_NAME_WORDS]  # ties keep vocabulary order
+        top_words = [str(words[column]) for column in strongest if centre[column] > 0]
+        with np.errstate(**QUIET_FLOATS):
+            distances = squared_lengths[members] - 2 * (matrix[members] @ centre) + centre @ centre  # |x - c|^2
+        if not np.isfinite(distances).all():
+            raise ValueError(f"Topic {group}: a distance to the centre is not a finite number")
+        readable = ~without_words[members]  # posts with at least one word of the vocabulary
+        if not readable.any():  # quote those only, unless the group has nothing else
+            readable[:] = True
+        candidates, candidate_distances = members[readable], distances[readable]
+        quotes, seen_texts = [], set()
+        for row in candidates[np.lexsort((candidates, candidate_distances))]:  # closest first; ties in file order
+            text = posts.at[row, "text"]
+            if text in seen_texts:
+                continue
+            seen_texts.add(text)
+            quotes.append({"post_id": posts.at[row, "post_id"], "label": int(posts.at[row, "label"]), "text": text})
+            if len(quotes) == TOPIC_QUOTES:
+                break
+        described.append({"top_words": top_words, "n_posts": int(len(members)),
+                          "n_posts_without_words": int(without_words[members].sum()), "quotes": quotes})
+    return described
+
+
+topics = []
+for topic, group in enumerate(describe_groups(X_topics, topic_words, topic_posts["topic"].to_numpy(), topic_centres,
+                                              topic_posts)):
     topics.append({
         "topic": topic,
-        "name": " / ".join(top_words),
-        "top_words": top_words,
-        "n_posts": int(len(members)),
-        "share": safe_ratio(int(len(members)), len(topic_posts)),
-        "n_posts_without_words": int(posts_without_words[members].sum()),
-        "quotes": quotes,
+        "name": " / ".join(group["top_words"]),
+        "top_words": group["top_words"],
+        "n_posts": group["n_posts"],
+        "share": safe_ratio(group["n_posts"], len(topic_posts)),
+        "n_posts_without_words": group["n_posts_without_words"],
+        "quotes": group["quotes"],
     })
 
 brief["topics"].update({
