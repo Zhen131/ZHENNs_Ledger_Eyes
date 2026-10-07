@@ -5338,6 +5338,42 @@ def check_validation_probes(report):
     shutil.rmtree(VALIDATION_PROBE_DIR, ignore_errors=True)
 
 
+def check_layers_probe(report):
+    """Chapter 14's cell, executed from the source on made-up daily layers: periods that do not meet, a missing layer
+    and a small overlap; the period, the days, the leans and the counts must follow the rules."""
+    import pandas as pd
+
+    def layer(first, shares):
+        days = [{"date": (pd.Timestamp(first) + pd.Timedelta(days=offset)).strftime("%Y-%m-%d"),
+                 "calibrated_bullish_share": share} for offset, share in enumerate(shares)]
+        return {"date_from": days[0]["date"], "date_to": days[-1]["date"], "days": days}
+
+    cases = {
+        "periods that do not meet": {"media": layer("2022-01-01", [0.7, 0.2]), "retail": layer("2022-02-01", [0.3, 0.8])},
+        "no media layer": {"retail": layer("2022-02-01", [0.3, 0.8])},
+        "a small overlap": {"media": layer("2022-01-01", [0.9, 0.65, 0.5, None]),
+                            "retail": layer("2022-01-02", [0.3, 0.3, 0.2, 0.7])},
+    }
+    expected = {
+        "periods that do not meet": (None, None, [], 0, 0, []),
+        "no media layer": (None, None, [], 0, 0, []),
+        "a small overlap": ("2022-01-02", "2022-01-04", [True, False, None], 3, 2, ["2022-01-02"]),
+    }
+    wrong = []
+    for name, daily_layers in cases.items():
+        namespace = {"__name__": "notebook_cells", "pd": pd, "brief": {}, "daily_layers": daily_layers,
+                     "LAYER_GAP": VALIDATION_SWITCH_DEFAULTS["LAYER_GAP"]}
+        problems = run_cells(["LAYER_PAIR"], namespace)
+        section = as_dict(namespace["brief"].get("layers"))
+        found = (section.get("date_from"), section.get("date_to"), [day.get("opposite") for day in section.get("days") or []],
+                 section.get("n_days"), section.get("n_days_both"), section.get("opposite_dates"))
+        if problems or found != expected[name]:
+            wrong.append(f"{name}: {problems[:1] or found}")
+    report.check(not wrong, "chapter 14's cell on made-up layers: periods that do not meet and a missing media layer give a "
+                 "null period, no days and 0 counts without an error; a small overlap gives its days, a lean only beyond "
+                 "0.5 ± LAYER_GAP, null where a layer takes no part, and the opposite days", "; ".join(wrong))
+
+
 def check_offline_sources(report, label, parameters, defaults):
     """In the quick check every run reads the price and the index from a local file or not at all."""
     price = parameters.get("PRICE_SOURCE", defaults.get("PRICE_SOURCE"))
@@ -5968,6 +6004,7 @@ def main():
     check_validation_switches(report, defaults, others)
     check_validation_chapters(report)
     check_validation_probes(report)
+    check_layers_probe(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
