@@ -72,6 +72,10 @@ NEW_WORD_RATIO = 3.0  # default: 3.0; or any number above 0 (chapter 13: a new w
 NEW_WORD_MAX_PER_DAY = 5  # default: 5; or any positive integer (chapter 13 reports at most this many new words per layer and day)
 EVENT_DAYS = ["2022-05-09", "2022-11-09"]  # default: a day of the LUNA crash week (May 2022) and a day of the FTX collapse week (November 2022); or any list of UTC days "YYYY-MM-DD" (chapter 13 shows example posts of these days)
 EVENT_EXAMPLES = 3  # default: 3; or any positive integer (chapter 13: example posts per side, bullish and bearish, for every event day and layer)
+LAYER_GAP = 0.1  # default: 0.1; or any number above 0 and at most 0.5 (chapter 14: a layer leans bullish on a day when its calibrated share is at least 0.5 + this, bearish when it is at most 0.5 - this; 0.1 is the chance error of a share of 100 posts)
+PRICE_SOURCE = "auto"  # default: "auto" (chapter 15 tries Yahoo Finance through yfinance, then Coinbase, then Stooq, and uses the first that has every needed day); or the path of a local CSV file with the columns date and close; or "none" (no prices)
+FEAR_GREED_SOURCE = "https://api.alternative.me/fng/?limit=0&format=json"  # default: the whole history of the Crypto Fear and Greed Index of alternative.me (chapter 15); or the path of a local JSON file in the same shape; or "none"
+VALIDATION_MIN_DAYS = 30  # default: 30; or any positive integer (chapter 15: a correlation needs at least this many days; with 30 days a correlation of 0 can still come out about 0.37 either way by chance)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -241,6 +245,17 @@ for value in EVENT_DAYS:
         real_day = False
     if not real_day:
         raise ValueError(f'EVENT_DAYS must list UTC days written "YYYY-MM-DD", got {value!r} in {EVENT_DAYS!r}')
+if isinstance(LAYER_GAP, bool) or not isinstance(LAYER_GAP, (int, float)) or not 0 < LAYER_GAP <= 0.5:  # chapter 14
+    raise ValueError(f"LAYER_GAP must be a number above 0 and at most 0.5, got {LAYER_GAP!r}")
+if not isinstance(PRICE_SOURCE, str) or not PRICE_SOURCE.strip() or "://" in PRICE_SOURCE:  # chapter 15
+    raise ValueError(f'PRICE_SOURCE must be "auto", "none" or the path of a local CSV file (the web sources are fixed), '
+                     f"got {PRICE_SOURCE!r}")
+if (not isinstance(FEAR_GREED_SOURCE, str) or not FEAR_GREED_SOURCE.strip()
+        or ("://" in FEAR_GREED_SOURCE and not FEAR_GREED_SOURCE.startswith("https://api.alternative.me/"))):
+    raise ValueError(f'FEAR_GREED_SOURCE must be an address of https://api.alternative.me/, "none" or the path of a '
+                     f"local JSON file, got {FEAR_GREED_SOURCE!r}")
+if isinstance(VALIDATION_MIN_DAYS, bool) or not isinstance(VALIDATION_MIN_DAYS, int) or VALIDATION_MIN_DAYS < 1:
+    raise ValueError(f"VALIDATION_MIN_DAYS must be a positive integer, got {VALIDATION_MIN_DAYS!r}")
 print("Switches look fine.")
 
 # %% [markdown]
