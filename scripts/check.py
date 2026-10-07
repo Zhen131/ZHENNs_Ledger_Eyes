@@ -39,6 +39,13 @@ quick: static checks, then the notebook runs three times on the bundled
        against broken tables, the way it reads, and its tweet cells on the
        sample (shuffled, split, cached, changed) are checked, and the samples
        are scanned for account names and links.
+       The day by day chapter (13) scores every dated post and counts it per
+       layer and UTC day, and finds the new words of every day; its daily and
+       new_words sections are checked in every brief (every pile's
+       identities, the sums over the days, the calibration, the event days,
+       every new word against the rules) and compared between the two default
+       runs. A fifth run reads a copy of the tweet sample with made-up words
+       added on one day, which the new words must report (the spike run).
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
@@ -49,7 +56,9 @@ full:  static checks, then one run on the full dataset with the default
        baselines, and its numbers, emotions per group and example posts are
        printed. The dated data chapter reads the downloaded copies in
        data/raw/dlt-tweets/ and data/raw/dlt-news/; its dated_data section
-       is checked and its numbers are printed.
+       is checked and its numbers are printed. The daily and new_words
+       sections are checked, and their numbers, every new word day by day and
+       the event days are printed.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -92,7 +101,7 @@ REQUIREMENTS = REPO_DIR / "requirements.txt"
 SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
 FULL_SOURCE = "data/raw/st-data-full.xlsx"
 TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers",
-                    "emotions", "dated_data"]
+                    "emotions", "dated_data", "daily", "new_words"]
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -1244,6 +1253,8 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     check_drawers(report, THRESHOLD_LABEL, brief, switches, built_in)
     check_emotions(report, THRESHOLD_LABEL, brief, switches)
     check_dated_data(report, THRESHOLD_LABEL, brief, switches, quick_default=True)
+    check_daily(report, THRESHOLD_LABEL, brief, switches)
+    check_new_words(report, THRESHOLD_LABEL, brief, switches)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -2271,6 +2282,24 @@ def changed_copy(document, path, change):
     return result
 
 
+PROBE_DAY = 7  # a day of new_words.layers.retail.days that the counterexamples give a new word (judged by default)
+
+
+def with_new_word(day, **change):
+    """A copy of a day of new_words whose first new word (its own, or a valid made-up one) is changed."""
+    day = copy.deepcopy(day)
+    words = day.get("new_words") or [{"word": "probeword", "n_posts": 1, "past_daily_mean": 0.0, "ratio": None,
+                                      "quotes": [{"post_id": "probe:0", "text": "probeword"}]}]
+    words[0] = {**words[0], **change}
+    day["new_words"] = words
+    return day
+
+
+def day_before(day):
+    from datetime import date, timedelta
+    return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+
+
 # Locked counterexamples: each breaks a valid brief in one place, and the format check must reject it with a
 # problem at the given path that mentions the given word. Kinds 1 to 5 are the five kinds the format check must
 # catch at least; kind 6 adds a null where the format does not allow one, and a field the format does not know.
@@ -2343,6 +2372,28 @@ BROKEN_BRIEFS = [
     ("3 wrong type", ("dated_data", "layers", "retail", "days", 0, "n_posts"), lambda old: "12",
      "dated_data.layers.retail.days[0].n_posts", "integer"),
     ("6 null not allowed, or an unknown field", ("dated_data", "extra_field"), lambda old: 1, "dated_data", "extra_field"),
+    ("2 required field missing in a section", ("daily", "layers", "retail", "days", 0, "date"), DELETE,
+     "daily.layers.retail.days[0]", "date"),
+    ("2 required field missing in a section", ("new_words", "layers", "retail", "days", 0, "date"), DELETE,
+     "new_words.layers.retail.days[0]", "date"),
+    ("2 required field missing in a section", ("daily", "layers", "retail", "date_from"), DELETE, "daily.layers.retail",
+     "date_from"),
+    ("2 required field missing in a section", ("new_words", "date_from"), DELETE, "new_words", "date_from"),
+    ("5 NaN or infinity", ("new_words", "layers", "retail", "days", PROBE_DAY), lambda old: with_new_word(old, ratio=INFINITY),
+     f"new_words.layers.retail.days[{PROBE_DAY}].new_words[0].ratio", "inf"),
+    ("7 value the format does not allow", ("new_words", "layers", "retail", "days", PROBE_DAY),
+     lambda old: with_new_word(old, quotes=[{"post_id": f"probe:{number}", "text": f"probe {number}"} for number in range(4)]),
+     f"new_words.layers.retail.days[{PROBE_DAY}].new_words[0].quotes", "too long"),
+    ("3 wrong type", ("daily", "layers", "retail", "overall", "emotion_counts"), lambda old: {**old, "none": "12"},
+     "daily.layers.retail.overall.emotion_counts.none", "integer"),
+    ("7 value the format does not allow", ("daily", "layers"),
+     lambda old: {("whale" if key == "retail" else key): value for key, value in old.items()}, "daily.layers", "whale"),
+    ("7 value the format does not allow", ("new_words", "layers"),
+     lambda old: {("whale" if key == "retail" else key): value for key, value in old.items()}, "new_words.layers", "whale"),
+    ("7 value the format does not allow", ("daily", "layers", "retail", "days", 0, "date"), day_before,
+     "daily.layers.retail.days[0].date", "outside"),
+    ("7 value the format does not allow", ("new_words", "layers", "retail", "days", 0, "date"), day_before,
+     "new_words.layers.retail.days[0].date", "outside"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2359,6 +2410,9 @@ NULL_ALLOWED = [
     ("emotions", "selection", "validation_macro_f1", "count_network"),
     ("dated_data", "switches", "date_end"),
     ("dated_data", "switches", "language"),
+    ("daily", "layers", "retail", "overall", "calibrated_bullish_share"),
+    ("daily", "layers", "retail", "days", 0, "half_bullish_share"),
+    ("daily", "calibration", "rate_gap"),
 ]
 
 
@@ -4355,6 +4409,657 @@ def print_dated(brief, brief_path):
     print(f"  brief file size:               {brief_path.stat().st_size:,} bytes")
 
 
+# ---------------------------------------------------------------- day by day and new words (chapter 13)
+# Every dated post scored and counted per layer and UTC day (the daily section), and the new words of every day (the
+# new_words section). The quick check also runs the notebook once on a copy of the tweet sample with made-up words
+# added on one day (the spike run): the new words must find them.
+
+DAILY_SWITCH_DEFAULTS = {"DAILY_MIN_POSTS": 100, "NEW_WORD_WINDOW": 7, "NEW_WORD_MIN_COUNT": 10, "NEW_WORD_RATIO": 3.0,
+                         "NEW_WORD_MAX_PER_DAY": 5, "EVENT_DAYS": ["2022-05-09", "2022-11-09"], "EVENT_EXAMPLES": 3}
+# Locked (only add): switch values the switch check cell must accept (True) or stop at with the switch's name (False).
+DAILY_SWITCH_PROBES = [
+    ({"DAILY_MIN_POSTS": 1, "NEW_WORD_RATIO": 1, "EVENT_DAYS": []}, True),
+    ({"NEW_WORD_RATIO": 0.5, "NEW_WORD_WINDOW": 30, "EVENT_DAYS": ("2023-01-01",)}, True),
+    ({"DAILY_MIN_POSTS": 0}, False), ({"DAILY_MIN_POSTS": 2.5}, False), ({"NEW_WORD_WINDOW": True}, False),
+    ({"NEW_WORD_MIN_COUNT": -1}, False), ({"NEW_WORD_MAX_PER_DAY": "5"}, False), ({"EVENT_EXAMPLES": 0}, False),
+    ({"NEW_WORD_RATIO": 0}, False), ({"NEW_WORD_RATIO": -2.0}, False), ({"NEW_WORD_RATIO": "3"}, False),
+    ({"NEW_WORD_RATIO": float("inf")}, False), ({"NEW_WORD_RATIO": float("nan")}, False),
+    ({"EVENT_DAYS": "2022-05-09"}, False), ({"EVENT_DAYS": ["2022/05/09"]}, False), ({"EVENT_DAYS": ["2022-02-30"]}, False),
+    ({"EVENT_DAYS": ["2022-05-09", "2022-05-09"]}, False), ({"EVENT_DAYS": [20220509]}, False),
+]
+NEW_WORD_MUST_IGNORE = ["bitcoin", "btc", "user", "http", "not", "no", "nor", "never"]  # besides NLTK's stop words
+DAILY_SECTIONS = ["daily", "new_words"]
+# The spike run: one more run of the quick check on a copy of the tweet sample with made-up words added.
+SPIKE_LABEL = "new word spike run"
+SPIKE_DIR = REPO_DIR / "data" / "checks" / "spike-probe"  # the copy of the tweet sample
+SPIKE_DAY = "2022-05-20"  # a day of the sample's tweet window, well after the first NEW_WORD_WINDOW days
+SPIKE_WORDS = {"sudden": "zorvexa", "rising": "quelbrin", "short": "tavmoru"}  # made-up words, unknown to the cleaning
+SPIKE_POSTS = {"sudden": 12, "rising": 12, "short": 9}  # posts of SPIKE_DAY that get the word
+SPIKE_BEFORE = 1  # posts per day with the rising word on the NEW_WORD_WINDOW days before SPIKE_DAY
+# The settings of the spike run: no daily cap (adding a word changes a post's id, and so what a cap keeps), the default
+# new word rules written out (so that -p values cannot move them), no limit per day (so that the made-up words are
+# reported whatever else the day has), and a too-few bar of 1 (so that every day with posts has its shares checked).
+SPIKE_SETTINGS = {"DATED_DAILY_CAP": 10 ** 9, "NEW_WORD_WINDOW": 7, "NEW_WORD_MIN_COUNT": 10, "NEW_WORD_RATIO": 3.0,
+                  "NEW_WORD_MAX_PER_DAY": 1000, "DAILY_MIN_POSTS": 1}
+
+
+def check_daily_switches(report, defaults, others):
+    """The seven switches of chapter 13 with their defaults, none two-state, and the switch check cell."""
+    wrong = [f"{name}={defaults.get(name, 'missing')!r}" for name, value in DAILY_SWITCH_DEFAULTS.items()
+             if name not in defaults or defaults[name] != value or type(defaults[name]) is not type(value)]
+    two_state = sorted(set(DAILY_SWITCH_DEFAULTS) & set(others))
+    report.check(not wrong and not two_state,
+                 "switches of the day by day chapter are present with their defaults (at least 100 posts for a share; "
+                 "new words: 7 days before, at least 10 posts, at least 3 times the past daily mean, at most 5 a day; "
+                 "event days 2022-05-09 and 2022-11-09 with 3 example posts per side), none of them two-state",
+                 f"other defaults {wrong}; two-state {two_state}")
+    wrong = []
+    for overrides, accepted in DAILY_SWITCH_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace.update(overrides)
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{overrides} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and any(name in stopped[0] for name in overrides)):
+            wrong.append(f"{overrides} not refused with its name: {problems[:1]}")
+    report.check(not wrong, f"the switch check cell accepts good day by day switches and stops at bad ones with the "
+                 f"switch's name ({len(DAILY_SWITCH_PROBES)} cases: counts that are not positive integers, a ratio that "
+                 "is not a number above 0 or is infinite, event days that are not a list of different real days written "
+                 "YYYY-MM-DD)", "; ".join(wrong[:3]))
+
+
+def daily_share_problems(pile, where, min_posts, calibration, checked):
+    """The too-few mark and both shares of one pile (posts n, bullish b): mark = n < min_posts; counted = b / n and
+    calibrated = the counted share calibrated with the section's rates, both null when marked. checked counts the
+    calibrated shares that are not null and were recomputed."""
+    problems = []
+    n, bullish = pile.get("n_posts"), pile.get("bullish")
+    if not is_count(n) or not is_count(bullish) or bullish > n:
+        return [f"{where}: posts {n!r} and bullish calls {bullish!r}"]
+    too_few = n < min_posts
+    if pile.get("too_few_posts") is not too_few:
+        problems.append(f"{where}: too_few_posts {pile.get('too_few_posts')!r} with {n} posts and a bar of {min_posts}")
+    counted = None if too_few else share_of(bullish, n)
+    if not (is_score(pile.get("half_bullish_share")) and same_value(pile.get("half_bullish_share"), counted)):
+        problems.append(f"{where}: half_bullish_share {pile.get('half_bullish_share')!r} (expected {counted!r})")
+    calibrated = calibrated_from(counted, calibration)
+    if not (is_score(pile.get("calibrated_bullish_share")) and same_value(pile.get("calibrated_bullish_share"), calibrated)):
+        problems.append(f"{where}: calibrated_bullish_share {pile.get('calibrated_bullish_share')!r} (expected "
+                        f"{calibrated if calibrated is not INVALID else 'not computable'!r})")
+    elif pile.get("calibrated_bullish_share") is not None:
+        checked.append(where)
+    return problems
+
+
+def daily_row_problems(row, where, min_posts, calibration, classes, drawer_ids, checked):
+    """Every identity of one row of the daily section (a day or a layer's whole period)."""
+    row = as_dict(row)
+    n, halves = row.get("n_posts"), counts_of(row.get("half_counts"), HALF_CALLS)
+    if not is_count(n) or halves is None or halves["bullish"] + halves["bearish"] != n:
+        return [f"{where}: calls at 0.5 {row.get('half_counts')!r} do not add up to {n!r} posts"]
+    problems = daily_share_problems({"n_posts": n, "bullish": halves["bullish"], **row}, where, min_posts, calibration,
+                                    checked)
+    emotions = row.get("emotion_counts")
+    if not isinstance(emotions, dict) or list(emotions) != classes or not all(is_count(value) for value in emotions.values()) \
+            or sum(emotions.values()) != n:
+        problems.append(f"{where}: emotion_counts {emotions!r} are not the classes {classes} adding up to {n} posts")
+    any_drawer, no_drawer = row.get("n_in_any_drawer"), row.get("n_in_no_drawer")
+    if not (is_count(any_drawer) and is_count(no_drawer) and any_drawer + no_drawer == n):
+        problems.append(f"{where}: posts in any drawer {any_drawer!r} + in no drawer {no_drawer!r} are not {n} posts")
+    drawers = row.get("drawers")
+    if not isinstance(drawers, dict) or list(drawers) != drawer_ids:
+        problems.append(f"{where}: drawers {list(drawers) if isinstance(drawers, dict) else drawers!r} are not "
+                        f"{drawer_ids}")
+        return problems
+    for drawer, pile in drawers.items():
+        pile = as_dict(pile)
+        size, bullish = pile.get("n_posts"), pile.get("n_half_bullish")
+        if not (is_count(size) and is_count(bullish) and bullish <= size <= n) or \
+                (is_count(any_drawer) and is_count(size) and size > any_drawer):
+            problems.append(f"{where}.drawers.{drawer}: {size!r} posts, {bullish!r} bullish, of {n} posts")
+            continue
+        problems += daily_share_problems({"n_posts": size, "bullish": bullish, **pile}, f"{where}.drawers.{drawer}",
+                                         min_posts, calibration, checked)
+    return problems
+
+
+def daily_flat_counts(row):
+    """Every count of a daily row, as {name: count}, for adding the days up."""
+    row = as_dict(row)
+    counts = {"n_posts": row.get("n_posts"), "n_in_any_drawer": row.get("n_in_any_drawer"),
+              "n_in_no_drawer": row.get("n_in_no_drawer"),
+              **{f"half {key}": value for key, value in as_dict(row.get("half_counts")).items()},
+              **{f"emotion {key}": value for key, value in as_dict(row.get("emotion_counts")).items()}}
+    for drawer, pile in as_dict(row.get("drawers")).items():
+        counts[f"drawer {drawer} posts"] = as_dict(pile).get("n_posts")
+        counts[f"drawer {drawer} bullish"] = as_dict(pile).get("n_half_bullish")
+    return counts
+
+
+def dated_days(brief, layer):
+    """[(date, posts)] of a layer of dated_data."""
+    days = as_dict(as_dict(as_dict(brief.get("dated_data")).get("layers")).get(layer)).get("days") or []
+    return [(as_dict(day).get("date"), as_dict(day).get("n_posts")) for day in days]
+
+
+def section_period_problems(brief, section):
+    """A daily section covers the period of dated_data: the same layers, periods and days, in the same order."""
+    problems = []
+    content, dated = as_dict(brief.get(section)), as_dict(brief.get("dated_data"))
+    if (content.get("date_from"), content.get("date_to")) != (dated.get("date_from"), dated.get("date_to")):
+        problems.append(f"{section}: period {content.get('date_from')} to {content.get('date_to')}, dated_data "
+                        f"{dated.get('date_from')} to {dated.get('date_to')}")
+    layers, dated_layers = as_dict(content.get("layers")), as_dict(dated.get("layers"))
+    if list(layers) != list(dated_layers):
+        problems.append(f"{section}: layers {list(layers)}, dated_data {list(dated_layers)}")
+    for name, layer in layers.items():
+        layer, dated_layer = as_dict(layer), as_dict(dated_layers.get(name))
+        if (layer.get("date_from"), layer.get("date_to")) != (dated_layer.get("date_from"), dated_layer.get("date_to")):
+            problems.append(f"{section}.layers.{name}: period {layer.get('date_from')} to {layer.get('date_to')}")
+        days = [(as_dict(day).get("date"), as_dict(day).get("n_posts")) for day in layer.get("days") or []]
+        if days != dated_days(brief, name):
+            problems.append(f"{section}.layers.{name}: the days (dates and posts) are not those of dated_data")
+    return problems
+
+
+def check_daily(report, label, brief, switches):
+    """The daily section: every pile's identities, sums over the days, the calibration, the names and the event days."""
+    daily = as_dict(brief.get("daily"))
+    layers = as_dict(daily.get("layers"))
+    if not report.check(bool(daily) and bool(layers), f"{label}: daily section has content"):
+        return
+    min_posts = switches["DAILY_MIN_POSTS"]
+    classes = as_dict(brief.get("emotions")).get("classes") or []
+    drawer_ids = [as_dict(item).get("drawer") for item in as_dict(brief.get("drawers")).get("drawers") or []]
+    calibration = as_dict(daily.get("calibration"))
+    problems, checked = [], []
+    if daily.get("min_posts") != min_posts:
+        problems.append(f"min_posts {daily.get('min_posts')!r} is not DAILY_MIN_POSTS {min_posts!r}")
+    for name, layer in layers.items():
+        layer = as_dict(layer)
+        where = f"daily.layers.{name}"
+        problems += daily_row_problems(layer.get("overall"), f"{where}.overall", min_posts, calibration, classes,
+                                       drawer_ids, checked)
+        total = {}
+        for index, day in enumerate(layer.get("days") or []):
+            problems += daily_row_problems(day, f"{where}.days[{index}]", min_posts, calibration, classes, drawer_ids,
+                                           checked)
+            for key, value in daily_flat_counts(day).items():
+                total[key] = total.get(key, 0) + (value if is_count(value) else 0)
+        overall = daily_flat_counts(layer.get("overall"))
+        if total != overall:
+            problems.append(f"{where}: the days do not add up to the whole period in "
+                            f"{[key for key in overall if total.get(key) != overall.get(key)][:5]}")
+        if overall.get("n_posts") != as_dict(as_dict(as_dict(brief.get("dated_data")).get("layers")).get(name)).get("n_posts"):
+            problems.append(f"{where}: {overall.get('n_posts')!r} posts, not those of dated_data")
+    report.check(not problems, f"{label}: daily: in every layer's whole period and every day, and in every drawer of "
+                 "them, the calls at 0.5 add up to the posts, too_few_posts follows DAILY_MIN_POSTS and then both shares "
+                 "are null, the counted share is bullish / posts, the calibrated share is null or in [0, 1] and is the "
+                 "counted share calibrated with the section's rates (recomputed), the emotions add up to the posts, any "
+                 "drawer + no drawer = posts, every drawer has at most the posts and its bullish calls at most its "
+                 "posts; the days add up to the whole period in every count, which has the posts of dated_data",
+                 "; ".join(problems[:5]))
+    problems = section_period_problems(brief, "daily")
+    report.check(not problems, f"{label}: daily covers the period of dated_data: the same period, the same layers with "
+                 "the same periods, and every layer's days are those of dated_data, one by one, with the same posts",
+                 "; ".join(problems[:5]))
+    # The calibration: the rates of the evaluation row chosen by DATED_BTC_ONLY, and the status of chapter 10's rules.
+    selected = as_dict(as_dict(brief.get("sentiment")).get("selection")).get("selected")
+    subset = "test_mentions_btc" if switches["DATED_BTC_ONLY"] else "all_test"
+    row = evaluation_row(brief, selected, subset)
+    problems = []
+    if as_dict(calibration.get("rates_from")) != {"model": selected, "subset": subset} or row is None:
+        problems.append(f"rates_from {calibration.get('rates_from')!r} (expected {selected} / {subset}, row found: "
+                        f"{row is not None})")
+    else:
+        per_class = as_dict(row.get("per_class"))
+        supports = {label_: as_dict(per_class.get(label_)).get("support") for label_ in ("0", "2")}
+        if calibration.get("rate_posts") != supports:
+            problems.append(f"rate_posts {calibration.get('rate_posts')!r} (the row's supports {supports})")
+        if switches["N_CLASSES"] == 3:
+            expected = {"true_bullish_rate": None, "false_bullish_rate": None, "rate_gap": None}
+            status = "three_classes"
+        else:
+            true_rate = as_dict(per_class.get("2")).get("recall")
+            bearish = as_dict(per_class.get("0")).get("recall")
+            false_rate = None if bearish is None else 1.0 - bearish
+            gap = None if true_rate is None or false_rate is None else true_rate - false_rate
+            expected = {"true_bullish_rate": true_rate, "false_bullish_rate": false_rate, "rate_gap": gap}
+            status = ("rates_missing" if gap is None else "rate_gap_too_small"
+                      if gap < switches["MIN_RATE_GAP"] or gap <= 0 else "applied")
+        for key, value in expected.items():
+            if not same_value(calibration.get(key), value):
+                problems.append(f"{key} {calibration.get(key)!r} (expected {value!r})")
+        if calibration.get("status") != status:
+            problems.append(f"status {calibration.get('status')!r} (expected {status})")
+    if calibration.get("min_rate_gap") != switches["MIN_RATE_GAP"]:
+        problems.append(f"min_rate_gap {calibration.get('min_rate_gap')!r}")
+    report.check(not problems, f"{label}: daily.calibration reads the chosen model's row of the evaluation table for the "
+                 f"test posts that match DATED_BTC_ONLY ({subset}): its supports, the bullish recall, 1 - the bearish "
+                 "recall and their gap (all null with three classes), and the status of chapter 10's rules; "
+                 f"{len(checked)} calibrated shares were not null and were recomputed (status "
+                 f"{calibration.get('status')})", "; ".join(problems[:5]))
+    scoring = as_dict(daily.get("scoring"))
+    names_ok = (daily.get("emotion_classes") == classes and daily.get("drawer_ids") == drawer_ids
+                and daily.get("word_list_version") == as_dict(brief.get("drawers")).get("word_list_version")
+                and scoring.get("sentiment_model") == selected
+                and scoring.get("emotion_model") == as_dict(as_dict(brief.get("emotions")).get("selection")).get("selected")
+                and scoring.get("n_scored") == as_dict(brief.get("dated_data")).get("n_posts")
+                and is_count(scoring.get("n_distinct_clean_texts")) and scoring["n_distinct_clean_texts"] <= scoring["n_scored"])
+    report.check(names_ok, f"{label}: daily names the emotions the network actually learned (emotions.classes, in "
+                 "order) and the drawers of the word list (in order, same version), the chosen sentiment model and "
+                 "emotion network, and scored every dated post",
+                 f"emotions {daily.get('emotion_classes')} vs {classes}; drawers {daily.get('drawer_ids')} vs {drawer_ids}; "
+                 f"scoring {scoring}")
+    check_events(report, label, brief, switches)
+
+
+def check_events(report, label, brief, switches):
+    """The event days: one item per day of EVENT_DAYS; a day outside a layer's period is marked; examples on the right
+    side of their threshold, most confident first, every text once, at most EVENT_EXAMPLES; that day's new words."""
+    daily = as_dict(brief.get("daily"))
+    events = as_dict(daily.get("events"))
+    layers, word_layers = as_dict(daily.get("layers")), as_dict(as_dict(brief.get("new_words")).get("layers"))
+    problems = []
+    expected = {"days": list(switches["EVENT_DAYS"]), "examples_per_side": switches["EVENT_EXAMPLES"],
+                "bullish_at_or_above": switches["BULLISH_THRESHOLD"], "bearish_at_or_below": switches["BEARISH_THRESHOLD"]}
+    wrong = {key: events.get(key) for key, value in expected.items() if events.get(key) != value}
+    if wrong:
+        problems.append(f"events {wrong} (switches {expected})")
+    items = events.get("items") or []
+    if [as_dict(item).get("date") for item in items] != list(switches["EVENT_DAYS"]):
+        problems.append(f"event items {[as_dict(item).get('date') for item in items]}")
+    in_period = outside = 0
+    for item in items:
+        item = as_dict(item)
+        day = item.get("date")
+        if list(as_dict(item.get("layers"))) != list(layers):
+            problems.append(f"{day}: layers {list(as_dict(item.get('layers')))}")
+        for name, entry in as_dict(item.get("layers")).items():
+            entry, layer = as_dict(entry), as_dict(layers.get(name))
+            inside = isinstance(day, str) and layer.get("date_from", "") <= day <= layer.get("date_to", "")
+            if entry.get("in_period") is not inside:
+                problems.append(f"{day} {name}: in_period {entry.get('in_period')!r} (expected {inside})")
+                continue
+            if not inside:
+                outside += 1
+                if (entry.get("n_posts"), entry.get("bullish"), entry.get("bearish"), entry.get("new_words")) != (0, [], [], []):
+                    problems.append(f"{day} {name}: outside the period but with posts, examples or words")
+                continue
+            in_period += 1
+            posts = next((as_dict(row).get("n_posts") for row in layer.get("days") or [] if as_dict(row).get("date") == day),
+                         None)
+            words = next(([as_dict(word).get("word") for word in as_dict(row).get("new_words") or []]
+                          for row in as_dict(word_layers.get(name)).get("days") or [] if as_dict(row).get("date") == day), None)
+            if entry.get("n_posts") != posts or entry.get("new_words") != words:
+                problems.append(f"{day} {name}: posts {entry.get('n_posts')!r} / {posts!r}, new words "
+                                f"{entry.get('new_words')!r} / {words!r}")
+            for side, keep, reverse in [("bullish", lambda p: p >= switches["BULLISH_THRESHOLD"], True),
+                                        ("bearish", lambda p: p <= switches["BEARISH_THRESHOLD"], False)]:
+                quotes = entry.get(side) if isinstance(entry.get(side), list) else None
+                if quotes is None or len(quotes) > switches["EVENT_EXAMPLES"]:
+                    problems.append(f"{day} {name}: {side} examples {quotes!r}")
+                    continue
+                probabilities = [as_dict(quote).get("bullish_probability") for quote in quotes]
+                texts = [as_dict(quote).get("text") for quote in quotes]
+                if not all(is_score(value) and value is not None and keep(value) for value in probabilities) \
+                        or probabilities != sorted(probabilities, reverse=reverse) or len(set(texts)) != len(texts) \
+                        or not all(isinstance(as_dict(quote).get("post_id"), str) for quote in quotes):
+                    problems.append(f"{day} {name}: {side} examples {probabilities}")
+    report.check(not problems, f"{label}: daily.events has one item per day of EVENT_DAYS, in order, with every layer; "
+                 "a day outside a layer's period is marked there (no posts, examples or words), a day inside has that "
+                 "day's posts and new words, at most EVENT_EXAMPLES bullish examples at or above BULLISH_THRESHOLD "
+                 "(highest first) and bearish ones at or below BEARISH_THRESHOLD (lowest first), every text once "
+                 f"({in_period} layer-days in the period, {outside} outside)", "; ".join(problems[:5]))
+
+
+def new_word_key(item):
+    """The order of a day's new words: most posts, then the higher ratio (null highest), then the word."""
+    ratio = item.get("ratio")
+    return (-item.get("n_posts", 0), 0 if ratio is None else 1, -(ratio or 0.0), item.get("word", ""))
+
+
+def check_new_words(report, label, brief, switches):
+    """The new_words section: its switches, its period and days, and every reported word against the rules."""
+    section = as_dict(brief.get("new_words"))
+    layers = as_dict(section.get("layers"))
+    if not report.check(bool(section) and bool(layers), f"{label}: new_words section has content"):
+        return
+    problems = []
+    expected = {"window_days": switches["NEW_WORD_WINDOW"], "min_count": switches["NEW_WORD_MIN_COUNT"],
+                "ratio": switches["NEW_WORD_RATIO"], "max_per_day": switches["NEW_WORD_MAX_PER_DAY"]}
+    wrong = {key: section.get(key) for key, value in expected.items() if section.get(key) != value}
+    if wrong:
+        problems.append(f"switches {wrong} (expected {expected})")
+    ignored = section.get("ignored_words") if isinstance(section.get("ignored_words"), list) else []
+    try:
+        from nltk.corpus import stopwords
+        stop_words = set(stopwords.words("english"))
+    except LookupError:  # NLTK's data is missing: the notebook would have downloaded it
+        stop_words = set()
+    missing = sorted((set(NEW_WORD_MUST_IGNORE) | stop_words) - set(ignored))
+    if missing or not stop_words:
+        problems.append(f"ignored_words lacks {missing[:10]} (NLTK stop words found: {len(stop_words)})")
+    quotes_limit = section.get("quotes_per_word")
+    if not (is_count(quotes_limit) and 1 <= quotes_limit <= 3):
+        problems.append(f"quotes_per_word {quotes_limit!r}")
+        quotes_limit = 3
+    window, minimum, ratio_bar = expected["window_days"], expected["min_count"], expected["ratio"]
+    n_words = 0
+    for name, layer in layers.items():
+        layer = as_dict(layer)
+        days = layer.get("days") or []
+        judged = [as_dict(day).get("judged") for day in days]
+        if judged != [index >= window for index in range(len(days))]:
+            problems.append(f"layers.{name}: the days judged are not every day but the first {window}")
+        counted = {"n_days_judged": sum(value is True for value in judged),
+                   "n_days_with_new_words": sum(bool(as_dict(day).get("new_words")) for day in days),
+                   "n_new_words": sum(len(as_dict(day).get("new_words") or []) for day in days)}
+        if any(layer.get(key) != value for key, value in counted.items()):
+            problems.append(f"layers.{name}: counts { {key: layer.get(key) for key in counted} } (from the days {counted})")
+        for day in days:
+            day = as_dict(day)
+            where = f"layers.{name} {day.get('date')}"
+            words = day.get("new_words") if isinstance(day.get("new_words"), list) else None
+            if words is None or (not day.get("judged") and words) or len(words) > expected["max_per_day"]:
+                problems.append(f"{where}: {len(words) if words is not None else words!r} new words (judged "
+                                f"{day.get('judged')!r}, at most {expected['max_per_day']})")
+                continue
+            n_words += len(words)
+            if [as_dict(item).get("word") for item in words] != list(dict.fromkeys(as_dict(item).get("word") for item in words)) \
+                    or [as_dict(item) for item in words] != sorted((as_dict(item) for item in words), key=new_word_key):
+                problems.append(f"{where}: new words repeated or not in the order of the rule")
+            for item in words:
+                item = as_dict(item)
+                word, count, mean, ratio = item.get("word"), item.get("n_posts"), item.get("past_daily_mean"), item.get("ratio")
+                if not isinstance(word, str) or word in ignored or len(word) < 2 or not any(ch.isalpha() for ch in word):
+                    problems.append(f"{where}: {word!r} may not be a new word")
+                if not is_count(count) or count < minimum or not is_count(day.get("n_posts")) or count > day["n_posts"]:
+                    problems.append(f"{where} {word}: {count!r} posts (at least {minimum}, at most the day's "
+                                    f"{day.get('n_posts')!r})")
+                    continue
+                if not is_number(mean) or mean < 0 or abs(mean * window - round(mean * window)) > 1e-6:
+                    problems.append(f"{where} {word}: past daily mean {mean!r} is not a count of posts / {window}")
+                elif mean == 0:
+                    if ratio is not None:
+                        problems.append(f"{where} {word}: a past daily mean of 0 needs a ratio of null, not {ratio!r}")
+                elif not (is_number(ratio) and same_value(ratio, count / mean) and ratio >= ratio_bar * (1 - 1e-9)):
+                    problems.append(f"{where} {word}: ratio {ratio!r} (posts / past daily mean = {count / mean}, at least "
+                                    f"{ratio_bar})")
+                quotes = item.get("quotes") if isinstance(item.get("quotes"), list) else []
+                texts = [as_dict(quote).get("text") for quote in quotes]
+                ids = [as_dict(quote).get("post_id") for quote in quotes]
+                if not 1 <= len(quotes) <= quotes_limit or len(set(texts)) != len(texts) \
+                        or not all(isinstance(text, str) for text in texts) \
+                        or not all(isinstance(post_id, str) for post_id in ids) or ids != sorted(ids):
+                    problems.append(f"{where} {word}: {len(quotes)} example posts (1 to {quotes_limit}, different texts, "
+                                    "in post_id order)")
+    report.check(not problems, f"{label}: new_words follows its switches and ignores at least NLTK's stop words and "
+                 f"{', '.join(NEW_WORD_MUST_IGNORE)}; in every layer the first NEW_WORD_WINDOW days are not judged and "
+                 "have no new words; every new word is a word with a letter and two characters or more, outside the "
+                 "ignored words, in at least NEW_WORD_MIN_COUNT posts, with a ratio of null when its past daily mean is "
+                 "0 and otherwise posts / past daily mean at least NEW_WORD_RATIO, at most NEW_WORD_MAX_PER_DAY a day in "
+                 f"the order of the rule, with 1 to 3 example posts of different texts ({n_words} new words checked)",
+                 "; ".join(problems[:5]))
+    problems = section_period_problems(brief, "new_words")
+    report.check(not problems, f"{label}: new_words covers the period of dated_data: the same period, the same layers "
+                 "with the same periods, and every layer's days are those of dated_data, one by one, with the same posts",
+                 "; ".join(problems[:5]))
+
+
+DAILY_STABLE_ROW_FIELDS = ["n_posts", "too_few_posts", "n_in_any_drawer", "n_in_no_drawer"]  # do not depend on training
+
+
+def stable_daily(brief):
+    """The parts of the daily section that do not depend on training, or None when there is no daily section."""
+    daily = as_dict(brief).get("daily") if isinstance(brief, dict) else None
+    if not isinstance(daily, dict) or not daily:
+        return None
+
+    def part(row):
+        row = as_dict(row)
+        return {**{key: row.get(key) for key in ["date"] + DAILY_STABLE_ROW_FIELDS if key in row},
+                "drawers": {drawer: {key: as_dict(pile).get(key) for key in ("n_posts", "too_few_posts")}
+                            for drawer, pile in as_dict(row.get("drawers")).items()}}
+
+    calibration = as_dict(daily.get("calibration"))
+    return {
+        "settings": {key: daily.get(key) for key in ("date_from", "date_to", "min_posts", "emotion_classes", "drawer_ids",
+                                                     "word_list_version")},
+        "scoring": {key: as_dict(daily.get("scoring")).get(key) for key in ("n_scored", "n_distinct_clean_texts")},
+        "calibration": {"subset": as_dict(calibration.get("rates_from")).get("subset"),
+                        "rate_posts": calibration.get("rate_posts")},
+        "layers": {name: {"period": (as_dict(layer).get("date_from"), as_dict(layer).get("date_to")),
+                          "overall": part(as_dict(layer).get("overall")),
+                          "days": [part(day) for day in as_dict(layer).get("days") or []]}
+                   for name, layer in as_dict(daily.get("layers")).items()},
+        "events": [{"date": as_dict(item).get("date"),
+                    "layers": {name: {key: as_dict(entry).get(key) for key in ("in_period", "n_posts", "new_words")}
+                               for name, entry in as_dict(as_dict(item).get("layers")).items()}}
+                   for item in as_dict(daily.get("events")).get("items") or []],
+    }
+
+
+def compare_daily(report, first, again):
+    """Two runs with the default switches: identical new_words sections, and the same daily counts that do not depend
+    on training (posts, drawer posts, any and no drawer, too-few marks, the event days in and out of the periods)."""
+    left, right = as_dict(as_dict(first).get("new_words")), as_dict(as_dict(again).get("new_words"))
+    report.check(bool(left) and left == right, "default switches run twice: the two new_words sections are identical",
+                 "" if left == right else "differing parts: " + ", ".join(key for key in left if left.get(key) != right.get(key)))
+    left, right = stable_daily(first), stable_daily(again)
+    report.check(left is not None and left == right,
+                 "default switches run twice: the daily sections agree on everything that does not depend on training "
+                 "(every layer's and day's posts, posts in every drawer, in any drawer and in none, the too-few marks, the "
+                 "calibration's test subset and test posts, the event days in and out of the periods, their posts and "
+                 "new words)", "" if left == right or left is None or right is None else
+                 "differing parts: " + ", ".join(key for key in left if left[key] != right[key]))
+
+
+def make_spike_copy():
+    """A copy of the tweet sample with made-up words added: on SPIKE_DAY, SPIKE_POSTS posts get each word; the rising
+    word is also in SPIKE_BEFORE post a day on the NEW_WORD_WINDOW days before. Returns (path, what was added)."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from datetime import date, timedelta
+
+    table = pq.read_table(REPO_DIR / DATED_TWEETS_SAMPLE)
+    frame = table.to_pandas()
+    times = pd.to_datetime(frame["timestamp"], format="ISO8601", utc=True, errors="coerce")
+    days = times.dt.strftime("%Y-%m-%d")
+    texts = frame["tweet"].map(dated_mask)
+    kept = (times.notna() & (frame["language"] == "en") & (days >= DATED_SWITCH_DEFAULTS["DATED_START"])
+            & texts.map(lambda text: DATED_BTC.search(text) is not None)
+            & ~frame.duplicated(["timestamp", "tweet"], keep=False))  # posts the notebook keeps, each once
+
+    def rows_on(day):
+        return list(frame.index[kept & (days == day)])
+
+    tweets = frame["tweet"].astype(object).copy()
+    added = {key: {} for key in SPIKE_WORDS}
+    on_day = rows_on(SPIKE_DAY)
+    start = 0
+    for key, word in SPIKE_WORDS.items():
+        chosen = on_day[start:start + SPIKE_POSTS[key]]
+        if len(chosen) != SPIKE_POSTS[key]:
+            raise ValueError(f"the tweet sample has too few posts on {SPIKE_DAY} for the spike run")
+        for row in chosen:
+            tweets[row] = f"{tweets[row]} {word}"
+        added[key][SPIKE_DAY] = len(chosen)
+        start += SPIKE_POSTS[key]
+    for offset in range(1, SPIKE_SETTINGS["NEW_WORD_WINDOW"] + 1):
+        day = (date.fromisoformat(SPIKE_DAY) - timedelta(days=offset)).isoformat()
+        chosen = rows_on(day)[:SPIKE_BEFORE]
+        if len(chosen) != SPIKE_BEFORE:
+            raise ValueError(f"the tweet sample has too few posts on {day} for the spike run")
+        for row in chosen:
+            tweets[row] = f"{tweets[row]} {SPIKE_WORDS['rising']}"
+        added["rising"][day] = len(chosen)
+    shutil.rmtree(SPIKE_DIR, ignore_errors=True)
+    SPIKE_DIR.mkdir(parents=True)
+    path = SPIKE_DIR / "tweets.parquet"
+    position = table.schema.get_field_index("tweet")
+    pq.write_table(table.set_column(position, table.schema.field("tweet"),
+                                    pa.array(tweets.tolist(), type=table.schema.field("tweet").type)), path)
+    return path, added
+
+
+def spike_run(report, defaults, overrides, rules=None, built_in=None):
+    """The notebook on a copy of the tweet sample with made-up words: a word new on SPIKE_DAY (never seen before), a
+    word rising on SPIKE_DAY (a little on the days before), and a word one post short of NEW_WORD_MIN_COUNT. The first
+    two must be reported on SPIKE_DAY with example posts that contain them, the third never; the first on no other day,
+    the second on no day before."""
+    try:
+        path, added = make_spike_copy()
+    except ValueError as exc:
+        report.check(False, f"{SPIKE_LABEL}: copy of the tweet sample with made-up words", str(exc))
+        return
+    report.info(f"{SPIKE_LABEL}: words added to {shown(path)} (word: posts per day): "
+                + "; ".join(f"{SPIKE_WORDS[key]}: {added[key]}" for key in SPIKE_WORDS))
+    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE, **DATED_SAMPLE_SETTINGS,
+                  "WORK_DIR": "data/checks/quick-spike", **overrides, **SPIKE_SETTINGS,
+                  "DATED_TWEETS_SOURCE": shown(path)}
+    parameters = panel_settings(report, SPIKE_LABEL, parameters, overrides)
+    switches = {**defaults, **parameters}
+    report.info(f"{SPIKE_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
+    kept = [name for name in list(SPIKE_SETTINGS) + ["DATED_TWEETS_SOURCE"] if name in overrides]
+    if kept:
+        report.info(f"{SPIKE_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
+    brief_path.unlink(missing_ok=True)  # a stale brief must never pass
+    ok, _, _ = run_notebook(report, SPIKE_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    brief = read_brief(report, SPIKE_LABEL, brief_path) if ok else None
+    if brief is None:
+        return
+    check_dated_data(report, SPIKE_LABEL, brief, switches)
+    check_daily(report, SPIKE_LABEL, brief, switches)
+    check_new_words(report, SPIKE_LABEL, brief, switches)
+    check_format(report, SPIKE_LABEL, brief, rules)
+    reported = {}  # word -> {day: (posts, ratio, example texts)}
+    for name, layer in as_dict(as_dict(brief.get("new_words")).get("layers")).items():
+        for day in as_dict(layer).get("days") or []:
+            for item in as_dict(day).get("new_words") or []:
+                item = as_dict(item)
+                if item.get("word") in SPIKE_WORDS.values():
+                    reported.setdefault(item["word"], {})[f"{name} {as_dict(day).get('date')}"] = (
+                        item.get("n_posts"), item.get("ratio"), [as_dict(quote).get("text") for quote in item.get("quotes") or []])
+    sudden, rising, short = (SPIKE_WORDS[key] for key in ("sudden", "rising", "short"))
+    on_day = f"retail {SPIKE_DAY}"
+    found = {word: reported.get(word, {}) for word in SPIKE_WORDS.values()}
+    sudden_ok = list(found[sudden]) == [on_day] and found[sudden][on_day][1] is None \
+        and all(sudden in text for text in found[sudden][on_day][2])
+    rising_ok = on_day in found[rising] and all(key >= on_day for key in found[rising] if key.startswith("retail ")) \
+        and all(not key.startswith("media ") for key in found[rising]) \
+        and all(rising in text for text in found[rising][on_day][2])
+    report.check(sudden_ok and rising_ok and not found[short],
+                 f"{SPIKE_LABEL}: on {SPIKE_DAY} the new words of the retail layer contain {sudden} (in "
+                 f"{SPIKE_POSTS['sudden']} posts, never before: ratio null) and {rising} (in {SPIKE_POSTS['rising']} posts, "
+                 f"{SPIKE_BEFORE} a day before), each with example posts that contain it; {sudden} on no other day, "
+                 f"{rising} on no day before, and {short} (in {SPIKE_POSTS['short']} posts, one below "
+                 f"NEW_WORD_MIN_COUNT {SPIKE_SETTINGS['NEW_WORD_MIN_COUNT']}) on no day",
+                 "; ".join(f"{word}: " + (", ".join(f"{key} posts {value[0]} ratio {value[1]}" for key, value in days.items())
+                                          or "not reported") for word, days in found.items()))
+    shutil.rmtree(SPIKE_DIR, ignore_errors=True)
+
+
+def daily_lines(executed):
+    """The [daily] lines of an executed notebook (how long the steps of chapter 13 took)."""
+    lines = []
+    if executed.exists():
+        for cell in json.loads(executed.read_text(encoding="utf-8"))["cells"]:
+            for out in cell.get("outputs", []):
+                text = out.get("text", "")
+                lines += [line for line in ("".join(text) if isinstance(text, list) else text).splitlines()
+                          if line.startswith("[daily]")]
+    return lines
+
+
+def print_daily(brief):
+    """Print chapter 13's numbers (full run): shares per day, too-few days, the rates, emotions, drawers, event days."""
+    import statistics
+    daily = as_dict(brief.get("daily"))
+    if not daily:
+        return
+    calibration = as_dict(daily.get("calibration"))
+    print("\nDay by day (full run)")
+    print(f"  scoring:                       {daily.get('scoring')}")
+    print(f"  too few below:                 {daily.get('min_posts')} posts")
+    print(f"  calibration:                   status {calibration.get('status')}; rates from "
+          f"{as_dict(calibration.get('rates_from')).get('model')} / {as_dict(calibration.get('rates_from')).get('subset')} "
+          f"(test posts {calibration.get('rate_posts')}); true bullish rate {calibration.get('true_bullish_rate')}, false "
+          f"bullish rate {calibration.get('false_bullish_rate')}, gap {calibration.get('rate_gap')}")
+    classes = daily.get("emotion_classes") or []
+    for name, layer in as_dict(daily.get("layers")).items():
+        days = layer.get("days") or []
+        print(f"  layer {name}: {layer.get('date_from')} to {layer.get('date_to')} ({len(days)} days)")
+        for field, title in [("half_bullish_share", "counted"), ("calibrated_bullish_share", "calibrated")]:
+            values = [day[field] for day in days if day.get(field) is not None]
+            low = min(values, default=None)
+            high = max(values, default=None)
+            print(f"    {title:10} share: {len(values)} days with a share; lowest {low} on "
+                  f"{[day['date'] for day in days if day.get(field) == low][:3] if values else '-'}, median "
+                  f"{statistics.median(values) if values else None}, highest {high} on "
+                  f"{[day['date'] for day in days if day.get(field) == high][:3] if values else '-'}")
+        print(f"    days too few: {sum(bool(day.get('too_few_posts')) for day in days)} (of them without posts: "
+              f"{sum(day.get('n_posts') == 0 for day in days)})")
+        overall = as_dict(layer.get("overall"))
+        print(f"    whole period: {overall.get('n_posts')} posts, at 0.5 {overall.get('half_counts')}, counted "
+              f"{overall.get('half_bullish_share')}, calibrated {overall.get('calibrated_bullish_share')}")
+        n = overall.get("n_posts") or 0
+        print("    emotions over the whole period: " + ", ".join(
+            f"{label} {as_dict(overall.get('emotion_counts')).get(label)} ({as_dict(overall.get('emotion_counts')).get(label, 0) / n:.3f})"
+            for label in classes) if n else "    emotions: no posts")
+        for label in classes:
+            shares = [day["emotion_counts"][label] / day["n_posts"] for day in days if day.get("n_posts")]
+            print(f"      {label:12} share per day with posts: lowest {min(shares, default=0):.3f}, median "
+                  f"{statistics.median(shares) if shares else 0:.3f}, highest {max(shares, default=0):.3f}")
+        print(f"    drawers over the whole period (any {overall.get('n_in_any_drawer')}, none {overall.get('n_in_no_drawer')}):")
+        for drawer, pile in as_dict(overall.get("drawers")).items():
+            shares = [as_dict(day["drawers"]).get(drawer, {}).get("n_posts", 0) / day["n_posts"] for day in days
+                      if day.get("n_posts")]
+            calibrated = [as_dict(day["drawers"]).get(drawer, {}).get("calibrated_bullish_share") for day in days]
+            calibrated = [value for value in calibrated if value is not None]
+            print(f"      {drawer:16} {pile.get('n_posts'):>8} posts ({pile.get('n_posts', 0) / n if n else 0:.3f}); "
+                  f"counted {pile.get('half_bullish_share')}, calibrated {pile.get('calibrated_bullish_share')}; share of "
+                  f"the day's posts: median {statistics.median(shares) if shares else 0:.3f}, highest "
+                  f"{max(shares, default=0):.3f}; days with a calibrated share {len(calibrated)}"
+                  + (f" (lowest {min(calibrated):.3f}, highest {max(calibrated):.3f})" if calibrated else ""))
+    print("  event days:")
+    for item in as_dict(daily.get("events")).get("items") or []:
+        for name, entry in as_dict(item.get("layers")).items():
+            if not entry.get("in_period"):
+                print(f"    {item.get('date')} {name}: not in this layer's period")
+                continue
+            print(f"    {item.get('date')} {name}: {entry.get('n_posts')} posts; new words: "
+                  f"{', '.join(entry.get('new_words') or []) or '(none)'}")
+            for side in ("bullish", "bearish"):
+                for quote in entry.get(side) or []:
+                    print(f"      [{side} {quote.get('bullish_probability'):.3f}] {quote.get('text')}")
+
+
+def print_new_words(brief):
+    """Print every new word, one line per layer and day with new words (full run)."""
+    section = as_dict(brief.get("new_words"))
+    if not section:
+        return
+    print("\nNew words (full run)")
+    print(f"  rules: {section.get('window_days')} days before, at least {section.get('min_count')} posts, at least "
+          f"{section.get('ratio')} x the past daily mean, at most {section.get('max_per_day')} a day")
+    for name, layer in as_dict(section.get("layers")).items():
+        print(f"  layer {name}: {layer.get('n_days_judged')} days judged, {layer.get('n_days_with_new_words')} with new "
+              f"words, {layer.get('n_new_words')} new words; days without new words: "
+              f"{len(layer.get('days') or []) - layer.get('n_days_with_new_words', 0)}")
+    print("  every new word, day by day (date layer: word (posts / past daily mean / ratio)):")
+    for name, layer in as_dict(section.get("layers")).items():
+        for day in layer.get("days") or []:
+            if day.get("new_words"):
+                print(f"    {day.get('date')} {name}: " + ", ".join(
+                    f"{item['word']} ({item['n_posts']} / {item['past_daily_mean']:.2f} / "
+                    f"{'null' if item['ratio'] is None else round(item['ratio'], 2)})" for item in day["new_words"]))
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -4423,6 +5128,8 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             check_drawers(report, label, brief, switches, built_in)
             check_emotions(report, label, brief, switches)
             check_dated_data(report, label, brief, switches, quick_default=not flipped)
+            check_daily(report, label, brief, switches)
+            check_new_words(report, label, brief, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -4435,7 +5142,9 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     compare_drawers(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_emotions(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_dated(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL), briefs.get("other switches"))
+    compare_daily(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
+    spike_run(report, defaults, overrides, rules, built_in)
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
@@ -4470,7 +5179,11 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     check_drawers(report, "full run", brief, switches, built_in)
     check_emotions(report, "full run", brief, switches, full_run=True)
     check_dated_data(report, "full run", brief, switches)
+    check_daily(report, "full run", brief, switches)
+    check_new_words(report, "full run", brief, switches)
+    format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
+    format_seconds = time.perf_counter() - format_started
     check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     check_panel(report, "full run", brief_path, brief)
     dataset = brief.get("dataset") or {}
@@ -4495,6 +5208,13 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     print_drawers(brief)
     print_emotions(brief)
     print_dated(brief, brief_path)
+    print_daily(brief)
+    print_new_words(brief)
+    print("\nTimes (full run)")
+    for line in daily_lines(REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb"):
+        print(f"  {line}")
+    print(f"  format check of the brief:     {format_seconds:.1f} s (the check the notebook runs before saving)")
+    print(f"  brief file size:               {brief_path.stat().st_size:,} bytes")
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
@@ -4534,6 +5254,7 @@ def main():
     check_dated_shape(report)
     check_dated_chapter(report)
     check_dated_probes(report)
+    check_daily_switches(report, defaults, others)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
