@@ -24,12 +24,21 @@ quick: static checks, then the notebook runs three times on the bundled
        only talks to a loopback address, that it reads the sample like
        chapter 1, and its labelling loop driven by a fake model; the label
        files and the review table in the repository are checked statically.
+       The emotion chapter (11) reads the sample's pre-labels in every run;
+       its emotions section is checked in every brief and compared between
+       the two default runs. Before any run, its switches, its explanation
+       and its reading cells are checked, the latter on the sample with
+       counterexamples (a changed fingerprint, the full pre-labels with the
+       sample, a missing file) and a hand-written review table.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
        comparison. The drawers are checked and printed as well. The full
        emotion label file is compared with the full dataset (ids and text
-       fingerprints) and its rows per label are printed.
+       fingerprints) and its rows per label are printed. The emotion chapter
+       reads the full pre-labels; every emotion network must beat both
+       baselines, and its numbers, emotions per group and example posts are
+       printed.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -1205,7 +1214,8 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     table = as_dict(as_dict(default_brief).get("topics")).get("n_posts")
     settings = {**THRESHOLD_SETTINGS, "MIN_TOPIC_POSTS": table + 1 if is_count(table) else 10 ** 9}
     settings["MIN_BULLISH_BEARISH_POSTS"] = settings["MIN_TOPIC_POSTS"]  # above every row's bullish + bearish posts
-    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
+    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
+                  "WORK_DIR": "data/checks/quick-thresholds", **overrides, **settings}
     parameters = panel_settings(report, THRESHOLD_LABEL, parameters, overrides)
     switches = {**defaults, **parameters}
     report.info(f"{THRESHOLD_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
@@ -1221,6 +1231,7 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     check_why(report, THRESHOLD_LABEL, brief, switches)
     check_calibration(report, THRESHOLD_LABEL, brief, switches)
     check_drawers(report, THRESHOLD_LABEL, brief, switches, built_in)
+    check_emotions(report, THRESHOLD_LABEL, brief, switches)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -2297,6 +2308,19 @@ BROKEN_BRIEFS = [
     ("3 wrong type", ("drawers", "memberships_per_post"), lambda old: [], "drawers.memberships_per_post", "object"),
     ("6 null not allowed, or an unknown field", ("drawers", "drawers", 0, "n_posts"), lambda old: None,
      "drawers.drawers[0].n_posts", "None"),
+    ("2 required field missing in a section", ("emotions", "evaluation"), DELETE, "emotions", "evaluation"),
+    ("2 required field missing in a section", ("emotions", "overall", "quotes"), DELETE, "emotions.overall", "quotes"),
+    ("2 required field missing in a section", ("emotions", "human_review", "by_prelabel", "panic"), DELETE,
+     "emotions.human_review.by_prelabel", "panic"),
+    ("3 wrong type", ("emotions", "classes"), lambda old: {}, "emotions.classes", "array"),
+    ("3 wrong type", ("emotions", "n_posts"), lambda old: 1.5, "emotions.n_posts", "integer"),
+    ("3 wrong type", ("emotions", "keep_none"), lambda old: "true", "emotions.keep_none", "boolean"),
+    ("5 NaN or infinity", ("emotions", "evaluation", "rows", 0, "macro_f1"), lambda old: NAN,
+     "emotions.evaluation.rows[0].macro_f1", "nan"),
+    ("6 null not allowed, or an unknown field", ("emotions", "n_posts"), lambda old: None, "emotions.n_posts", "None"),
+    ("6 null not allowed, or an unknown field", ("emotions", "labels_file", "n_matched"), lambda old: None,
+     "emotions.labels_file.n_matched", "None"),
+    ("6 null not allowed, or an unknown field", ("emotions", "extra_field"), lambda old: 1, "emotions", "extra_field"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2308,6 +2332,9 @@ NULL_ALLOWED = [
     ("why", "overall", "fair", "calibrated_minus_label_pp"),
     ("drawers", "share_in_any_drawer"),
     ("why", "drawers", 0, "label_vs_overall_pp"),
+    ("emotions", "evaluation", "rows", 0, "macro_f1"),
+    ("emotions", "human_review", "agreement"),
+    ("emotions", "selection", "validation_macro_f1", "count_network"),
 ]
 
 
@@ -3084,6 +3111,685 @@ def check_prelabel_full(report, switches):
               f"   {by_label_btc[(label, 'other')]:5d}")
 
 
+# ---------------------------------------------------------------- emotions (chapter 11)
+# Chapter 11 learns the emotions of the pre-label files (silver labels) and gives every topic post an emotion. The
+# checks always read the pre-labels from the repository (the sample's with the sample, the full file with the full
+# dataset) and never from the default web address.
+
+EMOTION_SWITCHES = ["EMOTION_LABELS_SOURCE", "EMOTION_NAMES", "EMOTION_KEEP_NONE", "EMOTION_MIN_CLASS_POSTS",
+                    "EMOTION_REVIEW_SOURCE"]
+EMOTION_DEFAULT_SOURCE = ("https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/"
+                          "labels/emotions-prelabel-v1.csv")  # the default of EMOTION_LABELS_SOURCE; never read by a check
+EMOTION_EIGHT = EMOTION_LABELS[:8]  # the emotions EMOTION_NAMES may list (none is EMOTION_KEEP_NONE's)
+EMOTION_DROP_STEPS = ["unparsed", "none", "not_in_emotion_names", "too_few_posts"]  # in this order
+EMOTION_QUOTES_OVERALL, EMOTION_QUOTES_PER_GROUP = 3, 1  # example posts per class: all topic posts; other groups
+EMOTION_PROBE_DIR = REPO_DIR / "data" / "checks" / "emotion-probe"
+SILVER_WORDS = ("silver labels", "\u94f6\u6807\u7b7e")  # English and Chinese, in the chapter's explanation cells
+# Locked (only add): switch values the switch check cell must accept (True) or stop at (False).
+EMOTION_SWITCH_PROBES = [
+    ({}, True),
+    ({"EMOTION_NAMES": ["greed"]}, True),
+    ({"EMOTION_NAMES": ["confidence", "panic"]}, True),
+    ({"EMOTION_MIN_CLASS_POSTS": 25}, True),
+    ({"EMOTION_REVIEW_SOURCE": "labels/emotions-review-template.csv"}, True),
+    ({"EMOTION_NAMES": []}, False),
+    ({"EMOTION_NAMES": ["panic", "panic"]}, False),
+    ({"EMOTION_NAMES": ["panic", "joy"]}, False),
+    ({"EMOTION_NAMES": ["panic", "none"]}, False),
+    ({"EMOTION_NAMES": "panic"}, False),
+    ({"EMOTION_MIN_CLASS_POSTS": 9}, False),
+    ({"EMOTION_MIN_CLASS_POSTS": 10.0}, False),
+    ({"EMOTION_MIN_CLASS_POSTS": True}, False),
+    ({"EMOTION_KEEP_NONE": "yes"}, False),
+    ({"EMOTION_LABELS_SOURCE": ""}, False),
+    ({"EMOTION_LABELS_SOURCE": 5}, False),
+    ({"EMOTION_REVIEW_SOURCE": None}, False),
+]
+# Locked: a hand-written review table (post_id, prelabel, human_label) and what emotion_review_agreement must give.
+EMOTION_REVIEW_PROBE = [
+    ("probe:2", "panic", "panic"),
+    ("probe:3", "panic", "greed"),
+    ("probe:4", "panic", ""),
+    ("probe:5", "none", " NONE "),  # spaces around it and case are ignored
+    ("probe:6", "anger", ""),
+    ("probe:7", "mockery", "mockery"),
+    ("probe:8", "despair", "panic"),
+]
+EMOTION_REVIEW_EXPECTED = {
+    "n_reviewed": 5, "agreement": 0.6,
+    "by_prelabel": {**{label: {"n_reviewed": 0, "agreement": None} for label in EMOTION_LABELS},
+                    "panic": {"n_reviewed": 2, "agreement": 0.5}, "none": {"n_reviewed": 1, "agreement": 1.0},
+                    "mockery": {"n_reviewed": 1, "agreement": 1.0}, "despair": {"n_reviewed": 1, "agreement": 0.0}},
+}
+
+
+def run_cells(names, namespace):
+    """Execute, in order, the code cells that define names; returns the problems (empty when every cell ran)."""
+    problems = []
+    for name in names:
+        source = cell_defining(name)
+        if source is None:
+            problems.append(f"no cell defines {name}")
+            continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, f"cell defining {name}", "exec"), namespace)
+        except Exception as exc:  # the cell stopped; the caller decides whether that was expected
+            problems.append(f"cell defining {name}: {type(exc).__name__}: {exc}")
+    return problems
+
+
+def check_emotion_switches(report, defaults, others):
+    """The five switches of chapter 11 with their defaults, and the switch check cell on good and bad values."""
+    absent = [name for name in EMOTION_SWITCHES if name not in defaults]
+    expected = {"EMOTION_LABELS_SOURCE": EMOTION_DEFAULT_SOURCE, "EMOTION_NAMES": EMOTION_EIGHT,
+                "EMOTION_KEEP_NONE": True, "EMOTION_MIN_CLASS_POSTS": 10, "EMOTION_REVIEW_SOURCE": ""}
+    wrong = [f"{name}={defaults.get(name)!r}" for name, value in expected.items() if defaults.get(name) != value]
+    two_state = sorted(set(EMOTION_SWITCHES) & set(others))
+    report.check(not absent and not wrong and two_state == ["EMOTION_KEEP_NONE"] and others.get("EMOTION_KEEP_NONE") is False,
+                 "switches of the emotion chapter are present with their defaults (the GitHub address of the full "
+                 "pre-label file, the eight emotions in order, none kept, at least 10 posts per class, no review "
+                 "table); EMOTION_KEEP_NONE is the only two-state one, other value False",
+                 f"missing {absent}; other defaults {wrong}; two-state {two_state}")
+
+    wrong = []
+    for overrides, accepted in EMOTION_SWITCH_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace.update(overrides)
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{overrides} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and any(name in stopped[0] for name in overrides)):
+            wrong.append(f"{overrides} not refused with its name: {problems[:1]}")
+    report.check(not wrong, f"the switch check cell accepts good emotion switches and stops at bad ones with the "
+                 f"switch's name ({len(EMOTION_SWITCH_PROBES)} cases: EMOTION_NAMES empty, repeated, unknown, none or not "
+                 "a list; EMOTION_MIN_CLASS_POSTS below 10 or not an integer; EMOTION_KEEP_NONE not a boolean; an empty "
+                 "or non-text source)", "; ".join(wrong[:3]))
+
+
+def chapter_cells():
+    """{chapter number: [cells]} of the notebook source, a chapter starting at its '## <n>. ' heading."""
+    chapters, current = {}, None
+    for cell in jupytext.read(SOURCE, fmt="py:percent").cells:
+        heading = re.match(r"## ([0-9]+)\. ", cell.source) if cell.cell_type == "markdown" else None
+        if heading:
+            current = int(heading.group(1))
+            chapters.setdefault(current, [])
+        if current is not None:
+            chapters[current].append(cell)
+    return chapters
+
+
+def check_emotion_chapter(report):
+    """Chapter numbers 0 to 12 in order with the brief last; chapter 11 explains silver labels in both languages and
+    reads nothing but its two sources."""
+    notebook = jupytext.read(SOURCE, fmt="py:percent")
+    numbers = [int(match.group(1)) for cell in notebook.cells if cell.cell_type == "markdown"
+               for match in [re.match(r"## ([0-9]+)\. ", cell.source)] if match]
+    chapters = chapter_cells()
+    heading = {number: cells[0].source.splitlines()[0] for number, cells in chapters.items()}
+    report.check(numbers == list(range(13)) and heading.get(11, "").startswith("## 11. Emotions")
+                 and heading.get(12, "").startswith("## 12. The brief"),
+                 "chapters 0 to 12 in order: chapter 11 is the emotions chapter, chapter 12 the brief, which stays last",
+                 f"chapter headings {numbers}; 11: {heading.get(11)!r}; 12: {heading.get(12)!r}")
+
+    explained = []
+    for cell in chapters.get(11, []):
+        if cell.cell_type != "markdown" or "***" not in cell.source.splitlines():
+            continue
+        lines = cell.source.splitlines()
+        english, chinese = "\n".join(lines[:lines.index("***")]), "\n".join(lines[lines.index("***") + 1:])
+        explained.append(SILVER_WORDS[0] in english.lower() and SILVER_WORDS[1] in chinese)
+    report.check(any(explained), "chapter 11 says in an explanation cell that its labels are silver labels (English "
+                 "part) and \u94f6\u6807\u7b7e (Chinese part)", f"{sum(explained)} of {len(explained)} explanation cells")
+
+    code = "\n".join(cell.source for cell in chapters.get(11, []) if cell.cell_type == "code")
+    tree = ast.parse(code)
+    addresses = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                 and "://" in node.value]
+    imports = sorted({alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                      for alias in (node.names if isinstance(node, ast.Import) else [ast.alias(node.module or "")])}
+                     & {"urllib", "requests", "http", "socket", "httpx", "urllib3", "aiohttp"})
+    reads = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr.startswith("read_")]
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+             and node.func.id == "read_emotion_table"]
+    sources = sorted({ast.unparse(node.args[0]) for node in calls if node.args})
+    report.check(not addresses and not imports and [ast.unparse(node.func) for node in reads] == ["pd.read_csv"]
+                 and sources == ["EMOTION_LABELS_SOURCE", "EMOTION_REVIEW_SOURCE"],
+                 "chapter 11 reads only EMOTION_LABELS_SOURCE and EMOTION_REVIEW_SOURCE (through read_emotion_table, "
+                 "its only pd.read_csv), holds no web address and imports no network package",
+                 f"addresses {addresses}; network imports {imports}; read calls {[ast.unparse(node.func) for node in reads]}; "
+                 f"read_emotion_table sources {sources}")
+
+
+def check_emotion_probes(report):
+    """The cells that read and check the pre-labels, on the sample: the sample's labels fit; a changed fingerprint,
+    the full file and an unknown emotion stop with 'not the same set'; a missing file stops with its path and what to
+    do; and the review cell's agreement on a hand-written table (all locked)."""
+    import pandas as pd
+    import numpy as np
+
+    shutil.rmtree(EMOTION_PROBE_DIR, ignore_errors=True)
+    EMOTION_PROBE_DIR.mkdir(parents=True)
+    base = {"__name__": "notebook_cells", "brief": {}, "pd": pd, "np": np}
+    problems = run_cells(["LABEL_NAMES", "read_posts"], base)
+    if not report.check(not problems, "emotion probes: chapter 1's read_posts loads from the notebook source",
+                        "; ".join(problems)):
+        return
+    posts = base["read_posts"](str(REPO_DIR / SAMPLE_SOURCE))[["post_id", "text", "label"]]
+
+    def read(source):
+        """Run the two reading cells on the sample with EMOTION_LABELS_SOURCE = source: (namespace, problems)."""
+        namespace = {**base, "df_all": posts.copy(), "brief": {}, "DATA_SOURCE": SAMPLE_SOURCE,
+                     "EMOTION_LABELS_SOURCE": source}
+        return namespace, run_cells(["read_emotion_table", "emotion_labels"], namespace)
+
+    namespace, problems = read(PRELABEL_SAMPLE_FILE)
+    labels_file = as_dict(as_dict(namespace["brief"].get("emotions")).get("labels_file"))
+    rows = len(read_csv_file(REPO_DIR / PRELABEL_SAMPLE_FILE)[1])
+    report.check(not problems and labels_file.get("n_rows") == rows and labels_file.get("n_matched") == rows
+                 and sum(as_dict(labels_file.get("label_counts")).values()) == rows,
+                 f"emotion probes: the sample's pre-labels ({PRELABEL_SAMPLE_FILE}) fit the sample: every row matches "
+                 "a post by id and text fingerprint", f"{problems[:1]}; labels file {labels_file}")
+
+    header, sample_rows, _ = read_csv_file(REPO_DIR / PRELABEL_SAMPLE_FILE)
+    changed = [list(item) for item in sample_rows]
+    changed[3][4] = "0" * 8 if changed[3][4] != "0" * 8 else "f" * 8  # one text fingerprint changed
+    unknown = [list(item) for item in sample_rows]
+    unknown[5][1] = "joy"  # an emotion that is not one of the nine labels
+    cases = []
+    for name, file_rows in (("changed-fingerprint", changed), ("unknown-emotion", unknown)):
+        path = EMOTION_PROBE_DIR / f"{name}.csv"
+        path.write_text("".join(prelabel.row_line(item) for item in [header] + file_rows), encoding="utf-8")
+        cases.append((name, str(path.relative_to(REPO_DIR)), changed[3][0] if name == "changed-fingerprint" else "joy"))
+    cases.append(("full pre-labels with the sample", PRELABEL_FULL_FILE, "ids are not posts of this data source"))
+    wrong = []
+    for name, source, detail in cases:
+        _, problems = read(source)
+        stop = problems[0] if problems else ""
+        if not (stop.startswith("cell defining emotion_labels: ValueError") and "not the same set" in stop
+                and source in stop and detail in stop):
+            wrong.append(f"{name}: {stop[:200] or 'not stopped'}")
+        report.info(f"emotion probe {name}: {stop[:260] or 'NOT stopped'}")
+    report.check(not wrong, "emotion probes: a pre-label file with a changed text fingerprint, with an unknown emotion, "
+                 "and the full pre-label file read with the sample all stop the notebook, saying that the label file "
+                 "and the data source are not the same set", "; ".join(wrong))
+
+    missing = str((EMOTION_PROBE_DIR / "no-such-prelabels.csv").relative_to(REPO_DIR))
+    _, problems = read(missing)
+    stop = problems[0] if problems else ""
+    report.info(f"emotion probe missing file: {stop[:400] or 'NOT stopped'}")
+    report.check(stop.startswith("cell defining emotion_labels: FileNotFoundError")
+                 and all(part in stop for part in ("EMOTION_LABELS_SOURCE", missing, "GitHub", "pushed",
+                                                   "labels/emotions-prelabel-v1.csv")),
+                 "emotion probes: a pre-label file that cannot be read stops the notebook with its path, says that the "
+                 "default address can be read only after the file has been pushed to GitHub, and names the local copy "
+                 "labels/emotions-prelabel-v1.csv", stop[:300])
+
+    # The review table: a hand-written table through EMOTION_REVIEW_SOURCE, no table, and a table that cannot be read.
+    review = EMOTION_PROBE_DIR / "review.csv"
+    with review.open("w", encoding="utf-8", newline="") as handle:
+        csv.writer(handle, lineterminator="\n").writerows([REVIEW_TEMPLATE_COLUMNS] + [list(row) for row in EMOTION_REVIEW_PROBE])
+    results, wrong = {}, []
+    for name, source in (("filled-in table", str(review.relative_to(REPO_DIR))), ("no table", ""),
+                         ("missing table", str((EMOTION_PROBE_DIR / "no-such-review.csv").relative_to(REPO_DIR)))):
+        namespace, problems = read(PRELABEL_SAMPLE_FILE)
+        namespace["EMOTION_REVIEW_SOURCE"] = source
+        problems += run_cells(["emotion_review_agreement"], namespace)
+        results[name] = (as_dict(namespace["brief"].get("emotions")).get("human_review"), problems)
+    expected = {"source": str(review.relative_to(REPO_DIR)), **EMOTION_REVIEW_EXPECTED}
+    got, problems = results["filled-in table"]
+    report.info(f"emotion probe review table {EMOTION_REVIEW_PROBE} -> {json.dumps(got)}")
+    if problems or not isinstance(got, dict) or {key: got.get(key) for key in ("source", "n_reviewed", "by_prelabel")} != \
+            {key: expected[key] for key in ("source", "n_reviewed", "by_prelabel")} \
+            or not same_value(got.get("agreement"), expected["agreement"]):
+        wrong.append(f"filled-in table: {problems[:1]} {got}")
+    got, problems = results["no table"]
+    if problems or got != {"source": "", "n_reviewed": 0, "agreement": None,
+                           "by_prelabel": {label: {"n_reviewed": 0, "agreement": None} for label in EMOTION_LABELS}}:
+        wrong.append(f"no table: {problems[:1]} {got}")
+    got, problems = results["missing table"]
+    stop = problems[-1] if problems else ""
+    if not (stop.startswith("cell defining emotion_review_agreement: FileNotFoundError") and "EMOTION_REVIEW_SOURCE" in stop
+            and "no-such-review.csv" in stop):
+        wrong.append(f"missing table: {stop[:200] or 'not stopped'}")
+    report.check(not wrong, "emotion probes: the review cell gives the precomputed agreement for a hand-written table "
+                 f"({len(EMOTION_REVIEW_PROBE)} rows, {EMOTION_REVIEW_EXPECTED['n_reviewed']} filled in, agreement "
+                 f"{EMOTION_REVIEW_EXPECTED['agreement']}, per pre-label), 0 rows and null without a table, and stops "
+                 "with the path when EMOTION_REVIEW_SOURCE cannot be read", "; ".join(wrong))
+    shutil.rmtree(EMOTION_PROBE_DIR, ignore_errors=True)
+
+
+EMOTION_FILE_CACHE = {}
+
+
+def emotion_file_rows(source):
+    """[(post_id, emotion), ...] of the pre-label file a run read, when it is a local file in the label format."""
+    if "://" in source:
+        return None
+    path = Path(source) if Path(source).is_absolute() else REPO_DIR / source
+    if not path.is_file():
+        return None
+    if path not in EMOTION_FILE_CACHE:
+        header, rows, _ = read_csv_file(path)
+        EMOTION_FILE_CACHE[path] = ([(item[0], item[1]) for item in rows if len(item) == len(PRELABEL_COLUMNS)]
+                                    if header == PRELABEL_COLUMNS else None)
+    return EMOTION_FILE_CACHE[path]
+
+
+def first_maximum(probabilities, classes):
+    """The class with the largest probability, the earlier class on a tie (the notebook's argmax)."""
+    values = [probabilities.get(label) for label in classes]
+    if not all(is_number(value) for value in values):
+        return None
+    return classes[values.index(max(values))]
+
+
+def emotion_quote_problems(where, group, classes, limit, emotion_ids, belongs):
+    """Problems of a group's example posts: per class at most the limit and at most the class's posts; the network's
+    call (the largest probability, earlier class on a tie) is the class; probabilities add up to 1; highest first;
+    different posts and texts; not in the emotion data; and in the group (belongs(text))."""
+    problems = []
+    quotes, counts = group.get("quotes"), as_dict(group.get("counts"))
+    if not isinstance(quotes, dict) or sorted(quotes) != sorted(classes) or group.get("quotes_per_class") != limit:
+        return [f"{where}: quotes keyed {sorted(quotes) if isinstance(quotes, dict) else quotes!r}, quotes_per_class "
+                f"{group.get('quotes_per_class')!r} (expected {limit})"]
+    ids, texts = [], []
+    for label in classes:
+        items = quotes[label]
+        if not isinstance(items, list) or len(items) > limit or len(items) > (counts.get(label) or 0):
+            problems.append(f"{where} {label}: {len(items) if isinstance(items, list) else items!r} quotes for "
+                            f"{counts.get(label)!r} posts, limit {limit}")
+            continue
+        previous = None
+        for quote in items:
+            quote = as_dict(quote)
+            probability, probabilities = quote.get("probability"), as_dict(quote.get("probabilities"))
+            post_id, text = quote.get("post_id"), quote.get("text")
+            if not (isinstance(post_id, str) and isinstance(text, str) and is_number(probability) and 0 <= probability <= 1
+                    and sorted(probabilities) == sorted(classes)
+                    and all(is_number(value) and 0 <= value <= 1 for value in probabilities.values())):
+                problems.append(f"{where} {label}: quote {quote!r}")
+                continue
+            if abs(sum(probabilities.values()) - 1) > 1e-4 or first_maximum(probabilities, classes) != label \
+                    or probabilities[label] != probability:
+                problems.append(f"{where} {label}: {post_id} is not called {label} (probabilities {probabilities})")
+            if previous is not None and probability > previous:
+                problems.append(f"{where} {label}: quotes not sorted by probability, highest first")
+            previous = probability
+            if emotion_ids is not None and post_id in emotion_ids:
+                problems.append(f"{where} {label}: {post_id} is in the emotion data")
+            if not belongs(text):
+                problems.append(f"{where} {label}: {post_id} does not belong to the group ({text[:60]!r})")
+            ids.append(post_id)
+            texts.append(text)
+    if len(set(ids)) != len(ids) or len(set(texts)) != len(texts):
+        problems.append(f"{where}: a post or a text is quoted twice")
+    return problems
+
+
+def check_emotions(report, label, brief, switches, full_run=False):
+    """The emotions section: the pre-label file as read, the leave-out steps and classes (recomputed from its label
+    counts), the split, the evaluation and its bar, the emotion calls of the topic posts per group (adding up with
+    the drawers section), the example posts and the review agreement."""
+    emotions = brief.get("emotions")
+    if not report.check(isinstance(emotions, dict) and bool(emotions), f"{label}: emotions section has content"):
+        return
+    topics, drawers = as_dict(brief.get("topics")), as_dict(brief.get("drawers"))
+    source = switches["EMOTION_LABELS_SOURCE"]
+    file_rows = emotion_file_rows(source)
+    if file_rows is None:
+        report.info(f"{label}: {source} is not a local pre-label file; the comparisons with the file are skipped")
+
+    # The pre-label file as read.
+    labels_file = as_dict(emotions.get("labels_file"))
+    counts = counts_of(labels_file.get("label_counts"), EMOTION_LABELS + [PRELABEL_UNPARSED])
+    n_rows = labels_file.get("n_rows")
+    file_counts = None if file_rows is None else per_label(file_rows)
+    report.check(emotions.get("labels_source") == source and "silver labels" in str(emotions.get("label_kind"))
+                 and counts is not None and is_count(n_rows) and sum(counts.values()) == n_rows
+                 and labels_file.get("n_matched") == n_rows
+                 and isinstance(labels_file.get("models"), list) and isinstance(labels_file.get("prompt_versions"), list)
+                 and (file_rows is None or (len(file_rows) == n_rows and counts == file_counts)),
+                 f"{label}: the pre-label file as read: source as set, silver labels named, rows per label adding up to "
+                 "the rows, every row matched, and the same rows per label as the file itself",
+                 f"source {emotions.get('labels_source')!r} (switch {source!r}), {n_rows} rows, matched "
+                 f"{labels_file.get('n_matched')}, per label {labels_file.get('label_counts')}, file {file_counts}")
+    if counts is None or not is_count(n_rows):
+        return
+
+    # The switches, the leave-out steps and the classes, recomputed from the rows per label.
+    names, keep_none, minimum = list(switches["EMOTION_NAMES"]), switches["EMOTION_KEEP_NONE"], switches["EMOTION_MIN_CLASS_POSTS"]
+    report.check(emotions.get("emotion_names") == names and emotions.get("keep_none") is keep_none
+                 and emotions.get("min_class_posts") == minimum,
+                 f"{label}: EMOTION_NAMES, EMOTION_KEEP_NONE and EMOTION_MIN_CLASS_POSTS recorded as set",
+                 f"{emotions.get('emotion_names')}, {emotions.get('keep_none')!r}, {emotions.get('min_class_posts')!r}")
+    not_named = [item for item in EMOTION_EIGHT if item not in names]
+    candidates = names + (["none"] if keep_none else [])
+    too_few = [item for item in candidates if counts[item] < minimum]
+    expected_steps = [("unparsed", [PRELABEL_UNPARSED], counts[PRELABEL_UNPARSED]),
+                      ("none", [] if keep_none else ["none"], 0 if keep_none else counts["none"]),
+                      ("not_in_emotion_names", not_named, sum(counts[item] for item in not_named)),
+                      ("too_few_posts", too_few, sum(counts[item] for item in too_few))]
+    steps = [as_dict(step) for step in emotions.get("dropped") or []]
+    got_steps = [(step.get("step"), step.get("labels"), step.get("n_posts")) for step in steps]
+    classes = emotions.get("classes")
+    expected_classes = [item for item in candidates if item not in too_few]
+    n_posts = emotions.get("n_posts")
+    class_counts = emotions.get("class_counts")
+    report.check(got_steps == expected_steps and all(isinstance(step.get("rule"), str) and step["rule"] for step in steps)
+                 and classes == expected_classes and len(expected_classes) >= 2
+                 and class_counts == {item: counts[item] for item in expected_classes}
+                 and is_count(n_posts) and n_posts == sum(class_counts.values())
+                 and sum(step[2] for step in got_steps if is_count(step[2])) + n_posts == labels_file.get("n_matched"),
+                 f"{label}: the four leave-out steps (unparsed, none, not in EMOTION_NAMES, fewer than "
+                 "EMOTION_MIN_CLASS_POSTS posts) leave out the right labels and posts, and add up with the emotion data "
+                 "to the matched rows; the classes are EMOTION_NAMES in order with none last, minus the classes left out",
+                 f"steps {got_steps} (expected {expected_steps}); classes {classes} (expected {expected_classes}); "
+                 f"{n_posts} posts {class_counts}")
+    report.check(emotions.get("keep_none") is keep_none and (keep_none or ("none" not in (classes or [])
+                                                                          and steps[1:2] and steps[1].get("labels") == ["none"])),
+                 f"{label}: with EMOTION_KEEP_NONE {keep_none} the classes {'may include' if keep_none else 'leave out'} "
+                 "none", f"classes {classes}")
+    if classes != expected_classes or not is_count(n_posts):
+        return
+
+    # The split.
+    split = as_dict(emotions.get("split"))
+    sizes = counts_of(split.get("n_posts"), SPLIT_PARTS)
+    per_part = as_dict(split.get("class_counts"))
+    split_ok = (sizes is not None and sum(sizes.values()) == n_posts and split.get("seed") == switches["RANDOM_SEED"]
+                and split.get("stratified_by") == "emotion"
+                and split.get("fractions") == {"train": 0.8, "validation": 0.1, "test": 0.1})
+    for part in SPLIT_PARTS if split_ok else []:
+        part_counts = counts_of(per_part.get(part), classes)
+        split_ok = split_ok and part_counts is not None and all(count > 0 for count in part_counts.values()) \
+            and sum(part_counts.values()) == sizes[part]
+    split_ok = split_ok and all(sum(per_part[part][item] for part in SPLIT_PARTS) == class_counts[item] for item in classes) \
+        and abs(sizes["train"] - 0.8 * n_posts) <= len(classes) and sizes["train"] > sizes["test"] > 0
+    report.check(split_ok, f"{label}: emotion training, validation and test parts add up to the emotion data, about "
+                 "80/10/10, every class in every part, class by class", f"{split.get('n_posts')} {per_part}")
+    if not split_ok:
+        return
+    n_test, test_counts = sizes["test"], per_part["test"]
+
+    # Vectorizers, networks, training and the choice.
+    vectors = as_dict(emotions.get("vectorizers"))
+    vocab = [as_dict(vectors.get(name)).get("vocab_size") for name in ("count", "tfidf")]
+    report.check(vectors.get("fitted_on_n_posts") == sizes["train"] and vectors.get("vocab_size_requested") == switches["VOCAB_SIZE"]
+                 and all(is_count(size) and 0 < size <= switches["VOCAB_SIZE"] for size in vocab),
+                 f"{label}: both emotion vectorizers learned at most VOCAB_SIZE words from the emotion training part only",
+                 f"fitted on {vectors.get('fitted_on_n_posts')} posts, vocabulary sizes {vocab}")
+    models = emotions.get("models") if isinstance(emotions.get("models"), list) else []
+    training = as_dict(emotions.get("training"))
+    report.check(models == SENTIMENT_MODELS and training.get("epochs") == switches["EPOCHS"]
+                 and training.get("batch_size") == switches["BATCH_SIZE"] and training.get("seed") == switches["RANDOM_SEED"]
+                 and training.get("output_layer") == f"{len(classes)} units, softmax"
+                 and training.get("loss") == "sparse_categorical_crossentropy"
+                 and training.get("target_of_class") == {item: position for position, item in enumerate(classes)}
+                 and sorted(as_dict(training.get("history"))) == sorted(models),
+                 f"{label}: a word-count and a TF-IDF network, one softmax unit per class, EPOCHS, BATCH_SIZE and the seed",
+                 f"models {models}, output {training.get('output_layer')!r}, targets {training.get('target_of_class')}")
+    selection = as_dict(emotions.get("selection"))
+    validation = as_dict(selection.get("validation_macro_f1"))
+    scores = {name: (validation.get(name) if is_number(validation.get(name)) else -1.0) for name in models}
+    report.check(sorted(validation) == sorted(models) and all(is_score(score) for score in validation.values())
+                 and bool(models) and selection.get("selected") == max(models, key=lambda name: scores[name]),
+                 f"{label}: one emotion network chosen by validation macro-F1 (a tie goes to the word-count network), "
+                 "with the validation score of every network",
+                 f"selected {selection.get('selected')!r}, validation {validation}")
+
+    # The evaluation on the emotion test part.
+    evaluation = as_dict(emotions.get("evaluation"))
+    rows = [row for row in evaluation.get("rows") or [] if isinstance(row, dict)]
+    train_counts = per_part["train"]
+    majority = evaluation.get("majority_label")
+    problems = []
+    if [row.get("model") for row in rows] != models + SENTIMENT_BASELINES or evaluation.get("baselines") != SENTIMENT_BASELINES:
+        problems.append(f"rows {[row.get('model') for row in rows]}, baselines {evaluation.get('baselines')}")
+    if majority not in classes or train_counts[majority] != max(train_counts.values()):
+        problems.append(f"majority label {majority!r} is not a most frequent class of the training part {train_counts}")
+    for row in rows:
+        name = row.get("model")
+        per_class = as_dict(row.get("per_class"))
+        if row.get("kind") != ("baseline" if name in SENTIMENT_BASELINES else "model") or row.get("n") != n_test \
+                or sorted(per_class) != sorted(classes):
+            problems.append(f"{name}: kind {row.get('kind')!r}, {row.get('n')} posts (test part {n_test}), classes {sorted(per_class)}")
+            continue
+        supports = {item: as_dict(per_class[item]).get("support") for item in classes}
+        if supports != test_counts:
+            problems.append(f"{name}: supports {supports} are not the test part's classes {test_counts}")
+        values = [row.get("accuracy"), row.get("macro_f1")] + [as_dict(per_class[item]).get(measure) for item in classes
+                                                                for measure in ("precision", "recall", "f1")]
+        if not all(is_score(value) for value in values) or row.get("accuracy") is None or row.get("macro_f1") is None:
+            problems.append(f"{name}: a score is neither a number in [0, 1] nor null (accuracy and macro-F1 are numbers)")
+        if name == "always_majority" and majority in classes and not same_value(row.get("accuracy"), test_counts[majority] / n_test):
+            problems.append(f"always_majority: accuracy {row.get('accuracy')!r} is not the majority class's share of the test part")
+    report.check(bool(rows) and not problems,
+                 f"{label}: the emotion evaluation table has one row per network and per baseline on the emotion test "
+                 "part, class supports equal to the test part's classes, scores in [0, 1] or null, and the majority "
+                 "baseline guessing a most frequent class of the training part", "; ".join(problems[:4]))
+    accuracy = {row.get("model"): row.get("accuracy") for row in rows}
+    matrices = as_dict(emotions.get("confusion_matrices"))
+    problems = []
+    for name in models:
+        matrix = as_dict(matrices.get(name))
+        cells = matrix.get("counts")
+        if not (matrix.get("labels") == classes and isinstance(cells, list) and len(cells) == len(classes)
+                and all(isinstance(line, list) and len(line) == len(classes) and all(is_count(cell) for cell in line)
+                        for line in cells)):
+            problems.append(f"{name}: not a {len(classes)}x{len(classes)} table of counts with labels {classes}")
+            continue
+        if sum(map(sum, cells)) != n_test or matrix.get("n") != n_test \
+                or [sum(line) for line in cells] != [test_counts[item] for item in classes]:
+            problems.append(f"{name}: cells add up to {sum(map(sum, cells))}, rows {[sum(line) for line in cells]}")
+        elif not same_value(accuracy.get(name), sum(cells[index][index] for index in range(len(classes))) / n_test):
+            problems.append(f"{name}: the diagonal does not give the accuracy")
+    report.check(bool(models) and not problems, f"{label}: one emotion confusion matrix per network, adding up to the test "
+                 "part, its rows to the test part's classes and its diagonal to the accuracy", "; ".join(problems))
+    macro = {row.get("model"): row.get("macro_f1") for row in rows}
+
+    def beats_both(name):
+        return is_number(macro.get(name)) and all(is_number(macro.get(baseline)) and macro[name] > macro[baseline]
+                                                  for baseline in SENTIMENT_BASELINES)
+
+    report.check(emotions.get("beats_baselines") == {name: beats_both(name) for name in models},
+                 f"{label}: emotion beats_baselines agrees with the evaluation rows", f"{emotions.get('beats_baselines')}")
+    if full_run:
+        for name in models:
+            report.check(beats_both(name), f"{label}: emotion {name} macro-F1 on the emotion test part beats always "
+                         "majority and uniform random",
+                         f"{macro.get(name)} vs " + ", ".join(f"{baseline} {macro.get(baseline)}" for baseline in SENTIMENT_BASELINES))
+
+    # The emotion calls of the topic posts, per group.
+    scoring = as_dict(emotions.get("scoring"))
+    n_scored = scoring.get("n_scored")
+    report.check(scoring.get("function") == "emotion_proba" and scoring.get("model") == selection.get("selected")
+                 and scoring.get("post_table") == "topic_posts" and scoring.get("table") == "emotion_posts"
+                 and is_count(n_scored) and n_scored == topics.get("n_posts") and is_count(scoring.get("n_in_emotion_data"))
+                 and scoring["n_in_emotion_data"] <= min(n_scored, n_posts),
+                 f"{label}: every topic post got an emotion from the chosen network (posts in the emotion data counted)",
+                 f"{scoring}; topic posts {topics.get('n_posts')}")
+    drawer_items = [item for item in drawers.get("drawers") or [] if isinstance(item, dict)]
+    rows = [item for item in emotions.get("drawers") or [] if isinstance(item, dict)]
+    groups = [("all", as_dict(emotions.get("overall")), EMOTION_QUOTES_OVERALL, n_scored)]
+    groups += [(f"drawer {item.get('drawer')}", row, EMOTION_QUOTES_PER_GROUP, item.get("n_posts"))
+               for item, row in zip(drawer_items, rows)]
+    groups += [("any drawer", as_dict(emotions.get("any_drawer")), EMOTION_QUOTES_PER_GROUP, drawers.get("n_in_any_drawer")),
+               ("no drawer", as_dict(emotions.get("no_drawer")), EMOTION_QUOTES_PER_GROUP, drawers.get("n_in_no_drawer"))]
+    problems = []
+    if [(row.get("drawer"), row.get("name")) for row in rows] != [(item.get("drawer"), item.get("name")) for item in drawer_items]:
+        problems.append("the drawer rows are not the drawers of the drawers section, in its order")
+    for where, group, _, expected_n in groups:
+        n, got = group.get("n_posts"), counts_of(group.get("counts"), classes)
+        shares = as_dict(group.get("shares"))
+        if not is_count(n) or n != expected_n or got is None or sum(got.values()) != n:
+            problems.append(f"{where}: {n!r} posts (expected {expected_n!r}), counts {group.get('counts')}")
+            continue
+        if sorted(shares) != sorted(classes) or not all(same_value(shares[item], None if n == 0 else got[item] / n)
+                                                        for item in classes):
+            problems.append(f"{where}: shares {shares} do not follow from the counts")
+    every, anywhere, nowhere = (as_dict(groups[0][1].get("counts")), as_dict(groups[-2][1].get("counts")),
+                                as_dict(groups[-1][1].get("counts")))
+    if not all(is_count(anywhere.get(item)) and is_count(nowhere.get(item))
+               and anywhere[item] + nowhere[item] == every.get(item) for item in classes):
+        problems.append(f"any drawer {anywhere} + no drawer {nowhere} is not all topic posts {every}")
+    report.check(not problems, f"{label}: emotions per group: all topic posts, every drawer (same order, names and sizes as "
+                 "the drawers section), any drawer and no drawer; counts add up to the group's posts, shares follow "
+                 "from the counts, any drawer + no drawer = all topic posts, class by class", "; ".join(problems[:4]))
+
+    # The example posts.
+    emotion_ids = None if file_rows is None else {post_id for post_id, emotion in file_rows if emotion in classes}
+    words = {item.get("drawer"): (item.get("words") or [], item.get("excluded_phrases") or []) for item in drawer_items}
+
+    def in_drawer(text, drawer):
+        found_words, excluded = words.get(drawer, ([], []))
+        return bool(rule_matches(text, found_words, excluded))
+
+    def in_topics(text):
+        return switches["TOPIC_SCOPE"] != "btc" or re.search(r"\b(?:bitcoin|btc)\b", text, re.IGNORECASE) is not None
+
+    checks = [("all", groups[0][1], EMOTION_QUOTES_OVERALL, in_topics)]
+    checks += [(f"drawer {row.get('drawer')}", row, EMOTION_QUOTES_PER_GROUP,
+                lambda text, drawer=row.get("drawer"): in_drawer(text, drawer)) for row in rows]
+    checks += [("any drawer", groups[-2][1], EMOTION_QUOTES_PER_GROUP, lambda text: any(in_drawer(text, d) for d in words)),
+               ("no drawer", groups[-1][1], EMOTION_QUOTES_PER_GROUP, lambda text: not any(in_drawer(text, d) for d in words))]
+    problems, n_quotes = [], 0
+    for where, group, limit, belongs in checks:
+        problems += emotion_quote_problems(where, group, classes, limit, emotion_ids, belongs)
+        n_quotes += sum(len(items) for items in as_dict(group.get("quotes")).values() if isinstance(items, list))
+    report.check(not problems, f"{label}: example posts ({n_quotes}): at most {EMOTION_QUOTES_OVERALL} per class for all "
+                 f"topic posts and {EMOTION_QUOTES_PER_GROUP} per group otherwise, called that class by the network, "
+                 "highest probability first, different posts and texts, none in the emotion data, each in its group "
+                 "(also when there are none)", "; ".join(problems[:4]))
+
+    # The review interface.
+    review = as_dict(emotions.get("human_review"))
+    by_prelabel = as_dict(review.get("by_prelabel"))
+    reviewed = review.get("n_reviewed")
+    parts = [(as_dict(by_prelabel.get(item)).get("n_reviewed"), as_dict(by_prelabel.get(item)).get("agreement"))
+             for item in EMOTION_LABELS]
+    review_ok = (review.get("source") == switches["EMOTION_REVIEW_SOURCE"] and sorted(by_prelabel) == sorted(EMOTION_LABELS)
+                 and is_count(reviewed) and all(is_count(n) and is_score(share) and (share is None) == (n == 0) for n, share in parts)
+                 and sum(n for n, _ in parts) == reviewed and (review.get("agreement") is None) == (reviewed == 0)
+                 and (reviewed == 0 or same_value(review.get("agreement"), sum(n * share for n, share in parts if n) / reviewed))
+                 and (switches["EMOTION_REVIEW_SOURCE"] != "" or (reviewed == 0 and review.get("agreement") is None)))
+    report.check(review_ok, f"{label}: the review agreement: source as set, reviewed rows per pre-label adding up, "
+                 "agreement null exactly when nothing was reviewed (always without a review table)", f"{review}")
+
+
+def stable_emotions(brief):
+    """The parts of the emotions section that do not depend on training, or None."""
+    emotions = as_dict(brief).get("emotions") if isinstance(brief, dict) else None
+    if not isinstance(emotions, dict) or not emotions:
+        return None
+    evaluation = as_dict(emotions.get("evaluation"))
+    keys = ["labels_source", "labels_file", "emotion_names", "keep_none", "min_class_posts", "dropped", "classes",
+            "n_posts", "class_counts", "split", "vectorizers", "human_review"]
+    return {**{key: emotions.get(key) for key in keys},
+            "baselines": [row for row in evaluation.get("rows") or [] if as_dict(row).get("kind") == "baseline"],
+            "majority_label": evaluation.get("majority_label"),
+            "scoring": {key: as_dict(emotions.get("scoring")).get(key) for key in ("n_scored", "n_in_emotion_data")},
+            "group_sizes": [as_dict(emotions.get(key)).get("n_posts") for key in ("overall", "any_drawer", "no_drawer")]
+            + [as_dict(row).get("n_posts") for row in emotions.get("drawers") or []]}
+
+
+def compare_emotions(report, first, again):
+    """Two runs with the same switches: the parts of the emotions section that do not depend on training agree."""
+    left, right = stable_emotions(first), stable_emotions(again)
+    detail = ""
+    if left is None or right is None:
+        detail = "a brief or its emotions section is missing"
+    elif left != right:
+        detail = "differing parts: " + ", ".join(key for key in left if left[key] != right[key])
+    report.check(left is not None and left == right,
+                 "default switches run twice: the emotions sections agree on everything that does not depend on training "
+                 "(the pre-label file as read, the leave-out steps, classes, posts per class, the split per part and "
+                 "class, the vocabularies, both baseline rows, the posts scored and the group sizes)", detail)
+
+
+def print_emotions(brief):
+    """Print the emotion chapter's numbers (full run): the pre-labels, the leave-out steps, the split, the evaluation
+    table and confusion matrices, the choice, the emotions per group and every example post."""
+    emotions = as_dict(brief.get("emotions"))
+    if not emotions:
+        return
+    classes = emotions.get("classes") or []
+
+    def number(value, digits=4):
+        return f"{value:.{digits}f}" if is_number(value) else "-"
+
+    labels_file = as_dict(emotions.get("labels_file"))
+    print("\nEmotions (full run)")
+    print(f"  pre-label file:                {emotions.get('labels_source')}: {labels_file.get('n_rows')} rows, "
+          f"{labels_file.get('n_matched')} matched; models {labels_file.get('models')}, prompts {labels_file.get('prompt_versions')}")
+    print(f"  rows per label:                {labels_file.get('label_counts')}")
+    for step in emotions.get("dropped") or []:
+        print(f"  left out ({step.get('step')}):{' ' * max(1, 20 - len(str(step.get('step'))))}{step.get('n_posts')} posts, "
+              f"labels {step.get('labels')}")
+    print(f"  classes ({len(classes)}):                  {classes}")
+    print(f"  emotion data:                  {emotions.get('n_posts')} posts   {emotions.get('class_counts')}")
+    split = as_dict(emotions.get("split"))
+    print(f"  split (posts):                 {split.get('n_posts')}")
+    for part, part_counts in as_dict(split.get("class_counts")).items():
+        print(f"    {part:11}                 {part_counts}")
+    vectors = as_dict(emotions.get("vectorizers"))
+    print(f"  vectorizers:                   count {as_dict(vectors.get('count')).get('vocab_size')}, tfidf "
+          f"{as_dict(vectors.get('tfidf')).get('vocab_size')} words, fitted on {vectors.get('fitted_on_n_posts')} posts")
+    selection = as_dict(emotions.get("selection"))
+    print(f"  validation macro-F1:           {selection.get('validation_macro_f1')}   chosen: {selection.get('selected')}")
+    evaluation = as_dict(emotions.get("evaluation"))
+    print(f"  evaluation on the emotion test part (majority label {evaluation.get('majority_label')}; P precision, "
+          "R recall, F1, n support; - = null):")
+    print(f"    {'model':16} {'posts':>5} {'accuracy':>8} {'macro-F1':>8}")
+    for row in evaluation.get("rows") or []:
+        print(f"    {str(row.get('model')):16} {str(row.get('n')):>5} {number(row.get('accuracy')):>8} "
+              f"{number(row.get('macro_f1')):>8}")
+    print(f"    {'class':14} " + " ".join(f"{str(row.get('model'))[:15]:>24}" for row in evaluation.get("rows") or []))
+    print(f"    {'':14} " + " ".join(f"{'P':>6}{'R':>6}{'F1':>6}{'n':>6}" for _ in evaluation.get("rows") or []))
+    for item in classes:
+        cells = []
+        for row in evaluation.get("rows") or []:
+            scores = as_dict(as_dict(row.get("per_class")).get(item))
+            cells.append(f"{number(scores.get('precision'), 3):>6}{number(scores.get('recall'), 3):>6}"
+                         f"{number(scores.get('f1'), 3):>6}{str(scores.get('support')):>6}")
+        print(f"    {item:14} " + " ".join(cells))
+    print(f"  beats both baselines:          {emotions.get('beats_baselines')}")
+    for name, matrix in as_dict(emotions.get("confusion_matrices")).items():
+        print(f"  confusion matrix {name} (rows true, columns predicted, {matrix.get('n')} posts):")
+        print(f"    {'':14} " + " ".join(f"{item[:6]:>6}" for item in matrix.get("labels") or []))
+        for item, line in zip(matrix.get("labels") or [], matrix.get("counts") or []):
+            print(f"    {item:14} " + " ".join(f"{cell:>6}" for cell in line))
+    scoring = as_dict(emotions.get("scoring"))
+    print(f"  topic posts given an emotion:  {scoring.get('n_scored')} by {scoring.get('model')}; in the emotion data: "
+          f"{scoring.get('n_in_emotion_data')}")
+    groups = [("all", "all topic posts", as_dict(emotions.get("overall"))),
+              ("any drawer", "in at least one drawer", as_dict(emotions.get("any_drawer"))),
+              ("no drawer", "in no drawer", as_dict(emotions.get("no_drawer")))]
+    groups += [(row.get("drawer"), row.get("name"), row) for row in emotions.get("drawers") or [] if isinstance(row, dict)]
+    print("  emotions per group (posts; then share of each class, count in brackets):")
+    print(f"    {'group':15} {'posts':>6} " + " ".join(f"{item[:12]:>18}" for item in classes))
+    for key, _, group in groups:
+        counts, shares = as_dict(group.get("counts")), as_dict(group.get("shares"))
+        print(f"    {str(key):15} {str(group.get('n_posts')):>6} "
+              + " ".join(f"{number(shares.get(item), 3):>9} ({str(counts.get(item)):>6})" for item in classes))
+    print("  example posts ([emotion probability, post_id] text):")
+    for key, name, group in groups:
+        print(f"    {key}: {name} ({group.get('n_posts')} posts)")
+        quotes = as_dict(group.get("quotes"))
+        for item in classes:
+            for quote in quotes.get(item) or []:
+                print(f"        [{item} {number(quote.get('probability'), 3)}, {quote.get('post_id')}] {quote.get('text')}")
+        if not any(quotes.get(item) for item in classes):
+            print("        (none)")
+    review = as_dict(emotions.get("human_review"))
+    print(f"  review table:                  source {review.get('source')!r}, reviewed {review.get('n_reviewed')}, "
+          f"agreement {review.get('agreement')}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -3132,7 +3838,8 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             (REPEAT_LABEL, {}, "quick-default-again")]
     briefs = {}
     for label, flipped, folder in runs:
-        parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
+        parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE,
+                      "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
         parameters = panel_settings(report, label, parameters, overrides)
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
@@ -3149,6 +3856,7 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             check_why(report, label, brief, switches)
             check_calibration(report, label, brief, switches)
             check_drawers(report, label, brief, switches, built_in)
+            check_emotions(report, label, brief, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -3159,11 +3867,12 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     compare_topics(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_why(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_drawers(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    compare_emotions(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
-    parameters = {"DATA_SOURCE": FULL_SOURCE, **overrides}
+    parameters = {"DATA_SOURCE": FULL_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_FULL_FILE, **overrides}
     parameters = panel_settings(report, "full run", parameters, overrides)
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
@@ -3189,6 +3898,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     check_calibration(report, "full run", brief, switches)
     check_calibration_narrows(report, "full run", brief)
     check_drawers(report, "full run", brief, switches, built_in)
+    check_emotions(report, "full run", brief, switches, full_run=True)
     check_format(report, "full run", brief, rules)
     check_panel_output(report, "full run", REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb")
     check_panel(report, "full run", brief_path, brief)
@@ -3212,6 +3922,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     print_why(brief)
     print_calibration(brief)
     print_drawers(brief)
+    print_emotions(brief)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  fields that are null here:     {sorted(null_fields(brief)) or 'none'}")
@@ -3244,6 +3955,9 @@ def main():
     check_prelabel_reading(report)
     check_prelabel_fake_model(report)
     check_prelabel_files(report)
+    check_emotion_switches(report, defaults, others)
+    check_emotion_chapter(report)
+    check_emotion_probes(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
