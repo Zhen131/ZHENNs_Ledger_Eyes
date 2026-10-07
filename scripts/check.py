@@ -15,10 +15,14 @@ quick: static checks, then the notebook runs three times on the bundled
        Every brief must pass the format rules (docs/brief.schema.json); the
        first two are also broken on purpose (locked counterexamples, all of
        which must be rejected) and shown on the panel, built but not started.
+       Before any run, the built-in drawer word list is checked against its
+       rules and its pinned fingerprint, and drawer_matches against fixed
+       sentences; the drawers section and the drawer rows of every brief are
+       checked, and the two default runs must give the same drawers.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
-       comparison.
+       comparison. The drawers are checked and printed as well.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
