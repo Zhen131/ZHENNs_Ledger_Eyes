@@ -148,7 +148,7 @@ DRAWER_FILE_PROBES = [("moon shot soon", ["moon"]), ("no moon shot today", [])]
 DRAWER_QUOTES = 5  # spot-check quotes per drawer, at most
 DRAWER_STABLE_ROW_FIELDS = ["drawer", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
                             "label_vs_overall_pp", "too_few_bullish_bearish"]  # why.drawers fields that ignore training
-# Chapter 13: the brief's format rules, its documentation and the panel.
+# Chapter 14: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
@@ -1971,7 +1971,7 @@ def print_drawers(brief):
             print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
 
 
-# ---------------------------------------------------------------- the brief's format and the panel (chapter 13)
+# ---------------------------------------------------------------- the brief's format and the panel (chapter 14)
 
 def code_cells():
     """The notebook source's code cells, in order."""
@@ -3247,19 +3247,21 @@ def chapter_cells():
 
 
 def check_emotion_chapter(report):
-    """Chapter numbers 0 to 13 in order with the brief last; chapter 11 explains silver labels in both languages and
+    """Chapter numbers 0 to 14 in order with the brief last; chapter 11 explains silver labels in both languages and
     reads nothing but its two sources."""
     notebook = jupytext.read(SOURCE, fmt="py:percent")
     numbers = [int(match.group(1)) for cell in notebook.cells if cell.cell_type == "markdown"
                for match in [re.match(r"## ([0-9]+)\. ", cell.source)] if match]
     chapters = chapter_cells()
     heading = {number: cells[0].source.splitlines()[0] for number, cells in chapters.items()}
-    report.check(numbers == list(range(14)) and heading.get(11, "").startswith("## 11. Emotions")
+    report.check(numbers == list(range(15)) and heading.get(11, "").startswith("## 11. Emotions")
                  and heading.get(12, "").startswith("## 12. Dated data")
-                 and heading.get(13, "").startswith("## 13. The brief"),
-                 "chapters 0 to 13 in order: chapter 11 is the emotions chapter, chapter 12 the dated data, chapter 13 "
-                 "the brief, which stays last",
-                 f"chapter headings {numbers}; 11: {heading.get(11)!r}; 12: {heading.get(12)!r}; 13: {heading.get(13)!r}")
+                 and heading.get(13, "").startswith("## 13. Day by day")
+                 and heading.get(14, "").startswith("## 14. The brief"),
+                 "chapters 0 to 14 in order: chapter 11 is the emotions chapter, chapter 12 the dated data, chapter 13 "
+                 "day by day, chapter 14 the brief, which stays last",
+                 f"chapter headings {numbers}; 11: {heading.get(11)!r}; 12: {heading.get(12)!r}; 13: {heading.get(13)!r}; "
+                 f"14: {heading.get(14)!r}")
 
     explained = []
     for cell in chapters.get(11, []):

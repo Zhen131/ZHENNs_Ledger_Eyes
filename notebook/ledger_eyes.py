@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 Dated data · 13 The brief: format, check, save and panel.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 Dated data · 13 Day by day · 14 The brief: format, check, save and panel.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 带时间的数据 · 13 简报：格式、校验、保存和面板。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 带时间的数据 · 13 按天看 · 14 简报：格式、校验、保存和面板。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -66,10 +66,10 @@ DATED_LANGUAGE = "en"  # default: "en" (chapter 12 keeps only tweets marked with
 NEWS_TEXT = "title"  # default: "title" (chapter 12 uses the news headline); two-state, other: "text" (headline and summary)
 NEWS_LABEL = "market_direction"  # default: "market_direction" (chapter 12 converts the dataset's class); two-state, other: "votes" (the side with more reader votes)
 DAILY_MIN_POSTS = 100  # default: 100; or any positive integer (chapter 13: a layer's day, or a drawer on one day, with fewer scored posts gets no bullish share; 100 posts leave a share near one half about 10 percentage points of chance error)
-NEW_WORD_WINDOW = 7  # default: 7; or any positive integer (chapter 14 compares a word's posts on a day with its daily mean over this many days before it)
-NEW_WORD_MIN_COUNT = 10  # default: 10; or any positive integer (chapter 14: a new word is in at least this many posts of the day)
-NEW_WORD_RATIO = 3.0  # default: 3.0; or any number above 0 (chapter 14: a new word is in at least this many times as many posts as its past daily mean)
-NEW_WORD_MAX_PER_DAY = 5  # default: 5; or any positive integer (chapter 14 reports at most this many new words per layer and day)
+NEW_WORD_WINDOW = 7  # default: 7; or any positive integer (chapter 13 compares a word's posts on a day with its daily mean over this many days before it)
+NEW_WORD_MIN_COUNT = 10  # default: 10; or any positive integer (chapter 13: a new word is in at least this many posts of the day)
+NEW_WORD_RATIO = 3.0  # default: 3.0; or any number above 0 (chapter 13: a new word is in at least this many times as many posts as its past daily mean)
+NEW_WORD_MAX_PER_DAY = 5  # default: 5; or any positive integer (chapter 13 reports at most this many new words per layer and day)
 EVENT_DAYS = ["2022-05-09", "2022-11-09"]  # default: a day of the LUNA crash week (May 2022) and a day of the FTX collapse week (November 2022); or any list of UTC days "YYYY-MM-DD" (chapter 13 shows example posts of these days)
 EVENT_EXAMPLES = 3  # default: 3; or any positive integer (chapter 13: example posts per side, bullish and bearish, for every event day and layer)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
@@ -245,18 +245,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 13 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions` and `dated_data`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 14 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions` and `dated_data`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 13 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 14 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.4",  # the format of chapter 13's rules (docs/brief-format.md in the repository)
+    "format_version": "1.4",  # the format of chapter 14's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -4549,7 +4549,207 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# ## 13. The brief: format, check, save and panel
+# ## 13. Day by day: mood, emotions, drawers and new words
+#
+# Chapter 12 read the dated posts and only counted them. This chapter treats every dated post the way chapters 9 to 11 treated the StockTwits posts, and then looks at the results **day by day**, for every layer on its own (the tweets as the retail layer, the news headlines as the media layer; the two are never mixed):
+#
+# 1. the **bullish share**, counted at 0.5 and calibrated, as in chapter 10;
+# 2. the **emotions**: how many posts the emotion network of chapter 11 gives each emotion;
+# 3. the **drawers**: how many posts go into each drawer of chapter 9;
+# 4. the **bullish share in every drawer**, counted at 0.5 and calibrated;
+# 5. the **new words**: words that suddenly appear in many more posts than on the days before.
+#
+# For a few chosen days (`EVENT_DAYS`) the chapter also shows posts the model is very sure about, and that day's new words. The results go into two sections of the brief: `daily` (1 to 4 and the event days) and `new_words` (5). Like `dated_data`, each of them carries its own period; `scope` still says `"batch"`.
+#
+# **Borrowed models: the numbers are a reference, not a measurement.** The sentiment model learned from StockTwits posts (chapters 4 to 8), and the emotion network from silver labels on StockTwits posts (chapter 11). Neither has seen a tweet of this dataset or a news headline. Here they are borrowed: the shares and emotion counts below say what these models make of the tweets and the news, not how the writers really felt, and how well the models work on these texts has not been measured.
+#
+# **The two layers cover different periods.** The tweets end in mid-2023, the news in May 2025. Every layer keeps its own first and last day, and its days run from the one to the other; after the last tweet only the news go on.
+#
+# ***
+#
+# ## 13. 按天看：情绪、多空、抽屉和新词
+#
+# 第 12 章把带时间的帖子读了进来，只数了条数。这一章像第 9～11 章对待 StockTwits 帖子那样，把每条带时间的帖子都过一遍，再**按天**看结果，每层各算各的（推文是散户层，新闻标题是媒体层，两层从不混在一起）：
+#
+# 1. **看多比例**：按 0.5 分开直接数，再校正，和第 10 章一样；
+# 2. **情绪**：第 11 章的情绪网络给每种情绪判了几条；
+# 3. **抽屉**：第 9 章的每个抽屉各进了几条；
+# 4. **每个抽屉里的看多比例**：按 0.5 分开直接数，再校正；
+# 5. **新词**：比前几天突然多出很多帖子在用的词。
+#
+# 对开关里挑的几天（`EVENT_DAYS`），本章还给出模型很有把握的帖子和那天的新词。结果写进简报的两节：`daily`（第 1～4 项和事件日）和 `new_words`（第 5 项）。这两节和 `dated_data` 一样各自带着时段；`scope` 仍写 `"batch"`。
+#
+# **模型是借来用的：这些数是参考，不是准确的测量。** 看多看空的模型是从 StockTwits 帖子学的（第 4～8 章），情绪网络是从 StockTwits 帖子上的银标签学的（第 11 章）。两者都没见过这份数据里的推文，也没见过新闻标题。这里是把它们借来用：下面的比例和情绪条数，说的是这两个模型怎么看这些推文和新闻，不是写的人真实的感受；它们在这些文字上准不准，还没有量过。
+#
+# **两层覆盖的日子不一样长。** 推文到 2023 年年中结束，新闻到 2025 年 5 月。每层有自己的第一天和最后一天，按天的结果从第一天排到最后一天；最后一条推文之后只有新闻。
+
+# %% [markdown]
+# ### Cleaning and scoring every dated post
+#
+# Every post of `dated_posts` goes through the same steps as a topic post of chapters 9 to 11:
+#
+# - its text is cleaned with `clean_texts` (chapter 3), with the current switches;
+# - `sentiment_proba` (chapter 7) scores the cleaned text, `bullish_probability` (chapter 10) turns that into the probability of bullish, and `half_call` (chapter 10) splits it at 0.5: bullish above 0.5, otherwise bearish (exactly 0.5 is bearish), nothing unsure;
+# - `emotion_proba` (chapter 11) gives it the emotion with the highest probability (a tie goes to the earlier emotion);
+# - `drawer_matches` (chapter 9) puts its text, in which account names and links were already replaced, into the drawers of the word list (a post can go into several drawers or into none).
+#
+# The result is one table, `dated_scores`, one row per dated post in the same order: `post_id`, `date`, `layer`, `clean_text`, `bullish_proba`, `half_call`, `emotion`, `emotion_probability`, one true/false column per drawer (named by its id, in word-list order) and `n_drawers`. `dated_posts` itself is not changed.
+#
+# Many tweets repeat the text of another tweet (retweets), so every different text is cleaned, scored and matched once, and every post with that text gets the result. Cleaning a million texts takes a while, so the cleaned texts are also saved in `WORK_DIR/cache/`. The cache file's name carries a fingerprint of the cleaning switches and steps, the versions of the cleaning packages, both dated sources and every post's id and text, so a changed post or switch never picks up an old result. The `[daily]` lines say how long each step took.
+#
+# ***
+#
+# ### 给每条带时间的帖子清洗、打分
+#
+# `dated_posts` 里的每条帖子，都走一遍第 9～11 章话题帖子走过的步骤：
+#
+# - 用 `clean_texts`（第 3 章）按当前开关清洗正文；
+# - `sentiment_proba`（第 7 章）给清洗后的文字打分，`bullish_probability`（第 10 章）把结果换成「看多的概率」，`half_call`（第 10 章）按 0.5 分开：大于 0.5 算看多，否则算看空（正好 0.5 算看空），没有说不清；
+# - `emotion_proba`（第 11 章）给它判概率最大的那种情绪（一样大时取排在前面的）；
+# - `drawer_matches`（第 9 章）按正文把它放进词表的抽屉（正文里的账号名和链接在第 12 章已经替换过；一条帖子可以进好几个抽屉，也可以一个都不进）。
+#
+# 结果是一张表 `dated_scores`，一行对一条带时间的帖子，顺序不变：`post_id`、`date`、`layer`、`clean_text`、`bullish_proba`、`half_call`、`emotion`、`emotion_probability`，每个抽屉一列真假值（列名是抽屉的编号，按词表顺序），以及 `n_drawers`。`dated_posts` 本身不改。
+#
+# 很多推文和别的推文一字不差（转推），所以每段不同的文字只清洗、打分、认抽屉一次，结果给所有正文相同的帖子。一百多万段文字洗一遍要花些时间，所以清洗结果也存进 `WORK_DIR/cache/`。缓存文件名里带着一个指纹，算进了清洗开关和步骤、清洗用到的包的版本、两个带时间数据的来源，以及每条帖子的编号和正文；帖子或开关一变，就不会拿到旧结果。`[daily]` 开头的行报每一步花了多久。
+
+# %%
+# Clean every dated post (with a cache), score it with both models and put it into its drawers: dated_scores.
+import importlib.metadata  # standard library: versions of the cleaning packages, for the cache's fingerprint
+
+DATED_CLEAN_LAYOUT = "dated-clean-v1"  # the layout of the cache file below; part of its fingerprint
+CLEANING_PACKAGES = ["nltk", "emoji", "contractions", "beautifulsoup4"]  # their versions can change a cleaned text
+
+
+def dated_clean_cache_key(posts):
+    """Fingerprint of the cleaned texts: cleaning switches and steps, package versions, both sources, every id and text."""
+    digest = hashlib.sha256(json.dumps({
+        "layout": DATED_CLEAN_LAYOUT, "emoji_to_words": EMOJI_TO_WORDS, "keep_negations": KEEP_NEGATIONS,
+        "steps": [step.__name__ for step in CLEANING_STEPS],
+        "packages": {name: importlib.metadata.version(name) for name in CLEANING_PACKAGES},
+        "sources": [DATED_TWEETS_SOURCE, DATED_NEWS_SOURCE],
+    }, sort_keys=True).encode("utf-8"))
+    for post_id, text in zip(posts["post_id"], posts["text"]):
+        digest.update(f"{post_id}\x1f{text}\x1e".encode("utf-8"))
+    return digest.hexdigest()[:16]
+
+
+def clean_dated_texts(posts, work_dir):
+    """clean_texts for every post of a dated post table, every different text once; (cleaned texts, from the cache)."""
+    cache_file = Path(work_dir) / "cache" / f"dated-clean-{dated_clean_cache_key(posts)}.parquet"
+    if cache_file.exists():
+        cached = pq.read_table(cache_file).to_pandas()
+        if cached["post_id"].tolist() == posts["post_id"].tolist():  # the fingerprint covers this; checked anyway
+            return cached["clean_text"].to_numpy(dtype=object), True
+    codes, texts = pd.factorize(posts["text"], use_na_sentinel=False)
+    cleaned = clean_texts(pd.Series(list(texts), dtype=object)).to_numpy(dtype=object)[codes]
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_file.with_suffix(".tmp")  # write first, rename after, so a crash never leaves half a cache
+    pq.write_table(pa.table({"post_id": posts["post_id"].tolist(), "clean_text": list(cleaned)}), temporary)
+    temporary.replace(cache_file)
+    return cleaned, False
+
+
+daily_seconds = {}  # step -> seconds, printed in the [daily] lines
+started = time.perf_counter()
+dated_clean_text, cleaned_from_cache = clean_dated_texts(dated_posts, WORK_DIR)
+daily_seconds["cleaning"] = time.perf_counter() - started
+clean_codes, distinct_clean = pd.factorize(pd.Series(dated_clean_text, dtype=object), use_na_sentinel=False)
+distinct_clean = pd.Series(list(distinct_clean), dtype=object)  # every different cleaned text once
+print(f"[daily] cleaning: {len(dated_posts):,} dated posts, {dated_posts['text'].nunique():,} different texts, in "
+      f"{daily_seconds['cleaning']:.1f} s" + (" (read from the cache)" if cleaned_from_cache else ""), flush=True)
+
+started = time.perf_counter()
+distinct_bullish = bullish_probability(sentiment_proba(distinct_clean))  # one probability of bullish per cleaned text
+daily_seconds["sentiment"] = time.perf_counter() - started
+print(f"[daily] sentiment: {len(distinct_clean):,} different cleaned texts scored with {selected_model_name} in "
+      f"{daily_seconds['sentiment']:.1f} s", flush=True)
+
+started = time.perf_counter()
+distinct_emotion_proba = emotion_proba(distinct_clean)  # one column per class of emotion_classes
+daily_seconds["emotions"] = time.perf_counter() - started
+print(f"[daily] emotions: {len(distinct_clean):,} different cleaned texts scored with {selected_emotion_model_name} in "
+      f"{daily_seconds['emotions']:.1f} s", flush=True)
+
+started = time.perf_counter()
+text_codes, distinct_texts = pd.factorize(dated_posts["text"], use_na_sentinel=False)
+distinct_drawers = np.zeros((len(distinct_texts), len(DRAWER_IDS)), dtype=bool)  # every different text x drawer
+for row, text in enumerate(distinct_texts):
+    found = drawer_matches(text)
+    distinct_drawers[row] = [drawer in found for drawer in DRAWER_IDS]
+daily_seconds["drawers"] = time.perf_counter() - started
+print(f"[daily] drawers: {len(distinct_texts):,} different texts matched with word list {DRAWER_WORDS_VERSION} in "
+      f"{daily_seconds['drawers']:.1f} s", flush=True)
+
+dated_scores = dated_posts[["post_id", "date", "layer"]].copy()  # a table of its own; dated_posts stays unchanged
+dated_scores["clean_text"] = dated_clean_text
+dated_scores["bullish_proba"] = distinct_bullish[clean_codes]
+dated_scores["half_call"] = half_call(dated_scores["bullish_proba"])  # every post on one side, as in chapter 10
+dated_scores["emotion"] = np.asarray(emotion_classes, dtype=object)[distinct_emotion_proba.argmax(axis=1)][clean_codes]
+dated_scores["emotion_probability"] = distinct_emotion_proba.max(axis=1).astype("float64")[clean_codes]
+for position, drawer in enumerate(DRAWER_IDS):
+    dated_scores[drawer] = distinct_drawers[text_codes, position]
+dated_scores["n_drawers"] = distinct_drawers.sum(axis=1).astype("int64")[text_codes]
+pd.DataFrame({
+    "posts": dated_scores.groupby("layer").size(),
+    "bullish at 0.5": dated_scores[dated_scores["half_call"] == "bullish"].groupby("layer").size(),
+    "in a drawer": dated_scores[dated_scores["n_drawers"] > 0].groupby("layer").size(),
+}).fillna(0).astype(int)
+
+# %% [markdown]
+# ### The recognition rates for the dated posts
+#
+# The calibration of chapter 10 needs the model's two recognition rates: the **true bullish rate** (the bullish recall) and the **false bullish rate** (1 − the bearish recall). Nothing is trained or evaluated again: they are read from chapter 8's evaluation table, from the row of the chosen model on the test posts that match the dated posts. With `DATED_BTC_ONLY` (every dated post mentions Bitcoin) that is the test posts that mention Bitcoin, otherwise all test posts. The row follows `DATED_BTC_ONLY`, not `TOPIC_SCOPE`, which chooses the row of chapter 10; when both point to the same row, the two sets of rates must be identical, and the cell checks that. The status follows chapter 10's rules: `three_classes` with three classes, `rates_missing` when a recall cannot be computed, `rate_gap_too_small` when the gap is below `MIN_RATE_GAP` or not above 0, otherwise `applied`. Unless it is `applied`, every calibrated share of this chapter is `null`.
+#
+# **An assumption.** The rates were measured on StockTwits test posts. Using them for tweets and news headlines assumes that the model finds bullish and bearish posts there as well (or as badly) as on StockTwits; nobody has checked that yet. The news come with a label made from reader votes, so the rates can later be measured on the news headlines themselves.
+#
+# ***
+#
+# ### 带时间的帖子用哪两个认出率
+#
+# 第 10 章的校正要用模型的两个认出率：**真看多率**（看多那一类的 recall）和**错看多率**（1 − 看空那一类的 recall）。这里不重新训练，也不重新评估：直接从第 8 章的评估表里读，取选中模型、测试帖范围和带时间的帖子对应的那一行。`DATED_BTC_ONLY` 打开时（每条带时间的帖子都提到比特币）用提到比特币的测试帖，否则用全部测试帖。这一行跟着 `DATED_BTC_ONLY` 走，不跟第 10 章用来选行的 `TOPIC_SCOPE` 走；两者指向同一行时，两组认出率必须一模一样，这一格会核对。状态照第 10 章的规矩判：三类时是 `three_classes`；某个 recall 算不出来是 `rates_missing`；差小于 `MIN_RATE_GAP` 或不大于 0 是 `rate_gap_too_small`；否则是 `applied`。只要不是 `applied`，本章所有校正后的比例都写 `null`。
+#
+# **这是一个假设。** 两个认出率是在 StockTwits 的测试帖上量的。拿它们去校正推文和新闻标题，等于假设模型在那里认出看多帖、看空帖的本事，和在 StockTwits 上一样好（或一样差）；这一点还没有人核对过。新闻带着由读者投票得出的标签，以后可以直接在新闻标题上量这两个认出率。
+
+# %%
+# The recognition rates of chapter 8 for the dated posts, with the status of chapter 10's rules.
+DATED_RATE_SUBSET = "test_mentions_btc" if DATED_BTC_ONLY else "all_test"  # test posts matching the dated posts
+
+
+def recognition_rates(subset):
+    """The chosen model's two recognition rates on a test subset of chapter 8, with their status, like calibration_rates."""
+    row = next(row for row in brief["sentiment"]["evaluation"]["rows"]
+               if row["model"] == selected_model_name and row["subset"] == subset)
+    rates = {"model": selected_model_name, "subset": subset,
+             "rate_posts": {label: int(row["per_class"][label]["support"]) for label in ("0", "2")}}  # bearish, bullish
+    if N_CLASSES == 3:  # 1 - bearish recall would also count bearish posts called neutral
+        return {"status": "three_classes", **rates, "true_bullish_rate": None, "false_bullish_rate": None,
+                "rate_gap": None}
+    true_rate = finite_or_none(row["per_class"]["2"]["recall"])
+    bearish_recall = finite_or_none(row["per_class"]["0"]["recall"])
+    false_rate = None if bearish_recall is None else 1.0 - bearish_recall
+    gap = None if true_rate is None or false_rate is None else true_rate - false_rate
+    if gap is None:
+        status = "rates_missing"
+    elif gap < MIN_RATE_GAP or gap <= 0:  # a gap of 0 or below never allows a calibration
+        status = "rate_gap_too_small"
+    else:
+        status = "applied"
+    return {"status": status, **rates, "true_bullish_rate": true_rate, "false_bullish_rate": false_rate, "rate_gap": gap}
+
+
+dated_rates = recognition_rates(DATED_RATE_SUBSET)
+if DATED_RATE_SUBSET == calibration_rates["subset"] and dated_rates != calibration_rates:
+    raise AssertionError(f"the rates for the dated posts differ from chapter 10's on the same row: {dated_rates} vs "
+                         f"{calibration_rates}")
+print(f"Rates for the dated posts from chapter 8, row {selected_model_name} / {DATED_RATE_SUBSET} "
+      f"({dated_rates['rate_posts']['0']:,} bearish and {dated_rates['rate_posts']['2']:,} bullish test posts): "
+      f"true bullish rate {shown_rate(dated_rates['true_bullish_rate'])}, false bullish rate "
+      f"{shown_rate(dated_rates['false_bullish_rate'])}, gap {shown_rate(dated_rates['rate_gap'])} (at least "
+      f"{MIN_RATE_GAP}); status: {dated_rates['status']}"
+      + ("; the same row as chapter 10" if DATED_RATE_SUBSET == calibration_rates["subset"] else ""))
+
+# %% [markdown]
+# ## 14. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
 #
@@ -4562,7 +4762,7 @@ plt.show()
 #
 # ***
 #
-# ## 13. 简报：格式、校验、保存和面板
+# ## 14. 简报：格式、校验、保存和面板
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，分四步：
 #
