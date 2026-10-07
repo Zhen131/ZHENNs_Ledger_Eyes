@@ -56,6 +56,15 @@ EMOTION_NAMES = ["panic", "greed", "excitement", "anger", "mockery", "despair", 
 EMOTION_KEEP_NONE = True  # default: True (chapter 11 also learns "none": nine classes); two-state, other: False (posts labelled none are left out: eight classes)
 EMOTION_MIN_CLASS_POSTS = 10  # default: 10; or any integer of at least 10 (chapter 11 leaves out an emotion with fewer posts)
 EMOTION_REVIEW_SOURCE = ""  # default: "" (no review table is read); or the path or address of a review table filled in by a person (chapter 11)
+DATED_TWEETS_SOURCE = "hf://datasets/ExponentialScience/DLT-Tweets@c7d979394488bbd94bd6f493af1775d6b6159176/data"  # default: the tweet dataset's folder on Hugging Face at a fixed revision; or a local .parquet file or folder with the same columns, such as "data/raw/dlt-tweets/data" (chapter 12)
+DATED_NEWS_SOURCE = "hf://datasets/ExponentialScience/DLT-Sentiment-News@b52bfb8b3ec099924a52f6f4bfd1a8ac6c89c9e1/data"  # default: the news dataset's folder on Hugging Face at a fixed revision; or a local .parquet file or folder with the same columns, such as "data/raw/dlt-news/data" (chapter 12)
+DATED_START = "2021-01-01"  # default: "2021-01-01"; or any UTC day "YYYY-MM-DD" (chapter 12 keeps posts from this day on)
+DATED_END = None  # default: None (to the end of the data); or a UTC day "YYYY-MM-DD", not before DATED_START (the last day kept)
+DATED_DAILY_CAP = 2000  # default: 2000; or any positive integer (chapter 12 keeps at most this many posts per layer and UTC day, drawn with RANDOM_SEED)
+DATED_BTC_ONLY = True  # default: True (chapter 12 keeps only posts that mention bitcoin or btc); two-state, other: False (every post)
+DATED_LANGUAGE = "en"  # default: "en" (chapter 12 keeps only tweets marked with this language); two-state, other: None (no language filter)
+NEWS_TEXT = "title"  # default: "title" (chapter 12 uses the news headline); two-state, other: "text" (headline and summary)
+NEWS_LABEL = "market_direction"  # default: "market_direction" (chapter 12 converts the dataset's class); two-state, other: "votes" (the side with more reader votes)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -182,23 +191,49 @@ if isinstance(EMOTION_MIN_CLASS_POSTS, bool) or not isinstance(EMOTION_MIN_CLASS
                      f"split into training, validation and test posts), got {EMOTION_MIN_CLASS_POSTS!r}")
 if not isinstance(EMOTION_REVIEW_SOURCE, str):
     raise ValueError(f'EMOTION_REVIEW_SOURCE must be "" or the path or address of a review table, got {EMOTION_REVIEW_SOURCE!r}')
+for name, value in [("DATED_TWEETS_SOURCE", DATED_TWEETS_SOURCE), ("DATED_NEWS_SOURCE", DATED_NEWS_SOURCE)]:  # chapter 12
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be the address or path of a .parquet file or folder, got {value!r}")
+from datetime import date as calendar_date  # standard library: tells whether a date exists
+for name, value in [("DATED_START", DATED_START), ("DATED_END", DATED_END)]:
+    if name == "DATED_END" and value is None:
+        continue
+    try:
+        real_day = isinstance(value, str) and calendar_date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        real_day = False
+    if not real_day:
+        raise ValueError(f'{name} must be a UTC day written "YYYY-MM-DD"' + (" or None" if name == "DATED_END" else "")
+                         + f", got {value!r}")
+if DATED_END is not None and DATED_END < DATED_START:
+    raise ValueError(f"DATED_END ({DATED_END!r}) must not be before DATED_START ({DATED_START!r})")
+if isinstance(DATED_DAILY_CAP, bool) or not isinstance(DATED_DAILY_CAP, int) or DATED_DAILY_CAP < 1:
+    raise ValueError(f"DATED_DAILY_CAP must be a positive integer, got {DATED_DAILY_CAP!r}")
+if not isinstance(DATED_BTC_ONLY, bool):
+    raise ValueError(f"DATED_BTC_ONLY must be True or False, got {DATED_BTC_ONLY!r}")
+if DATED_LANGUAGE is not None and (not isinstance(DATED_LANGUAGE, str) or not DATED_LANGUAGE.strip()):
+    raise ValueError(f'DATED_LANGUAGE must be a language code such as "en", or None, got {DATED_LANGUAGE!r}')
+if NEWS_TEXT not in ("title", "text"):
+    raise ValueError(f'NEWS_TEXT must be "title" or "text", got {NEWS_TEXT!r}')
+if NEWS_LABEL not in ("market_direction", "votes"):
+    raise ValueError(f'NEWS_LABEL must be "market_direction" or "votes", got {NEWS_LABEL!r}')
 print("Switches look fine.")
 
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 13 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 13 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why`, `emotions` and `dated_data`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 13 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 13 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 13 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`、`dated_data`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 13 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.3",  # the format of chapter 13's rules (docs/brief-format.md in the repository)
+    "format_version": "1.4",  # the format of chapter 13's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -212,6 +247,7 @@ brief = {
     "drawers": None,
     "why": None,
     "emotions": None,
+    "dated_data": None,  # chapter 12
 }
 list(brief)  # show the top-level fields
 
@@ -3855,6 +3891,641 @@ def dated_table_problems(table):
     return problems
 
 # %% [markdown]
+# ### Account names and links
+#
+# Tweets often name other accounts (`@someone`) and carry links, and the news summaries do too. Every text of both layers gets two replacements as soon as it is read, before its id is made and before the Bitcoin rule looks at it:
+#
+# - **Links** become `http`. A link is a piece of text that starts with `http://`, `https://` or `www.` (in any case) and runs up to the next whitespace.
+# - **Account names** become `@user`. An account name is `@` followed by letters, digits or underscores, where the character right before `@` is not a letter, digit or underscore. So an e-mail address such as `name@example.com` is not an account name and stays as it is.
+#
+# Why: example posts should not show other people's account names (the dataset card says user names were removed, but many tweets still contain them); and account names and links would otherwise turn into odd one-off words that a later count of new words per day would take for new words. Doing the replacements twice gives the same text as doing them once. The cell checks this on a few built-in examples and stops if anything is off.
+#
+# ***
+#
+# ### 账号名和链接
+#
+# 推文里常常点名别的账号（`@某人`）、带链接，新闻摘要里也有。两层的每段正文一读进来就做两处替换，在造编号和判断提没提到比特币之前：
+#
+# - **链接**换成 `http`。链接指以 `http://`、`https://` 或 `www.` 开头（不分大小写）、一直到下一个空白为止的一段文字。
+# - **账号名**换成 `@user`。账号名指 `@` 后面跟一串字母、数字或下划线，而且 `@` 前面紧挨着的那个字符不是字母、数字或下划线。所以像 `name@example.com` 这样的邮箱不算账号名，原样留着。
+#
+# 为什么：例句里不该露出别人的账号名（数据说明页说已经删了用户名，可很多推文里其实还有）；账号名和链接如果不换，会变成一个个怪词，以后按天找新词时会被当成新词。替换做两遍和做一遍结果一样。这一格拿几句内置的例子核对这一点，有一处不对就停下。
+
+# %%
+# Replace links with "http" and account names with "@user", the same way in both layers.
+MASK_LINK_PATTERN = re.compile(r"(?:https?://|www\.)\S+", flags=re.IGNORECASE)  # http://, https:// or www. up to the next whitespace
+MASK_HANDLE_PATTERN = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9_]+")  # @ and letters, digits or _, not right after one of them
+LINK_MASK, HANDLE_MASK = "http", "@user"
+
+
+def mask_texts(texts):
+    """Replace links and account names in a pandas Series of texts; a missing text becomes an empty string."""
+    texts = texts.fillna("").astype(str)
+    return texts.str.replace(MASK_LINK_PATTERN, LINK_MASK, regex=True).str.replace(MASK_HANDLE_PATTERN, HANDLE_MASK, regex=True)
+
+
+MASK_EXAMPLES = [  # (text, expected text after the replacements)
+    ("@FoxBusiness hi", "@user hi"),
+    ("Bitcoin to the moon https://t.co/AbC123xYz #btc", "Bitcoin to the moon http #btc"),
+    ("see www.Example.com/page?x=1, or HTTP://EXAMPLE.ORG/a", "see http or http"),
+    ("RT @crypto_fan1: thanks @user and @Another_One!", "RT @user: thanks @user and @user!"),
+    ("mail me at name@example.com", "mail me at name@example.com"),  # an e-mail address is not an account name
+    ("", ""),
+]
+masked_once = mask_texts(pd.Series([text for text, _ in MASK_EXAMPLES]))
+masked_twice = mask_texts(masked_once)
+mask_wrong = [(text, got, expected) for (text, expected), got in zip(MASK_EXAMPLES, masked_once) if got != expected]
+if mask_wrong or not masked_once.equals(masked_twice):
+    raise ValueError(f"The replacements of account names and links do not work as described: {mask_wrong}; "
+                     f"twice equals once: {masked_once.equals(masked_twice)}")
+print(f"Replacements checked on {len(MASK_EXAMPLES)} examples; doing them twice changes nothing.")
+
+# %% [markdown]
+# ### Times and UTC days
+#
+# The two datasets write their times in several ways. The tweets use four (counted on the full dataset): a time with the time zone `+00:00` (`2021-10-08 03:30:50+00:00`), a time without a time zone (`2021-06-22 17:02:41`), the same with milliseconds (`2022-01-21 00:00:00.000`), and a date alone (`2022-01-21`). The news give a time without a time zone (`2022-06-09 04:00:43`). `parse_times` reads every value the same way, whatever the dataset:
+#
+# - a time **with a time zone** is converted to UTC;
+# - a time **without a time zone** is taken as UTC (neither dataset says otherwise);
+# - a value with **only a date** gives the row its `date` and leaves `time` empty;
+# - a value that is none of these, or names a day that does not exist, **cannot be parsed**: the row is left out, and the brief counts such rows.
+#
+# Times are kept to the second (milliseconds are dropped). The four kinds are counted for every dataset and go into the brief. The cell checks the rules on built-in examples, among them a time zone that moves the post to the next UTC day.
+#
+# ***
+#
+# ### 时间和 UTC 日
+#
+# 两份数据的时间写法不止一种。推文有四种（在完整数据上数过）：带时区 `+00:00` 的时间（`2021-10-08 03:30:50+00:00`）、不带时区的时间（`2021-06-22 17:02:41`）、带毫秒的不带时区时间（`2022-01-21 00:00:00.000`）、只有日期（`2022-01-21`）。新闻是不带时区的时间（`2022-06-09 04:00:43`）。`parse_times` 不管是哪份数据，都按同一套规矩读：
+#
+# - **带时区**的时间换算成 UTC；
+# - **不带时区**的时间当作 UTC（两份数据都没说是别的时区）；
+# - **只有日期**的值给这一行填上 `date`，`time` 空着；
+# - 不属于以上几种的值，或者日期根本不存在的，算**解析不了**：这一行不进表，简报里记下有几条。
+#
+# 时间保留到秒（毫秒去掉）。每份数据都数这四种情况各几条，写进简报。这一格用内置的例子核对这些规矩，其中有一条带时区的时间换算以后落到下一个 UTC 日。
+
+# %%
+# Read raw time texts: the kind of each value, its UTC time (to the second) and its UTC day.
+TIME_KINDS = ["with_zone", "without_zone", "date_only", "unparseable"]  # how a raw time is written
+WITH_ZONE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})")
+WITHOUT_ZONE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?")
+DATE_ONLY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def parse_times(raw):
+    """For a Series of raw time texts: (kind, UTC time or NaT, UTC day text or None), all with raw's index."""
+    text = raw.fillna("").astype(str).str.strip()
+    kind = pd.Series("unparseable", index=raw.index, dtype=object)
+    kind[text.str.fullmatch(WITHOUT_ZONE)] = "without_zone"
+    kind[text.str.fullmatch(WITH_ZONE)] = "with_zone"
+    kind[text.str.fullmatch(DATE_ONLY)] = "date_only"
+    time = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns, UTC]")
+    for name in ["with_zone", "without_zone"]:  # read separately, so that times with and without a zone never mix
+        rows = kind == name
+        if rows.any():
+            time[rows] = pd.to_datetime(text[rows], format="ISO8601", utc=True, errors="coerce").dt.floor("s")
+    days = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns, UTC]")
+    rows = kind == "date_only"
+    if rows.any():
+        days[rows] = pd.to_datetime(text[rows], format="%Y-%m-%d", utc=True, errors="coerce")
+    kind[kind.isin(["with_zone", "without_zone"]) & time.isna()] = "unparseable"  # matched the form, but no such time
+    kind[(kind == "date_only") & days.isna()] = "unparseable"  # for example 2021-02-30
+    day = pd.Series(None, index=raw.index, dtype=object)
+    for rows, values in [(time.notna(), time), (kind == "date_only", days)]:  # the UTC day as text YYYY-MM-DD
+        if rows.any():
+            day[rows] = values[rows].dt.tz_localize(None).to_numpy().astype("datetime64[D]").astype(str)
+    return kind, time, day.where(day.notna(), None)
+
+
+TIME_EXAMPLES = [  # (raw, kind, UTC time or None, UTC day or None)
+    ("2021-10-08 03:30:50+00:00", "with_zone", "2021-10-08 03:30:50", "2021-10-08"),
+    ("2021-10-08 23:30:50-05:00", "with_zone", "2021-10-09 04:30:50", "2021-10-09"),  # the next UTC day
+    ("2021-06-22T17:02:41Z", "with_zone", "2021-06-22 17:02:41", "2021-06-22"),
+    ("2021-06-22 17:02:41", "without_zone", "2021-06-22 17:02:41", "2021-06-22"),
+    ("2022-01-21 00:00:00.999", "without_zone", "2022-01-21 00:00:00", "2022-01-21"),  # to the second
+    ("2022-01-21", "date_only", None, "2022-01-21"),
+    ("2021-02-30", "unparseable", None, None),  # no such day
+    ("yesterday", "unparseable", None, None),
+    (None, "unparseable", None, None),
+]
+example_kind, example_time, example_day = parse_times(pd.Series([raw for raw, _, _, _ in TIME_EXAMPLES], dtype=object))
+time_wrong = []
+for index, (raw, kind, time_text, day) in enumerate(TIME_EXAMPLES):
+    got_time = None if pd.isna(example_time[index]) else example_time[index].strftime("%Y-%m-%d %H:%M:%S")
+    got_day = None if example_day[index] is None else example_day[index]
+    if (example_kind[index], got_time, got_day) != (kind, time_text, day):
+        time_wrong.append(f"{raw!r}: {example_kind[index]}, {got_time}, {got_day} (expected {kind}, {time_text}, {day})")
+if time_wrong:
+    raise ValueError("parse_times does not follow its rules: " + "; ".join(time_wrong))
+print(f"parse_times checked on {len(TIME_EXAMPLES)} examples.")
+
+# %% [markdown]
+# ### Post ids and the daily cap
+#
+# **Ids.** The tweets come without ids, so the chapter makes one from what a tweet is: the first 16 hexadecimal digits of the SHA-256 of its original time text and its text after the two replacements, `dlt-tweets:<fingerprint>`. The same tweet gets the same id on every run, whatever order the files and their rows are read in, and a tweet in the repository's sample has the same id as the same tweet in the full dataset. A news item gets `dlt-news:<fingerprint>` from its original time text and its CryptoPanic address, so its id does not change when `NEWS_TEXT` switches between the title and the title with summary. Two rows with the same id are the same post written twice (same time, same text, or the same news address at the same time): the table keeps one of them, chosen in a fixed order, and the brief counts how many were dropped.
+#
+# **The daily cap.** A busy day has tens of thousands of tweets, so each layer keeps at most `DATED_DAILY_CAP` posts per UTC day. Which ones does not depend on reading order: every post gets a fixed draw key, the first 16 hexadecimal digits of the SHA-256 of `"<RANDOM_SEED>:<post_id>"`, and each day keeps the posts with the smallest keys (ties by id). That is a random draw fixed by the seed, and it lets the tweets be read one file at a time: after each file, only the posts that are still among the smallest keys of their day are kept. The cell checks this on a small made-up table: capping it in reverse row order must keep exactly the same ids.
+#
+# ***
+#
+# ### 帖子编号和每天封顶
+#
+# **编号。** 推文不带编号，所以这一章用推文本身造一个：原始时间文字和替换过的正文合起来算 SHA-256，取前 16 位十六进制数字，写成 `dlt-tweets:<指纹>`。同一条推文每次运行编号都一样，和按什么顺序读文件、读行无关；仓库样本里的一条推文和完整数据里的同一条推文编号也相同。新闻用原始时间文字和它在 CryptoPanic 上的地址算，写成 `dlt-news:<指纹>`，所以 `NEWS_TEXT` 在「只要标题」和「标题加摘要」之间切换时编号不变。编号相同的两行是同一条帖子写了两遍（时间、正文都一样，或者同一时间、同一个新闻地址）：表里只留一条，按固定的顺序挑，简报里记下去掉了几条。
+#
+# **每天封顶。** 热闹的日子一天有几万条推文，所以每层每个 UTC 日最多留 `DATED_DAILY_CAP` 条。留哪些和读的顺序无关：每条帖子有一个固定的抽签键，即 `"<RANDOM_SEED>:<post_id>"` 的 SHA-256 的前 16 位十六进制数字，每天留键最小的那些（键一样时按编号）。这等于一次由种子定死的随机抽样，而且推文可以一个文件一个文件地读：每读完一个文件，只留下在当天仍排在最小那批里的帖子。这一格用一张编出来的小表核对：把行倒过来再封顶一次，留下的编号必须一模一样。
+
+# %%
+# Stable post ids, fixed draw keys, one row per id, and the daily cap.
+import hashlib  # standard library: SHA-256 fingerprints
+
+
+def post_ids(prefix, first, second):
+    """Ids "<prefix>:<16 hex digits>" from the SHA-256 of two texts per post (joined by a unit separator)."""
+    return [f"{prefix}:" + hashlib.sha256((str(a) + "\x1f" + str(b)).encode("utf-8")).hexdigest()[:16]
+            for a, b in zip(first, second)]
+
+
+def draw_keys(ids, seed):
+    """The fixed draw key of every id: the first 16 hex digits of the SHA-256 of "<seed>:<id>"."""
+    return [hashlib.sha256(f"{seed}:{post_id}".encode("utf-8")).hexdigest()[:16] for post_id in ids]
+
+
+def one_row_per_id(posts):
+    """Drop repeated ids, keeping the first row in a fixed order (id, then text, then language)."""
+    ordered = posts.sort_values(["post_id", "text", "language"], na_position="first", kind="stable")
+    return ordered.drop_duplicates("post_id", keep="first")
+
+
+def cap_per_day(posts, cap):
+    """At most cap rows per date: those with the smallest draw_key (ties by post_id); in date and key order."""
+    ordered = posts.sort_values(["date", "draw_key", "post_id"], kind="stable")
+    return ordered.groupby("date", sort=False).head(cap).reset_index(drop=True)
+
+
+# Self-check on a made-up table: the same ids are kept whatever the row order.
+probe_ids = [f"probe:{number}" for number in range(30)]
+probe = pd.DataFrame({"post_id": probe_ids, "date": [f"2022-05-0{1 + number % 3}" for number in range(30)],
+                      "text": "", "language": None, "draw_key": draw_keys(probe_ids, RANDOM_SEED)})
+kept_forward = set(cap_per_day(one_row_per_id(probe), 4)["post_id"])
+kept_backward = set(cap_per_day(one_row_per_id(probe.iloc[::-1]), 4)["post_id"])
+if kept_forward != kept_backward or len(kept_forward) != 12:
+    raise ValueError("The daily cap depends on the order of the rows; it must not.")
+print(f"Daily cap checked: the same {len(kept_forward)} of {len(probe)} made-up posts are kept in either row order.")
+
+# %% [markdown]
+# ### Reading Parquet files part by part
+#
+# Both datasets are stored as Parquet files, a column-wise file format: a program can read a few columns of a file, and a file a batch of rows at a time, without loading the rest. The tweet dataset is 14 files of about 256 MB each (22 million tweets); read whole, it would not fit into the memory of a free Colab session. So **nothing reads a whole tweet file at once**: the tweets are read one file at a time, in batches of rows, and only three columns.
+#
+# `parquet_files(source)` finds the files of a source, and `parquet_batches(...)` yields the wanted columns of one file batch by batch. A source can be a Hugging Face address (`hf://datasets/...`, read over the network without any token), a local folder (all its `.parquet` files, in name order) or a single local `.parquet` file. The address, the downloaded copy and the repository's small samples all go through these same two functions; there is no separate way of reading for any of them. The default addresses carry the dataset's revision after `@`, so the data cannot change under the notebook when the dataset is updated.
+#
+# ***
+#
+# ### 一部分一部分地读 Parquet 文件
+#
+# 两份数据都存成 Parquet 文件，一种按列存的文件格式：程序可以只读一个文件里的几列，也可以一批行一批行地读，其余的不用装进来。推文数据是 14 个文件，每个约 256 MB（共 2,200 万条推文）；整个读进来，免费的 Colab 内存装不下。所以**没有哪一步会一次读进一整个推文文件**：推文一个文件一个文件地读，每个文件一批一批地读，而且只读三列。
+#
+# `parquet_files(source)` 找出一个来源有哪些文件，`parquet_batches(...)` 把一个文件里要的那几列一批一批地交出来。来源可以是 Hugging Face 地址（`hf://datasets/...`，联网读，不带任何 token），可以是本地文件夹（里面所有 `.parquet` 文件，按文件名顺序），也可以是单个本地 `.parquet` 文件。网上的地址、下载到本地的副本、仓库里的小样本，都走这同两个函数，哪一种都没有另外的读法。默认地址在 `@` 后面带着数据的版本号，所以数据集更新了，笔记本读到的数据也不会跟着变。
+
+# %%
+# One way of reading Parquet data: a Hugging Face address, a local folder or one local file.
+import json  # standard library: the feature description in a file's metadata
+
+import fsspec  # file systems: local paths and hf:// addresses alike
+import pyarrow.parquet as pq  # reads a Parquet file a batch of rows at a time
+
+
+def parquet_files(source):
+    """(file system, files) of a source: every .parquet file of a folder in name order, or the one file given."""
+    options = {"token": False} if source.startswith("hf://") else {}  # never send a stored token
+    fs, path = fsspec.core.url_to_fs(source, **options)
+    if fs.isdir(path):
+        files = sorted(name for name in fs.ls(path, detail=False) if name.endswith(".parquet"))
+    elif fs.isfile(path):
+        files = [path]
+    else:
+        raise FileNotFoundError(f"{source} is neither a .parquet file nor a folder")
+    if not files:
+        raise FileNotFoundError(f"{source} holds no .parquet file")
+    return fs, files
+
+
+def parquet_batches(fs, file, columns, batch_size):
+    """Yield the given columns of one Parquet file as pandas tables of at most batch_size rows."""
+    with fs.open(file, "rb") as handle:
+        parquet = pq.ParquetFile(handle)
+        absent = [column for column in columns if column not in parquet.schema_arrow.names]
+        if absent:
+            raise ValueError(f"{file} has no column(s) {absent}")
+        for batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+            yield batch.to_pandas()
+
+
+def parquet_features(fs, file):
+    """The Hugging Face feature description stored in a Parquet file's metadata ({} when there is none)."""
+    with fs.open(file, "rb") as handle:
+        metadata = pq.ParquetFile(handle).schema_arrow.metadata or {}
+    text = metadata.get(b"huggingface")
+    return json.loads(text).get("info", {}).get("features", {}) if text else {}
+
+# %% [markdown]
+# ### The tweets: the retail layer
+#
+# `read_dated_tweets(source, work_dir)` reads the tweet files one after the other. For every batch of rows it takes only `timestamp`, `tweet` and `language` and applies the steps in this order, counting the posts left after each:
+#
+# 1. **read**: every row;
+# 2. **time_parsed**: rows whose time can be read (the four kinds above are counted too);
+# 3. **in_dates**: UTC day from `DATED_START` to `DATED_END` (`None`: to the end of the data);
+# 4. **language**: `language` equal to `DATED_LANGUAGE` (`None`: no filter). The dataset marks every tweet `en`, so with the default nothing is dropped here;
+# 5. **mentions_btc**: with `DATED_BTC_ONLY`, only texts that mention `bitcoin` or `btc` (after the replacements);
+# 6. **unique**: one row per id (a tweet written twice with the same time and text counts once);
+# 7. **daily_cap**: at most `DATED_DAILY_CAP` posts per UTC day, by draw key.
+#
+# After each file, the posts kept so far and the new file's posts are merged and capped again, so memory only ever holds one file's filtered posts and the posts kept so far. To count steps 6 and 7 exactly over all files, the chapter also keeps every filtered post's 64-bit fingerprint (8 bytes per post). The result is saved as a Parquet file in `WORK_DIR/cache/`, with the counts in its metadata, and later runs read it instead. The cache file's name carries a fingerprint of the source (a local file or folder by the bytes of its files, so any change leads to a fresh read; a web address by the address itself) and of every switch that changes the result: `DATED_START`, `DATED_END`, `DATED_LANGUAGE`, `DATED_BTC_ONLY`, `DATED_DAILY_CAP`, `RANDOM_SEED` and the shape version. Reading the full dataset takes several minutes; the `[load]` lines show its progress file by file.
+#
+# ***
+#
+# ### 推文：散户层
+#
+# `read_dated_tweets(source, work_dir)` 一个接一个地读推文文件。每一批行只取 `timestamp`、`tweet`、`language` 三列，按下面的顺序筛，每一步之后剩几条都记下来：
+#
+# 1. **read**（读入）：每一行；
+# 2. **time_parsed**（时间读得出）：时间能解析的行（上面说的四种情况也各数一遍）；
+# 3. **in_dates**（日期在范围内）：UTC 日从 `DATED_START` 到 `DATED_END`（`None` 表示到数据结束）；
+# 4. **language**（语言）：`language` 等于 `DATED_LANGUAGE`（`None` 表示不筛）。数据集给每条推文都标的是 `en`，所以默认设置下这一步一条也不会去掉；
+# 5. **mentions_btc**（提到比特币）：`DATED_BTC_ONLY` 打开时，只留替换后的正文里提到 `bitcoin` 或 `btc` 的；
+# 6. **unique**（去重）：一个编号只留一行（时间和正文都一样、写了两遍的推文算一条）；
+# 7. **daily_cap**（每天封顶）：每个 UTC 日最多 `DATED_DAILY_CAP` 条，按抽签键挑。
+#
+# 每读完一个文件，把已经留下的和这个文件筛出来的合在一起，再封顶一次。所以内存里只放「一个文件筛完的」和「已经留下的」。为了把第 6、7 步在所有文件上数得一条不差，这一章还给每条筛过的帖子记一个 64 位的指纹（每条 8 个字节）。结果存成 Parquet 文件放在 `WORK_DIR/cache/`，各步的条数写在文件的元数据里，以后运行直接读它。缓存文件名里带着来源的指纹（本地文件或文件夹按文件内容算，一改就重新读；网址按网址本身算）和所有影响结果的开关：`DATED_START`、`DATED_END`、`DATED_LANGUAGE`、`DATED_BTC_ONLY`、`DATED_DAILY_CAP`、`RANDOM_SEED`，以及表的形状版本。读完整数据要几分钟，`[load]` 开头的行一个文件一个文件地报进度。
+
+# %%
+# The tweets (retail layer): read file by file, keep what passes the filters, cap every day, and cache the result.
+import time  # standard library: timing
+from pathlib import Path  # standard library: file paths
+
+import numpy as np  # 64-bit fingerprints, for counting distinct posts over all files
+import pyarrow as pa  # a table with metadata, for the cache
+
+DATED_CITATION = ("Hernandez Cruz, W., Devine, P., Vadgama, N., Tasca, P. and Xu, J. (2026). DLT-Corpus: A Large-Scale "
+                  "Text Collection for the Distributed Ledger Technology Domain. arXiv:2602.22045")
+TWEETS_DATASET = {"name": "ExponentialScience/DLT-Tweets", "revision": "c7d979394488bbd94bd6f493af1775d6b6159176",
+                  "license": "CC BY-NC 4.0", "citation": DATED_CITATION, "layer": "retail"}
+TWEET_COLUMNS = ["timestamp", "tweet", "language"]  # the only columns read (not the dataset's machine sentiment)
+DATED_STEPS = ["read", "time_parsed", "in_dates", "language", "mentions_btc", "unique", "daily_cap"]
+DATED_BATCH_ROWS = 200_000  # rows per batch when reading a file
+
+
+def dated_filters(frame, counts, kinds, has_language):
+    """Steps 2 to 5 for one batch (frame: raw_time, text, language, ...); adds time, date and mentions_btc."""
+    counts["read"] += len(frame)
+    kind, parsed_time, day = parse_times(frame["raw_time"])
+    for name in TIME_KINDS:
+        kinds[name] += int((kind == name).sum())
+    frame = frame.assign(time=parsed_time, date=day)[kind != "unparseable"]
+    counts["time_parsed"] += len(frame)
+    in_dates = frame["date"] >= DATED_START
+    if DATED_END is not None:
+        in_dates &= frame["date"] <= DATED_END
+    frame = frame[in_dates]
+    counts["in_dates"] += len(frame)
+    if has_language and DATED_LANGUAGE is not None:
+        frame = frame[frame["language"] == DATED_LANGUAGE]
+    counts["language"] += len(frame)
+    frame = frame.assign(text=mask_texts(frame["text"]))  # the replacements come before the Bitcoin rule and the id
+    frame = frame.assign(mentions_btc=frame["text"].str.contains(BTC_PATTERN))
+    if DATED_BTC_ONLY:
+        frame = frame[frame["mentions_btc"]]
+    counts["mentions_btc"] += len(frame)
+    return frame
+
+
+def id_numbers(ids):
+    """The 64-bit number of every id's fingerprint (its last 16 hex digits)."""
+    return np.fromiter((int(post_id[-16:], 16) for post_id in ids), dtype=np.uint64, count=len(ids))
+
+
+def dated_source_fingerprint(source):
+    """A fingerprint of a Parquet source: local files by name and bytes, a web address by the address."""
+    digest = hashlib.sha256(DATED_SHAPE_VERSION.encode("utf-8"))
+    if "://" in source:
+        digest.update(source.encode("utf-8"))
+        return "url-" + digest.hexdigest()[:16]
+    fs, files = parquet_files(source)
+    for file in files:
+        digest.update(Path(file).name.encode("utf-8"))
+        with fs.open(file, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return "file-" + digest.hexdigest()[:16]
+
+
+def read_dated_tweets(source, work_dir):
+    """The tweets of source that pass the filters, capped per UTC day, and the counts; from the cache when it exists.
+
+    Returns (rows, info): rows has post_id, date, time, text, language, mentions_btc and draw_key; info has the posts
+    left after every step, the time kinds, the repeated ids dropped and the posts per day before the cap.
+    """
+    settings = {"source": dated_source_fingerprint(source), "start": DATED_START, "end": DATED_END,
+                "language": DATED_LANGUAGE, "btc_only": DATED_BTC_ONLY, "cap": DATED_DAILY_CAP, "seed": RANDOM_SEED,
+                "shape": DATED_SHAPE_VERSION}
+    key = hashlib.sha256(json.dumps(settings, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    cache_file = Path(work_dir) / "cache" / f"dated-tweets-{key}.parquet"
+    started = time.perf_counter()
+    if cache_file.exists():
+        table = pq.read_table(cache_file)
+        info = json.loads(table.schema.metadata[b"ledger_eyes"])
+        print(f"[load] dated tweets: cache hit: read {cache_file.name} in {time.perf_counter() - started:.1f} s; "
+              "no tweet file was opened")
+        return table.to_pandas(), info
+    fs, files = parquet_files(source)
+    counts, kinds = dict.fromkeys(DATED_STEPS, 0), dict.fromkeys(TIME_KINDS, 0)
+    kept = None
+    fingerprints, days = [], []  # one entry per filtered post, for the distinct counts
+    for number, file in enumerate(files, start=1):
+        file_started, parts = time.perf_counter(), []
+        for batch in parquet_batches(fs, file, TWEET_COLUMNS, DATED_BATCH_ROWS):
+            frame = pd.DataFrame({"raw_time": batch["timestamp"], "text": batch["tweet"],
+                                  "language": batch["language"]})
+            rows = dated_filters(frame, counts, kinds, has_language=True)
+            ids = post_ids("dlt-tweets", rows["raw_time"], rows["text"])
+            rows = rows.assign(post_id=ids, draw_key=draw_keys(ids, RANDOM_SEED))
+            fingerprints.append(id_numbers(ids))
+            days.append(rows["date"].to_numpy(dtype="datetime64[D]"))
+            parts.append(rows[["post_id", "date", "time", "text", "language", "mentions_btc", "draw_key"]])
+        merged = pd.concat(([kept] if kept is not None else []) + parts, ignore_index=True)
+        kept = cap_per_day(one_row_per_id(merged), DATED_DAILY_CAP)
+        print(f"[load] dated tweets: file {number} of {len(files)} ({Path(file).name}): read in "
+              f"{time.perf_counter() - file_started:.1f} s; {counts['read']:,} rows read so far, "
+              f"{counts['mentions_btc']:,} through the filters, {len(kept):,} kept after the daily cap", flush=True)
+    # Distinct posts over all files: an id is one 64-bit fingerprint; every id has one date.
+    numbers, all_days = np.concatenate(fingerprints), np.concatenate(days)
+    _, first = np.unique(numbers, return_index=True)
+    per_day = pd.Series(all_days[first].astype(str)).value_counts().sort_index()
+    counts["unique"] = int(len(first))
+    counts["daily_cap"] = int(len(kept))
+    info = {"steps": counts, "time_kinds": kinds, "n_duplicates": counts["mentions_btc"] - counts["unique"],
+            "posts_per_day_before_cap": {str(day): int(n) for day, n in per_day.items()}}
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_file.with_suffix(".tmp")  # write first, rename after, so a crash never leaves half a cache
+    table = pa.Table.from_pandas(kept, preserve_index=False)
+    pq.write_table(table.replace_schema_metadata({**(table.schema.metadata or {}),
+                                                  b"ledger_eyes": json.dumps(info).encode("utf-8")}), temporary)
+    temporary.replace(cache_file)
+    print(f"[load] dated tweets: read {len(files)} file(s) in {time.perf_counter() - started:.1f} s; "
+          f"saved cache {cache_file.name}")
+    return kept, info
+
+
+tweet_rows, tweet_info = read_dated_tweets(DATED_TWEETS_SOURCE, WORK_DIR)
+pd.DataFrame({"posts left": tweet_info["steps"]}).T
+
+# %% [markdown]
+# ### The news: the media layer
+#
+# The news dataset is one file of about 12 MB, so `read_dated_news(source)` reads it whole, through the same two reading functions, and applies the same steps (there is no language column: the dataset card says every item is English, so the language step keeps every item and `language` stays empty).
+#
+# - **Text.** With `NEWS_TEXT = "title"` (the default) the text is the headline; with `"text"` it is the dataset's `text`, the headline, an empty line and the summary. The Bitcoin rule looks at that text.
+# - **Source.** The domain of `source_url`, the address of the original article, in lower case and without a leading `www.` (for example `cointelegraph.com`). A row whose address is empty, or not an `http` or `https` address with a domain, gets `unknown` and stays in the table; the brief counts them.
+# - **Votes.** CryptoPanic readers vote on news; the table keeps each item's bullish and bearish votes (`votes_bullish`, `votes_bearish`).
+# - **Label.** The dataset's `market_direction` was made from those votes: the authors kept only news with at least the median number of votes, computed a share of the votes, and called a news item bearish below the 25th percentile of that share, bullish above the 75th, and neutral in between (the card does not say which share). **Its coding differs from this project's**: the dataset has 0 = neutral, 1 = bearish, 2 = bullish, while this project has 0 = bearish, 1 = neutral, 2 = bullish. So every value is converted one by one: dataset 0 (neutral) → 1, dataset 1 (bearish) → 0, dataset 2 (bullish) → 2. The file records the names of its classes; the cell checks that they are neutral, bearish, bullish in this order and stops otherwise (a file without names is converted the same way, and the brief says that the names were not found). With `NEWS_LABEL = "votes"` the label comes from the votes instead: more bullish votes → 2, more bearish votes → 0, as many (also none) → 1.
+#
+# The brief records, for the news that are kept, how many carry each value of `market_direction` and each label after the conversion, so that the conversion can be checked.
+#
+# ***
+#
+# ### 新闻：媒体层
+#
+# 新闻数据只有一个约 12 MB 的文件，所以 `read_dated_news(source)` 整个读进来，走的是同两个读函数，筛的步骤也一样（它没有语言列：数据说明页称全是英文，所以语言那一步一条都不去掉，`language` 空着）。
+#
+# - **正文。** `NEWS_TEXT = "title"`（默认）时正文是标题；改成 `"text"` 时用数据里的 `text`，即标题、一个空行、再加摘要。提没提到比特币，看的就是这段正文。
+# - **来源。** 取 `source_url`（原文的网址）的域名，转小写，去掉开头的 `www.`（例如 `cointelegraph.com`）。网址是空的，或者不是带域名的 `http`、`https` 网址的，写 `unknown`，这些行照样进表，简报里记下有几条。
+# - **票数。** CryptoPanic 的读者会给新闻投票；表里留着每条新闻的看多票和看空票（`votes_bullish`、`votes_bearish`）。
+# - **标签。** 数据自带的 `market_direction` 是由这些票算出来的：作者只收票数不低于中位数的新闻，算一个票的占比，低于第 25 百分位的标看空，高于第 75 百分位的标看多，中间的标中性（说明页没写清是哪一种占比）。**它的编码和本项目不一样**：数据里 0 = 中性、1 = 看空、2 = 看多，本项目是 0 = 看空、1 = 中性、2 = 看多。所以逐个换算：数据的 0（中性）→ 1，数据的 1（看空）→ 0，数据的 2（看多）→ 2。文件里记着各类的名字；这一格核对它们依次是 neutral、bearish、bullish，不是就停下（文件里没记名字的，照同样的换算，简报里写明没找到名字）。`NEWS_LABEL = "votes"` 时标签改由票数来定：看多票多 → 2，看空票多 → 0，一样多（包括都是 0）→ 1。
+#
+# 简报里记下留下的新闻里，`market_direction` 每个值各几条、换算后每个标签各几条，方便核对换算。
+
+# %%
+# The news (media layer): read the file(s), apply the same steps, convert the labels and name the sources.
+from urllib.parse import urlsplit  # standard library: the parts of a web address
+
+NEWS_DATASET = {"name": "ExponentialScience/DLT-Sentiment-News", "revision": "b52bfb8b3ec099924a52f6f4bfd1a8ac6c89c9e1",
+                "license": "CC BY-NC 4.0", "citation": DATED_CITATION, "layer": "media"}
+NEWS_COLUMNS = ["timestamp", "title", "text", "market_direction", "vote_counts", "source_url", "url"]
+NEWS_CLASS_NAMES = ["neutral", "bearish", "bullish"]  # the dataset's own order of market_direction
+NEWS_TO_PROJECT = {0: 1, 1: 0, 2: 2}  # dataset value -> this project's label: neutral -> 1, bearish -> 0, bullish -> 2
+UNKNOWN_SOURCE = "unknown"
+
+
+def source_domain(address):
+    """The domain of an http(s) address, in lower case and without a leading "www."; "unknown" when there is none."""
+    try:
+        parts = urlsplit(str(address or "").strip())
+        host = parts.hostname if parts.scheme in ("http", "https") else None
+    except ValueError:  # an address that cannot be split
+        host = None
+    if not host:
+        return UNKNOWN_SOURCE
+    host = host.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def read_dated_news(source):
+    """The news of source that pass the filters, capped per UTC day, and the counts (no cache: the file is small)."""
+    started = time.perf_counter()
+    fs, files = parquet_files(source)
+    names_found = []
+    for file in files:
+        names = parquet_features(fs, file).get("market_direction", {}).get("names")
+        if names is not None and list(names) != NEWS_CLASS_NAMES:
+            raise ValueError(f"{file} names the classes of market_direction {names}, not {NEWS_CLASS_NAMES}: the "
+                             "conversion to this project's labels would be wrong")
+        names_found.append(names is not None)
+    raw = pd.concat([batch for file in files for batch in parquet_batches(fs, file, NEWS_COLUMNS, DATED_BATCH_ROWS)],
+                    ignore_index=True)
+    unknown_values = sorted(set(raw["market_direction"].dropna().astype(int)) - set(NEWS_TO_PROJECT))
+    if raw["market_direction"].isna().any() or unknown_values:
+        raise ValueError(f"market_direction has values outside {sorted(NEWS_TO_PROJECT)}: {unknown_values}")
+    votes = raw["vote_counts"].map(lambda value: value if isinstance(value, dict) else {})
+    frame = pd.DataFrame({"raw_time": raw["timestamp"], "text": raw[NEWS_TEXT], "language": None, "url": raw["url"],
+                          "source": raw["source_url"].map(source_domain),
+                          "market_direction": raw["market_direction"].astype(int),
+                          "votes_bullish": pd.array(votes.map(lambda value: value.get("bullish")), dtype="Int64"),
+                          "votes_bearish": pd.array(votes.map(lambda value: value.get("bearish")), dtype="Int64")})
+    counts, kinds = dict.fromkeys(DATED_STEPS, 0), dict.fromkeys(TIME_KINDS, 0)
+    rows = dated_filters(frame, counts, kinds, has_language=False)
+    ids = post_ids("dlt-news", rows["raw_time"], rows["url"])
+    rows = one_row_per_id(rows.assign(post_id=ids, draw_key=draw_keys(ids, RANDOM_SEED)))
+    counts["unique"] = len(rows)
+    per_day = rows["date"].value_counts().sort_index()
+    rows = cap_per_day(rows, DATED_DAILY_CAP)
+    counts["daily_cap"] = len(rows)
+    if NEWS_LABEL == "market_direction":
+        label = rows["market_direction"].map(NEWS_TO_PROJECT)
+    else:  # "votes": the side with more votes; as many (also none) is neutral
+        bullish, bearish = rows["votes_bullish"].fillna(0), rows["votes_bearish"].fillna(0)
+        label = pd.Series(np.select([bullish > bearish, bearish > bullish], [2, 0], 1), index=rows.index)
+    rows = rows.assign(label=pd.array(label, dtype="Int64"))
+    info = {"steps": counts, "time_kinds": kinds, "n_duplicates": counts["mentions_btc"] - counts["unique"],
+            "posts_per_day_before_cap": {str(day): int(n) for day, n in per_day.items()},
+            "class_names_found": all(names_found)}
+    print(f"[load] dated news: read {len(files)} file(s), {counts['read']:,} rows in "
+          f"{time.perf_counter() - started:.1f} s; {len(rows):,} kept after the filters and the daily cap")
+    return rows, info
+
+
+news_rows, news_info = read_dated_news(DATED_NEWS_SOURCE)
+pd.DataFrame({"posts left": news_info["steps"]}).T
+
+# %% [markdown]
+# ### The dated post table
+#
+# The news and the tweets now become one table, `dated_posts`, in the shape above: one row per post, sorted by date, layer and id. Before anything else uses it, `dated_table_problems` checks it, and the notebook stops if the table does not fit the shape. It also stops if no post is left at all, and says for each layer which step left none (for example a `DATED_START` after the end of both datasets).
+#
+# ***
+#
+# ### 带时间的帖子表
+#
+# 新闻和推文现在合成一张表 `dated_posts`，就是上面那个形状：一行一条帖子，按日期、层、编号排好。给任何后面的步骤用之前，先拿 `dated_table_problems` 核一遍，不合形状笔记本就停下。如果一条帖子都没剩，笔记本也停下，并逐层说明是哪一步筛空的（例如 `DATED_START` 晚于两份数据的结束日期）。
+
+# %%
+# Put both layers into one dated post table, check its shape, and stop when it is empty.
+def as_dated_table(rows, layer, source, label, votes_bullish, votes_bearish):
+    """Rows of one layer with exactly the columns and types of DATED_POST_SHAPE."""
+    return pd.DataFrame({
+        "post_id": rows["post_id"].astype(object), "date": rows["date"].astype(object),
+        "time": pd.Series(rows["time"], dtype="datetime64[ns, UTC]"), "text": rows["text"].astype(object),
+        "layer": layer, "source": source, "language": rows["language"].astype(object),
+        "mentions_btc": rows["mentions_btc"].astype(bool), "label": pd.array(label, dtype="Int64"),
+        "votes_bullish": pd.array(votes_bullish, dtype="Int64"), "votes_bearish": pd.array(votes_bearish, dtype="Int64"),
+    }).reset_index(drop=True)
+
+
+no_numbers = [None] * len(tweet_rows)
+layer_tables = [
+    as_dated_table(news_rows, "media", news_rows["source"], news_rows["label"], news_rows["votes_bullish"],
+                   news_rows["votes_bearish"]),
+    as_dated_table(tweet_rows, "retail", "twitter", no_numbers, no_numbers, no_numbers),
+]
+dated_posts = pd.concat(layer_tables, ignore_index=True)
+dated_posts["language"] = dated_posts["language"].astype(object).where(dated_posts["language"].notna(), None)
+dated_posts = dated_posts.sort_values(["date", "layer", "post_id"], kind="stable").reset_index(drop=True)
+
+dated_problems = dated_table_problems(dated_posts)
+if dated_problems:
+    raise ValueError("The dated post table does not fit its shape:\n" + "\n".join(f"  - {problem}" for problem in dated_problems))
+if dated_posts.empty:
+    emptied = {dataset["layer"]: next((step for step in DATED_STEPS if layer_info["steps"][step] == 0), "none")
+               for dataset, layer_info in [(TWEETS_DATASET, tweet_info), (NEWS_DATASET, news_info)]}
+    raise ValueError(f"No dated post is left. The step that left none, per layer: {emptied}. Check DATED_START, "
+                     "DATED_END, DATED_LANGUAGE and DATED_BTC_ONLY.")
+print(f"dated_posts: {len(dated_posts):,} posts, {dated_posts['layer'].value_counts().to_dict()}; fits the shape")
+dated_posts.head()
+
+# %% [markdown]
+# ### Posts per day
+#
+# For every layer that has posts: its own first and last UTC day, and one entry for **every calendar day** in between, with 0 on a day without posts. The table shows, per layer, the posts, those that mention Bitcoin, the days with posts, the days on which the cap left posts out, the most posts on one day, and the number of sources; the lines above it name each layer's ten most frequent sources.
+#
+# Everything goes into the brief's `dated_data` section. It carries its own period (`date_from`, `date_to`: the first and last day of the whole table, and of every layer), because the rest of the brief describes the StockTwits data as a whole, which has no dates; `scope` therefore still says `"batch"`. The section also records, per dataset, its name, revision, license and citation, the text column, the posts left after every step, the four kinds of time, the repeated posts dropped, and for the news the label rule and the label counts before and after the conversion; and the switches used. Nothing in it is a score.
+#
+# ***
+#
+# ### 每天几条
+#
+# 对每一个有帖子的层：它自己的第一天和最后一天（UTC），以及这中间**每一个日历日**一条记录，那天没帖子就写 0。下表逐层给出：帖子数、其中提到比特币的、有帖子的天数、被封顶截掉过帖子的天数、某一天最多几条、来源名有几个；表上面几行列出每层最常见的十个来源。
+#
+# 这些都写进简报的 `dated_data` 一节。它自带时段（`date_from`、`date_to`：整张表的、以及每一层的第一天和最后一天），因为简报其余各节说的都是整份 StockTwits 数据，那份数据没有日期；所以 `scope` 仍写 `"batch"`。这一节还逐份数据记下：名字、版本、许可证和引用、用的正文列、每一步之后剩几条、四种时间情况各几条、去掉的重复帖子；新闻另记标签规则，以及换算前后各标签的条数；还有用到的开关。这里面没有任何打分。
+
+# %%
+# Posts per layer and UTC day, the layer table, and the brief's dated_data section.
+def layer_days(table):
+    """Posts per calendar day from the table's first to its last date (0 on days without posts)."""
+    counted = table["date"].value_counts()
+    every_day = pd.date_range(table["date"].min(), table["date"].max(), freq="D").strftime("%Y-%m-%d")
+    return counted.reindex(every_day, fill_value=0).astype(int)
+
+
+def dataset_record(dataset, source, text_column, layer_info):
+    """What the brief says about one dataset: where it comes from and the posts left after every step."""
+    return {"name": dataset["name"], "revision": dataset["revision"], "license": dataset["license"],
+            "citation": dataset["citation"], "layer": dataset["layer"], "source": source, "text_column": text_column,
+            "steps": [{"step": step, "n_posts": int(layer_info["steps"][step])} for step in DATED_STEPS],
+            "time_kinds": {kind: int(layer_info["time_kinds"][kind]) for kind in TIME_KINDS},
+            "n_duplicates": int(layer_info["n_duplicates"])}
+
+
+def label_counts(values):
+    """Posts per label "0", "1" and "2"."""
+    counted = pd.Series(values).astype(int).value_counts()
+    return {str(label): int(counted.get(label, 0)) for label in [0, 1, 2]}
+
+
+days_per_layer, layer_records = {}, {}
+for layer in DATED_LAYERS:
+    table = dated_posts[dated_posts["layer"] == layer]
+    if table.empty:
+        continue  # a layer without posts (kol, for now) is left out
+    days = layer_days(table)
+    before_cap = (tweet_info if layer == "retail" else news_info)["posts_per_day_before_cap"]
+    days_per_layer[layer] = days
+    layer_records[layer] = {
+        "date_from": days.index[0], "date_to": days.index[-1], "n_posts": int(len(table)),
+        "n_mentions_btc": int(table["mentions_btc"].sum()), "n_days_with_posts": int((days > 0).sum()),
+        "n_days_capped": sum(1 for n in before_cap.values() if n > DATED_DAILY_CAP),
+        "max_posts_per_day": int(days.max()), "n_sources": int(table["source"].nunique()),
+        "n_unknown_source": int((table["source"] == UNKNOWN_SOURCE).sum()),
+        "top_sources": [{"source": name, "n_posts": int(n)} for name, n in
+                        sorted(table["source"].value_counts().items(), key=lambda item: (-item[1], item[0]))[:10]],
+        "days": [{"date": day, "n_posts": int(n)} for day, n in days.items()],
+    }
+
+tweets_record = dataset_record(TWEETS_DATASET, DATED_TWEETS_SOURCE, "tweet", tweet_info)
+news_record = dataset_record(NEWS_DATASET, DATED_NEWS_SOURCE, NEWS_TEXT, news_info)
+news_record["label_rule"] = NEWS_LABEL
+news_record["class_names_found"] = bool(news_info["class_names_found"])
+news_record["market_direction_counts"] = label_counts(news_rows["market_direction"])
+news_record["label_counts"] = label_counts(news_rows["label"])
+brief["dated_data"] = {
+    "table_shape": DATED_SHAPE_VERSION,
+    "day": "UTC",
+    "switches": {"date_start": DATED_START, "date_end": DATED_END, "language": DATED_LANGUAGE,
+                 "btc_only": DATED_BTC_ONLY, "daily_cap": DATED_DAILY_CAP, "seed": RANDOM_SEED},
+    "date_from": dated_posts["date"].min(), "date_to": dated_posts["date"].max(), "n_posts": int(len(dated_posts)),
+    "datasets": {"tweets": tweets_record, "news": news_record},
+    "layers": layer_records,
+}
+for layer, record in layer_records.items():
+    print(f"{layer}: most frequent sources " + ", ".join(f"{item['source']} ({item['n_posts']:,})" for item in record["top_sources"]))
+pd.DataFrame({layer: {key: value for key, value in record.items() if key not in ("days", "top_sources")}
+              for layer, record in layer_records.items()}).T
+
+# %% [markdown]
+# ### Posts per day as a chart
+#
+# One panel per layer, because the layers differ in size and period: the news have a few to a few dozen items per day, the tweets up to the cap. A flat top in the tweet panel is the daily cap at work.
+#
+# ***
+#
+# ### 每天几条：画成图
+#
+# 每层一张小图，因为两层的条数和时段都差得很远：新闻每天几条到几十条，推文最多到封顶。推文那张图上的平顶，就是封顶在起作用。
+
+# %%
+# Posts per UTC day, one panel per layer.
+figure, axes = plt.subplots(len(days_per_layer), 1, figsize=(11, 2.8 * len(days_per_layer)), squeeze=False)
+for axis, (layer, days) in zip(axes[:, 0], days_per_layer.items()):
+    axis.plot(pd.to_datetime(days.index), days.to_numpy(), linewidth=0.8)
+    axis.set_title(f"{layer}: posts per UTC day ({days.index[0]} to {days.index[-1]})")
+    axis.set_ylabel("posts")
+    if layer == "retail":
+        axis.axhline(DATED_DAILY_CAP, color="grey", linestyle="--", linewidth=0.8, label="daily cap")
+        axis.legend(loc="upper right")
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
 # ## 13. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
@@ -3896,13 +4567,14 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.3",
+  "title": "Ledger Eyes brief, format 1.4",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
+               "dated_data"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.3"},
+    "format_version": {"type": "string", "const": "1.4"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -4840,10 +5512,153 @@ BRIEF_SCHEMA_TEXT = r"""{
           }
         }
       }
+    },
+    "dated_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["table_shape", "day", "switches", "date_from", "date_to", "n_posts", "datasets", "layers"],
+      "properties": {
+        "table_shape": {"type": "string"},
+        "day": {"type": "string", "enum": ["UTC"]},
+        "switches": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["date_start", "date_end", "language", "btc_only", "daily_cap", "seed"],
+          "properties": {
+            "date_start": {"$ref": "#/$defs/day"},
+            "date_end": {"$ref": "#/$defs/day_or_null"},
+            "language": {"type": ["string", "null"]},
+            "btc_only": {"type": "boolean"},
+            "daily_cap": {"$ref": "#/$defs/positive"},
+            "seed": {"type": "integer"}
+          }
+        },
+        "date_from": {"$ref": "#/$defs/day"},
+        "date_to": {"$ref": "#/$defs/day"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "datasets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tweets", "news"],
+          "properties": {
+            "tweets": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "revision", "license", "citation", "layer", "source", "text_column", "steps", "time_kinds",
+                           "n_duplicates"],
+              "properties": {
+                "name": {"type": "string"},
+                "revision": {"type": "string"},
+                "license": {"type": "string"},
+                "citation": {"type": "string"},
+                "layer": {"$ref": "#/$defs/layer"},
+                "source": {"type": "string"},
+                "text_column": {"type": "string"},
+                "steps": {"$ref": "#/$defs/dated_steps"},
+                "time_kinds": {"$ref": "#/$defs/time_kinds"},
+                "n_duplicates": {"$ref": "#/$defs/count"}
+              }
+            },
+            "news": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "revision", "license", "citation", "layer", "source", "text_column", "steps", "time_kinds",
+                           "n_duplicates", "label_rule", "class_names_found", "market_direction_counts", "label_counts"],
+              "properties": {
+                "name": {"type": "string"},
+                "revision": {"type": "string"},
+                "license": {"type": "string"},
+                "citation": {"type": "string"},
+                "layer": {"$ref": "#/$defs/layer"},
+                "source": {"type": "string"},
+                "text_column": {"type": "string", "enum": ["title", "text"]},
+                "steps": {"$ref": "#/$defs/dated_steps"},
+                "time_kinds": {"$ref": "#/$defs/time_kinds"},
+                "n_duplicates": {"$ref": "#/$defs/count"},
+                "label_rule": {"type": "string", "enum": ["market_direction", "votes"]},
+                "class_names_found": {"type": "boolean"},
+                "market_direction_counts": {"$ref": "#/$defs/label_counts"},
+                "label_counts": {"$ref": "#/$defs/label_counts"}
+              }
+            }
+          }
+        },
+        "layers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date_from", "date_to", "n_posts", "n_mentions_btc", "n_days_with_posts", "n_days_capped",
+                         "max_posts_per_day", "n_sources", "n_unknown_source", "top_sources", "days"],
+            "properties": {
+              "date_from": {"$ref": "#/$defs/day"},
+              "date_to": {"$ref": "#/$defs/day"},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "n_mentions_btc": {"$ref": "#/$defs/count"},
+              "n_days_with_posts": {"$ref": "#/$defs/count"},
+              "n_days_capped": {"$ref": "#/$defs/count"},
+              "max_posts_per_day": {"$ref": "#/$defs/count"},
+              "n_sources": {"$ref": "#/$defs/count"},
+              "n_unknown_source": {"$ref": "#/$defs/count"},
+              "top_sources": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "n_posts"],
+                  "properties": {"source": {"type": "string"}, "n_posts": {"$ref": "#/$defs/positive"}}
+                }
+              },
+              "days": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["date", "n_posts"],
+                  "properties": {"date": {"$ref": "#/$defs/day"}, "n_posts": {"$ref": "#/$defs/count"}}
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
     "count": {"type": "integer", "minimum": 0},
+    "day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "day_or_null": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "layer": {"type": "string", "enum": ["media", "kol", "retail"]},
+    "dated_steps": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "n_posts"],
+        "properties": {
+          "step": {"type": "string", "enum": ["read", "time_parsed", "in_dates", "language", "mentions_btc", "unique", "daily_cap"]},
+          "n_posts": {"$ref": "#/$defs/count"}
+        }
+      }
+    },
+    "time_kinds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["with_zone", "without_zone", "date_only", "unparseable"],
+      "properties": {
+        "with_zone": {"$ref": "#/$defs/count"},
+        "without_zone": {"$ref": "#/$defs/count"},
+        "date_only": {"$ref": "#/$defs/count"},
+        "unparseable": {"$ref": "#/$defs/count"}
+      }
+    },
     "count_or_null": {"type": ["integer", "null"], "minimum": 0},
     "positive": {"type": "integer", "minimum": 1},
     "amount_or_null": {"type": ["number", "null"], "minimum": 0},

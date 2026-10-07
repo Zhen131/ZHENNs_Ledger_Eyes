@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.3** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.4** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -19,7 +19,7 @@ How to read the tables:
 
 | Column | Meaning |
 | --- | --- |
-| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>`, `<n_drawers>`, `<emotion>` and `<prelabel>` stand for every key of an object whose keys vary (described in the row of that object). |
+| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>`, `<n_drawers>`, `<emotion>`, `<prelabel>` and `<layer>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
 | Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
@@ -38,6 +38,7 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `drawers` | The same posts as `topics`, put into drawers by a word list (a post can be in several drawers or in none); the posts in no drawer are grouped in `drawers.other`. | `drawers.post_table`; `drawers.n_posts`; `drawers.word_list_version`; `drawers.other.n_posts` |
 | `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. The drawer rows use the drawers of `drawers`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from`; `why.any_drawer.n_posts` |
 | `emotions` | First the emotion data: the posts of a pre-label file (silver labels from a language model, read from `EMOTION_LABELS_SOURCE`) that fit the data source and are left after four steps, split into training, validation and test parts. Then the same posts as `topics`, each given an emotion by the chosen network; the drawer rows use the drawers of `drawers`. | `emotions.labels_source`; `emotions.labels_file.n_matched`; `emotions.dropped`; `emotions.n_posts`; `emotions.split`; `emotions.scoring.post_table`; `emotions.overall.n_posts` |
+| `dated_data` | Not the StockTwits posts: the posts of two dated datasets (tweets as the `retail` layer, news headlines as the `media` layer) that are left after the date, language and Bitcoin steps and the daily cap, counted per layer and UTC day. It covers its own period, given in its own fields. | `dated_data.datasets.tweets.steps`; `dated_data.datasets.news.steps`; `dated_data.date_from`; `dated_data.date_to`; `dated_data.layers.<layer>.date_from`; `dated_data.layers.<layer>.date_to` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -51,7 +52,7 @@ For example, with the default switches `scope.coins` is `"all"`, because the mod
 | `generated_at` | string | yes | no | When the brief was saved: UTC time, ISO 8601, to the second, ending in `Z` (for example `2026-01-31T12:00:00Z`). |
 | `scope` | object | yes | no | What the brief as a whole covers. |
 | `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local spreadsheet. |
-| `scope.granularity` | string | yes | no | `"batch"`: every section describes the whole data source at once. The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
+| `scope.granularity` | string | yes | no | `"batch"`: every section computed from the data source (`DATA_SOURCE`) describes it at once; results per day sit in sections of their own that carry their own period (`dated_data`). The format allows no other value; `"daily"` is reserved (see [Daily results](#daily-results)). |
 | `scope.coins` | string | yes | no | Which posts the working sample holds: `"all"` (posts about all coins) or `"btc_only"` (only posts that mention Bitcoin). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
 | `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
 
@@ -862,14 +863,102 @@ The emotions are the nine labels of the pre-label files, in this order: `panic`,
 | `emotions.human_review.by_prelabel.<prelabel>.n_reviewed` | integer | yes | no | Filled-in rows with this pre-label. |
 | `emotions.human_review.by_prelabel.<prelabel>.agreement` | number | yes | yes | Share of them on which the person agrees; `null` when there are none. |
 
+### dated_data
+
+Chapter 12: two public datasets **with dates**, read into one dated post table (its shape is in [`dated-posts.md`](dated-posts.md)) and counted per layer and UTC day. Tweets are the `retail` layer, news headlines the `media` layer. This section only counts posts; it holds no score. Unlike the sections above, it describes a period: it carries its own `date_from` and `date_to`, and every layer has its own (see [Daily results](#daily-results)). Both datasets are published under CC BY-NC 4.0.
+
+An object keyed by `<layer>` has one key per layer that has posts in the table: `media`, `kol` or `retail` (with the default switches `media` and `retail`; `kol` has no data yet).
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `dated_data` | object | yes | no | Chapter 12: the dated post table, its posts per layer and UTC day, and where they come from. |
+| `dated_data.table_shape` | string | yes | no | The version of the dated post table's shape (`dated-posts-v1`, see `dated-posts.md`). |
+| `dated_data.day` | string | yes | no | The unit of every day in this section: `"UTC"`, the date of the post's time in Coordinated Universal Time. |
+| `dated_data.switches` | object | yes | no | The switches of chapter 12 that decide which posts are kept. |
+| `dated_data.switches.date_start` | string | yes | no | `DATED_START`: the first UTC day kept, `YYYY-MM-DD`. |
+| `dated_data.switches.date_end` | string | yes | yes | `DATED_END`: the last UTC day kept, `YYYY-MM-DD`; `null` when there is no last day (to the end of the data). |
+| `dated_data.switches.language` | string | yes | yes | `DATED_LANGUAGE`: the language a tweet must be marked with (for example `en`); `null` when the language is not filtered. |
+| `dated_data.switches.btc_only` | boolean | yes | no | `DATED_BTC_ONLY`: only posts whose text mentions `bitcoin` or `btc` were kept. |
+| `dated_data.switches.daily_cap` | integer | yes | no | `DATED_DAILY_CAP`: the most posts kept per layer and UTC day. |
+| `dated_data.switches.seed` | integer | yes | no | `RANDOM_SEED`, which fixes the draw when a day has more posts than the cap. |
+| `dated_data.date_from` | string | yes | no | The first UTC day of the whole dated post table (the earliest of the layers' `date_from`), `YYYY-MM-DD`. |
+| `dated_data.date_to` | string | yes | no | The last UTC day of the whole dated post table (the latest of the layers' `date_to`), `YYYY-MM-DD`. |
+| `dated_data.n_posts` | integer | yes | no | Posts in the dated post table; equal to the sum of the layers' `n_posts`. |
+| `dated_data.datasets` | object | yes | no | The two datasets and what every step left of them. |
+| `dated_data.datasets.tweets` | object | yes | no | The tweet dataset (`ExponentialScience/DLT-Tweets`), the `retail` layer. |
+| `dated_data.datasets.tweets.name` | string | yes | no | The dataset's id on Hugging Face. |
+| `dated_data.datasets.tweets.revision` | string | yes | no | The dataset revision that the default address and the download script use. |
+| `dated_data.datasets.tweets.license` | string | yes | no | The dataset's license, `CC BY-NC 4.0`. |
+| `dated_data.datasets.tweets.citation` | string | yes | no | The paper the dataset's authors ask to cite. |
+| `dated_data.datasets.tweets.layer` | string | yes | no | The layer the dataset fills: `retail`. |
+| `dated_data.datasets.tweets.source` | string | yes | no | Where the tweets were read, as given by `DATED_TWEETS_SOURCE`: a Hugging Face address or a local `.parquet` file or folder. |
+| `dated_data.datasets.tweets.text_column` | string | yes | no | The dataset column used as the text: `tweet`. |
+| `dated_data.datasets.tweets.steps` | array | yes | no | The posts left after every step, in this order: `read`, `time_parsed`, `in_dates`, `language`, `mentions_btc`, `unique`, `daily_cap`. Each count is at most the one before it; the last equals the layer's posts in the table. |
+| `dated_data.datasets.tweets.steps[]` | object | — | no | One step. |
+| `dated_data.datasets.tweets.steps[].step` | string | yes | no | The step: `read` (every row of the files), `time_parsed` (the time could be read), `in_dates` (UTC day within the switches' period), `language` (marked with `DATED_LANGUAGE`, or every row when it is `null`), `mentions_btc` (the text mentions Bitcoin, or every row when `btc_only` is false), `unique` (one row per `post_id`), `daily_cap` (at most `daily_cap` posts per UTC day). |
+| `dated_data.datasets.tweets.steps[].n_posts` | integer | yes | no | Posts left after the step. |
+| `dated_data.datasets.tweets.time_kinds` | object | yes | no | How the time of every row read is written; the four counts add up to the rows read. |
+| `dated_data.datasets.tweets.time_kinds.with_zone` | integer | yes | no | Rows with a time and a time zone (converted to UTC). |
+| `dated_data.datasets.tweets.time_kinds.without_zone` | integer | yes | no | Rows with a time but no time zone (taken as UTC). |
+| `dated_data.datasets.tweets.time_kinds.date_only` | integer | yes | no | Rows with a date only (`time` stays empty in the table). |
+| `dated_data.datasets.tweets.time_kinds.unparseable` | integer | yes | no | Rows whose time cannot be read; they are left out at the step `time_parsed`. |
+| `dated_data.datasets.tweets.n_duplicates` | integer | yes | no | Rows dropped at the step `unique` because another row has the same `post_id` (the same original time and the same text after the replacements). |
+| `dated_data.datasets.news` | object | yes | no | The news dataset (`ExponentialScience/DLT-Sentiment-News`), the `media` layer. |
+| `dated_data.datasets.news.name` | string | yes | no | The dataset's id on Hugging Face. |
+| `dated_data.datasets.news.revision` | string | yes | no | The dataset revision that the default address and the download script use. |
+| `dated_data.datasets.news.license` | string | yes | no | The dataset's license, `CC BY-NC 4.0`. |
+| `dated_data.datasets.news.citation` | string | yes | no | The paper the dataset's authors ask to cite. |
+| `dated_data.datasets.news.layer` | string | yes | no | The layer the dataset fills: `media`. |
+| `dated_data.datasets.news.source` | string | yes | no | Where the news were read, as given by `DATED_NEWS_SOURCE`. |
+| `dated_data.datasets.news.text_column` | string | yes | no | The dataset column used as the text, as given by `NEWS_TEXT`: `title` (the headline) or `text` (headline and summary). |
+| `dated_data.datasets.news.steps` | array | yes | no | The posts left after every step, as for the tweets. The dataset has no language column, so the step `language` keeps every row. |
+| `dated_data.datasets.news.steps[]` | object | — | no | One step. |
+| `dated_data.datasets.news.steps[].step` | string | yes | no | The step, as for the tweets. |
+| `dated_data.datasets.news.steps[].n_posts` | integer | yes | no | Posts left after the step. |
+| `dated_data.datasets.news.time_kinds` | object | yes | no | How the time of every row read is written, as for the tweets. |
+| `dated_data.datasets.news.time_kinds.with_zone` | integer | yes | no | Rows with a time and a time zone. |
+| `dated_data.datasets.news.time_kinds.without_zone` | integer | yes | no | Rows with a time but no time zone. |
+| `dated_data.datasets.news.time_kinds.date_only` | integer | yes | no | Rows with a date only. |
+| `dated_data.datasets.news.time_kinds.unparseable` | integer | yes | no | Rows whose time cannot be read. |
+| `dated_data.datasets.news.n_duplicates` | integer | yes | no | Rows dropped at the step `unique` because another row has the same `post_id` (the same original time and the same CryptoPanic address). |
+| `dated_data.datasets.news.label_rule` | string | yes | no | How the `label` of a news item was made, as given by `NEWS_LABEL`: `market_direction` (the dataset's class, converted to this project's coding) or `votes` (the side with more reader votes; as many is neutral). |
+| `dated_data.datasets.news.class_names_found` | boolean | yes | no | The data file names the classes of `market_direction` (they were checked to be neutral, bearish, bullish in this order); false when it names none and the fixed conversion was used without that check. |
+| `dated_data.datasets.news.market_direction_counts` | object | yes | no | The news in the table per value of the dataset's own `market_direction`, **in the dataset's coding**: `"0"` neutral, `"1"` bearish, `"2"` bullish. |
+| `dated_data.datasets.news.market_direction_counts.0` | integer | yes | no | News with `market_direction` 0 (neutral). |
+| `dated_data.datasets.news.market_direction_counts.1` | integer | yes | no | News with `market_direction` 1 (bearish). |
+| `dated_data.datasets.news.market_direction_counts.2` | integer | yes | no | News with `market_direction` 2 (bullish). |
+| `dated_data.datasets.news.label_counts` | object | yes | no | The news in the table per `label`, **in this project's coding**: `"0"` bearish, `"1"` neutral, `"2"` bullish. With `label_rule` `market_direction`, `"1"` equals `market_direction_counts."0"`, `"0"` equals `market_direction_counts."1"` and `"2"` equals `market_direction_counts."2"`. |
+| `dated_data.datasets.news.label_counts.0` | integer | yes | no | News labelled bearish. |
+| `dated_data.datasets.news.label_counts.1` | integer | yes | no | News labelled neutral. |
+| `dated_data.datasets.news.label_counts.2` | integer | yes | no | News labelled bullish. |
+| `dated_data.layers` | object | yes | no | Every layer that has posts in the table, keyed by `<layer>`. |
+| `dated_data.layers.<layer>` | object | — | no | One layer. |
+| `dated_data.layers.<layer>.date_from` | string | yes | no | The layer's first UTC day with posts, `YYYY-MM-DD`. |
+| `dated_data.layers.<layer>.date_to` | string | yes | no | The layer's last UTC day with posts, `YYYY-MM-DD`. The layers end on different days: the tweets in mid-2023, the news in 2025. |
+| `dated_data.layers.<layer>.n_posts` | integer | yes | no | The layer's posts in the table; equal to the sum of its `days`. |
+| `dated_data.layers.<layer>.n_mentions_btc` | integer | yes | no | Of these, posts whose text mentions `bitcoin` or `btc` (all of them when `btc_only` is true). |
+| `dated_data.layers.<layer>.n_days_with_posts` | integer | yes | no | Days of `days` with at least one post. |
+| `dated_data.layers.<layer>.n_days_capped` | integer | yes | no | Days on which the layer had more than `daily_cap` posts after the step `unique`, so that the cap left posts out. |
+| `dated_data.layers.<layer>.max_posts_per_day` | integer | yes | no | The most posts of the layer on one day (at most `daily_cap`). |
+| `dated_data.layers.<layer>.n_sources` | integer | yes | no | Different values of `source` in the layer (news: domains, `unknown` included; tweets: only `twitter`). |
+| `dated_data.layers.<layer>.n_unknown_source` | integer | yes | no | Posts of the layer whose `source` is `unknown` (a news item without a readable address of its original article). |
+| `dated_data.layers.<layer>.top_sources` | array | yes | no | The layer's most frequent values of `source`, at most ten, most posts first (ties by name). |
+| `dated_data.layers.<layer>.top_sources[]` | object | — | no | One source. |
+| `dated_data.layers.<layer>.top_sources[].source` | string | yes | no | The source name (a news site's domain, `unknown` or `twitter`). |
+| `dated_data.layers.<layer>.top_sources[].n_posts` | integer | yes | no | The layer's posts from this source. |
+| `dated_data.layers.<layer>.days` | array | yes | no | One entry per calendar day from the layer's `date_from` to its `date_to`, sorted by date; a day without posts has 0. |
+| `dated_data.layers.<layer>.days[]` | object | — | no | One day. |
+| `dated_data.layers.<layer>.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
+| `dated_data.layers.<layer>.days[].n_posts` | integer | yes | no | The layer's posts on that day (at most `daily_cap`). |
+
 ## Daily results
 
-The current format knows one granularity, `"batch"`: every section describes the whole data source at once. The StockTwits data has no dates, so it cannot say "how was today". Results per day need dated data and come with a later version of the format. They will be added in this way, so that no field of the current format changes its name, type or meaning:
+The StockTwits data has no dates, so the sections computed from it (`dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`) describe the whole data source at once, and `scope.granularity` is `"batch"`. Results per day come from dated data and are added in this way, so that no field of an earlier format changes its name, type or meaning:
 
-1. `scope.granularity` may then also be `"daily"`, and `scope` gets two new fields, `date_from` and `date_to` (UTC dates, `YYYY-MM-DD`), for the period the brief covers. Every existing field keeps describing the whole period.
-2. A section with results per day gets one new field, `days`: a list with one entry per day of the period, sorted by date. Each entry has `date` (`YYYY-MM-DD`) and the same fields the section uses for the whole period; in `why`, for example, an entry has `overall` and `topics` with exactly the row fields listed above. A day without posts is still listed, with counts of 0 and `null` shares.
-3. Results that do not change from day to day, such as the model's evaluation on the test set, stay where they are and get no `days`.
-4. A brief with granularity `"batch"` never has `days`, `date_from` or `date_to`.
+1. Results per day go into **sections of their own** (so far `dated_data`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
+2. A list of days has one entry per calendar day from the first to the last day of its period, sorted by date, each with `date` (`YYYY-MM-DD`) and the section's counts for that day; a day without posts is still listed, with counts of 0 (and `null` for a share that cannot be computed).
+3. The sections computed from the StockTwits data stay results for the whole data source; they get no `days`.
+4. `scope.granularity` stays `"batch"` for such a brief, which is half whole-batch and half per day. `"daily"` is kept for a later brief whose every section is computed per day (for example from comments collected day by day); it is not allowed in the current format.
 
 These are additions, so MINOR goes up by one (see below), together with the new rules and new rows in the tables above.
 
@@ -888,6 +977,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | 1.1 | Chapter 10 counts the model's calls at 0.5 and calibrates the bullish share with the recognition rates of chapter 8, and marks rows with too few bullish or bearish posts. New: `why.min_bullish_bearish_posts` and `why.calibration`; in `why.overall` and every `why.topics[]` row `too_few_bullish_bearish`, `half_counts`, `half_bullish_share` and `calibrated_bullish_share`; in every `fair` block `half_counts`, `half_bullish_share`, `calibrated_bullish_share`, `half_minus_label_pp` and `calibrated_minus_label_pp`. Additions only: no field of 1.0 changed. |
 | 1.2 | Chapter 9 puts the topic posts into drawers chosen by a person through a versioned word list and groups the posts in no drawer; chapter 10 gives every drawer the same row as a topic. New: the top-level section `drawers`; in `why` the fields `drawers` (one row per drawer), `any_drawer` and `no_drawer`. Additions only: no field of 1.1 changed. |
 | 1.3 | Chapter 11 learns eight crypto emotions and `none` from silver labels (a pre-label file), evaluates two networks against two baselines and gives every topic post an emotion, overall and per drawer, with example posts and an interface for a person's review. New: the top-level section `emotions`. Additions only: no field of 1.2 changed. |
+| 1.4 | Chapter 12 reads two public datasets with dates, tweets as the `retail` layer and news headlines as the `media` layer, into one dated post table, and counts its posts per layer and UTC day. New: the top-level section `dated_data`, which carries its own period (`date_from`, `date_to`, per layer as well). `scope.granularity` stays `"batch"`; the rules for results per day are rewritten in [Daily results](#daily-results). Additions only: no field of 1.3 changed. |
 
 ## Reading a brief
 
