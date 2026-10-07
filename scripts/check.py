@@ -36,10 +36,13 @@ import ast
 import builtins
 import contextlib
 import copy
+import csv
 import hashlib
 import io
+import itertools
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -55,6 +58,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_DIR / "scripts"))
 
 import jupytext  # noqa: E402
+import prelabel_emotions as prelabel  # noqa: E402
 from notebook_build import NOTEBOOK, SOURCE, build_notebook_text  # noqa: E402
 
 REQUIREMENTS = REPO_DIR / "requirements.txt"
@@ -2525,6 +2529,553 @@ def panel_settings(report, label, parameters, overrides):
     return {**parameters, **CHECK_SETTINGS}
 
 
+# ---------------------------------------------------------------- emotion pre-labels (scripts/prelabel_emotions.py)
+# The checks never contact Ollama: the labelling loop is driven by a fake model that answers from a script.
+
+EMOTION_LABELS = ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence",
+                  "none"]  # the nine labels, in order (interface of the label files)
+PRELABEL_UNPARSED = "unparsed"  # the tenth value of the emotion column: no attempt gave a label
+PRELABEL_COLUMNS = ["post_id", "emotion", "model", "prompt_version", "text_hash"]  # label files, in order
+REVIEW_TEMPLATE_COLUMNS = ["post_id", "prelabel", "human_label"]  # review table, in order
+PRELABEL_DEFAULT_MODEL = "qwen2.5:7b"
+PRELABEL_SAMPLE_FILE = "samples/emotions-prelabel-sample.csv"
+PRELABEL_FULL_FILE = "labels/emotions-prelabel-v1.csv"
+REVIEW_TEMPLATE_FILE = "labels/emotions-review-template.csv"
+REVIEW_TEMPLATE_SIZE = 200
+REVIEW_TEMPLATE_SEED = 42
+# SHA-256 of everything fixed that is sent to the model, per released prompt version (see prompt_fingerprint_of):
+# the system message with the label meanings and the rules, the hand-written examples, the retry reminder and the
+# answer format. A changed character needs a new prompt version, new label files and a new line here.
+PROMPT_FINGERPRINTS = {
+    "v1": "f5b471650c79b801daa219376d245f545819db75cd574a961454666e3faa0bf8",
+}
+REFUSED_HOSTS = ["http://8.8.8.8:11434", "http://example.com:11434", "https://127.0.0.1:11434",
+                 "http://127.0.0.1.example.com:11434", "http://127.0.0.1@example.com:11434", "http://0.0.0.0:11434",
+                 "http://192.168.1.10:11434", "ftp://localhost:11434", "127.0.0.1:11434",
+                 "http://localhost:11434/api"]
+ACCEPTED_HOSTS = ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434", "http://127.0.0.1"]
+PRELABEL_PROBE_DIR = REPO_DIR / "data" / "checks" / "prelabel-probe"
+FAKE_GOOD = '{"emotion": "panic"}'
+
+
+def own_text_hash(text):
+    """The documented text fingerprint, computed here: first 8 hex digits of the SHA-256 of the UTF-8 text."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def prompt_fingerprint_of(label_set):
+    """The documented prompt fingerprint, computed here from what the script sends: SHA-256 of the compact ASCII JSON
+    (sorted keys) of {"first": the messages of a first request, "retry": the messages of a retry, "format": the answer
+    format}, with the script's placeholder in place of the post."""
+    first = prelabel.build_payload(prelabel.POST_PLACEHOLDER, retry=False, label_set=label_set, model="", seed=0)
+    again = prelabel.build_payload(prelabel.POST_PLACEHOLDER, retry=True, label_set=label_set, model="", seed=0)
+    text = json.dumps({"first": first["messages"], "retry": again["messages"], "format": first["format"]},
+                      ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def raises_stop(function, *args):
+    try:
+        function(*args)
+    except prelabel.Stop:
+        return True
+    return False
+
+
+def check_prelabel_script(report):
+    """The label script's interface, its pinned prompt, its requests, and that it talks only to a loopback address."""
+    import urllib.parse
+    import urllib.request
+
+    built_in = prelabel.BUILT_IN
+    version = prelabel.PROMPT_VERSION
+    interface = {
+        "labels": (prelabel.label_names(built_in), EMOTION_LABELS),
+        "columns": (prelabel.COLUMNS, PRELABEL_COLUMNS),
+        "review columns": (prelabel.REVIEW_COLUMNS, REVIEW_TEMPLATE_COLUMNS),
+        "unparsed": (prelabel.UNPARSED, PRELABEL_UNPARSED),
+        "default model": (prelabel.DEFAULT_MODEL, PRELABEL_DEFAULT_MODEL),
+        "full label file": (prelabel.default_output("full", version), PRELABEL_FULL_FILE),
+        "sample label file": (prelabel.default_output("sample", version), PRELABEL_SAMPLE_FILE),
+        "review table": (prelabel.default_output("review", version), REVIEW_TEMPLATE_FILE),
+        "review size": (prelabel.DEFAULT_REVIEW_SIZE, REVIEW_TEMPLATE_SIZE),
+        "seed": (prelabel.DEFAULT_SEED, REVIEW_TEMPLATE_SEED),
+    }
+    wrong = [f"{name}: {got!r}, expected {expected!r}" for name, (got, expected) in interface.items() if got != expected]
+    report.check(not wrong, "emotion pre-labels: the script's nine labels (in order), columns, default model, file "
+                 "paths, review size and seed are the documented interface", "; ".join(wrong))
+
+    computed = prompt_fingerprint_of(built_in)
+    report.check(version in PROMPT_FINGERPRINTS and computed == PROMPT_FINGERPRINTS[version]
+                 and prelabel.prompt_fingerprint() == computed,
+                 f"emotion pre-labels: prompt {version} (system message with the label meanings and rules, "
+                 "hand-written examples, retry reminder, answer format) has the pinned SHA-256; a changed character "
+                 "needs a new version",
+                 f"computed {computed}, script {prelabel.prompt_fingerprint()}, pinned {PROMPT_FINGERPRINTS.get(version)!r}")
+
+    first = prelabel.build_payload("a post", retry=False, label_set=built_in, model=PRELABEL_DEFAULT_MODEL, seed=42)
+    again = prelabel.build_payload("a post", retry=True, label_set=built_in, model=PRELABEL_DEFAULT_MODEL, seed=42)
+    reminder = prelabel.retry_reminder(built_in["labels"])
+    answer_rules = {"type": "object", "properties": {"emotion": {"type": "string", "enum": EMOTION_LABELS}},
+                    "required": ["emotion"]}
+    problems = []
+    for name, payload in (("first", first), ("retry", again)):
+        options = payload.get("options", {})
+        if sorted(payload) != ["format", "messages", "model", "options", "stream"]:
+            problems.append(f"{name}: fields {sorted(payload)}")
+        if payload.get("stream") is not False or options.get("temperature") != 0 or options.get("seed") != 42:
+            problems.append(f"{name}: stream {payload.get('stream')!r}, options {options}")
+        if not is_count(options.get("num_predict")) or options["num_predict"] < 16:
+            problems.append(f"{name}: num_predict {options.get('num_predict')!r}")
+        if payload.get("format") != answer_rules:
+            problems.append(f"{name}: format {payload.get('format')}")
+        if payload["messages"][-1] != {"role": "user", "content": prelabel.USER_PREFIX + "a post"}:
+            problems.append(f"{name}: the post is not the last message")
+    if reminder in first["messages"][0]["content"] or not again["messages"][0]["content"].endswith("\n\n" + reminder) \
+            or again["messages"][0]["content"][:-len(reminder) - 2] != first["messages"][0]["content"] \
+            or first["messages"][1:] != again["messages"][1:]:
+        problems.append("a retry must differ from the first request only by the reminder at the end of the system message")
+    examples = [item for item in built_in["examples"] if item.get("emotion") not in EMOTION_LABELS or not item.get("post")]
+    if examples:
+        problems.append(f"examples without a post or with an unknown label: {examples}")
+    report.check(not problems, "emotion pre-labels: a request is not streamed, has temperature 0, the seed, room for "
+                 "the longest answer and an answer format that allows only the nine labels; the post is the last "
+                 "message; a retry adds only the fixed reminder", "; ".join(problems))
+
+    folder = PRELABEL_PROBE_DIR / "label-list"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    same_version = folder / "v1.json"
+    same_version.write_text(json.dumps({"prompt_version": version, "labels": built_in["labels"],
+                                        "examples": built_in["examples"]}), encoding="utf-8")
+    other = {"prompt_version": "v2", "labels": built_in["labels"][:2] + [{"name": "none", "meaning": "no emotion"}],
+             "examples": []}
+    other_file = folder / "v2.json"
+    other_file.write_text(json.dumps(other), encoding="utf-8")
+    loaded = None if raises_stop(prelabel.load_label_set, str(other_file)) else prelabel.load_label_set(str(other_file))
+    paths = [prelabel.default_output(kind, "v2") for kind in ("full", "sample", "review")]
+    report.check(raises_stop(prelabel.load_label_set, str(same_version)) and loaded == other
+                 and prompt_fingerprint_of(other) != computed
+                 and not set(paths) & {PRELABEL_FULL_FILE, PRELABEL_SAMPLE_FILE, REVIEW_TEMPLATE_FILE},
+                 "emotion pre-labels: another label list needs another prompt version (a list file claiming "
+                 f"{version} is refused), which changes the fingerprint and every default file name", f"v2 paths {paths}")
+    shutil.rmtree(folder, ignore_errors=True)
+
+    refused = [host for host in REFUSED_HOSTS if not raises_stop(prelabel.loopback_base, host)]
+    accepted = [host for host in ACCEPTED_HOSTS if raises_stop(prelabel.loopback_base, host)]
+    default_host = prelabel.build_parser().parse_args(["label"]).host
+    default_ok = default_host == prelabel.DEFAULT_HOST and urllib.parse.urlsplit(default_host).hostname == "127.0.0.1"
+    report.check(not refused and not accepted and default_ok,
+                 "emotion pre-labels: the script refuses every address that is not http:// on a loopback host "
+                 f"({len(REFUSED_HOSTS)} cases), accepts 127.0.0.1, localhost and ::1, and defaults to 127.0.0.1",
+                 f"not refused {refused}; not accepted {accepted}; default {default_host!r}")
+    result = subprocess.run([sys.executable, str(REPO_DIR / "scripts" / "prelabel_emotions.py"), "label",
+                             "--host", "http://example.com:11434"], capture_output=True, text=True, timeout=120)
+    report.check(result.returncode == 1 and "refusing" in result.stderr and not result.stdout,
+                 "emotion pre-labels: the label command with an outside address stops before doing anything",
+                 f"exit {result.returncode}, stderr {result.stderr.strip()[:160]!r}, stdout {result.stdout.strip()[:80]!r}")
+
+    names = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"]
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names[:6]:
+            os.environ[name] = "http://127.0.0.1:9"
+        for name in names[6:]:
+            os.environ.pop(name, None)
+        openers = [urllib.request.build_opener(), prelabel.no_proxy_opener(),
+                   prelabel.OllamaClient(prelabel.DEFAULT_HOST, 1).opener]
+        proxies = [[handler.proxies for handler in opener.handlers if isinstance(handler, urllib.request.ProxyHandler)]
+                   for opener in openers]
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    default_uses_proxy = any(proxy.get("http") for proxy in proxies[0])
+    report.check(default_uses_proxy and not any(proxy for proxy in proxies[1] + proxies[2]),
+                 "emotion pre-labels: requests ignore proxy settings (with proxy variables set, a default opener would "
+                 "use the proxy; the script's opener has no proxy at all)",
+                 f"default opener {proxies[0]}, script {proxies[1]}, client {proxies[2]}")
+
+
+def check_prelabel_reading(report):
+    """The script reads the sample with the same ids and texts as chapter 1 of the notebook (its read_posts, executed
+    from the source), and finds the same Bitcoin posts and empty texts as the notebook's cells."""
+    import pandas as pd
+
+    namespace, problems = {"__name__": "notebook_cells", "brief": {}}, []
+    for name in ("LABEL_NAMES", "read_posts"):
+        source = cell_defining(name)
+        if source is None:
+            problems.append(f"no cell defines {name}")
+            continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, f"cell defining {name}", "exec"), namespace)
+        except Exception as exc:  # the cell itself is broken
+            problems.append(f"cell defining {name}: {type(exc).__name__}: {exc}")
+    if not report.check(not problems, "emotion pre-labels: chapter 1's read_posts loads from the notebook source",
+                        "; ".join(problems)):
+        return
+    sample = REPO_DIR / SAMPLE_SOURCE
+    notebook_posts = namespace["read_posts"](str(sample))
+    script_posts = prelabel.read_posts(sample)
+    notebook_pairs = list(zip(notebook_posts["post_id"], notebook_posts["text"]))
+    script_pairs = list(zip(script_posts["post_id"], script_posts["text"]))
+    differing = [index for index, (left, right) in enumerate(zip(notebook_pairs, script_pairs)) if left != right]
+    report.check(notebook_pairs == script_pairs, f"emotion pre-labels: the script gives the sample the same "
+                 f"(post_id, text) pairs as chapter 1, in the same order ({len(script_pairs)} posts)",
+                 f"{len(notebook_pairs)} vs {len(script_pairs)} posts; first differing rows {differing[:3]}")
+
+    probes = pd.DataFrame({"post_id": [f"probe:{row}" for row in range(2, 11)],
+                           "text": ["", "   ", "btc to 50k", "bitcoin's dominance", "bitcoins", "gbtc", "btc_usd",
+                                    "BTC pump", " just a post "]})
+    tables = {"sample": notebook_posts[["post_id", "text"]], "probes": probes}
+    wrong = []
+    for name, table in tables.items():
+        cells = {"__name__": "notebook_cells", "df_all": table.copy(), "brief": {"dataset": {}}}
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(cell_defining("BTC_PATTERN"), "cell defining BTC_PATTERN", "exec"), cells)
+                exec(compile(cell_defining("sheet_sizes"), "cell defining sheet_sizes", "exec"), cells)
+        except Exception as exc:
+            wrong.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+        script_btc = [prelabel.mentions_btc(text) for text in table["text"]]
+        if cells["df_all"]["mentions_btc"].tolist() != script_btc:
+            wrong.append(f"{name}: Bitcoin posts differ")
+        _, drawn = prelabel.select_posts(table, None, prelabel.DEFAULT_BTC_SHARE, prelabel.DEFAULT_SEED)
+        if drawn["empty_texts_left_out"] != cells["brief"]["dataset"]["n_empty_text"]:
+            wrong.append(f"{name}: {drawn['empty_texts_left_out']} empty texts left out, "
+                         f"n_empty_text {cells['brief']['dataset']['n_empty_text']}")
+    report.check(not wrong, "emotion pre-labels: the script finds the same Bitcoin posts as chapter 1's mentions_btc "
+                 "and leaves out exactly the texts counted by n_empty_text (on the sample and on probe texts)",
+                 "; ".join(wrong))
+
+
+class FakeModel:
+    """Stands in for Ollama: answers every post from a script {post text: [answer, ...]}, the last answer repeating.
+    An answer is the reply text, or an exception class to raise (AnswerTimeout, ServerUnavailable). Records every
+    request."""
+
+    def __init__(self, script):
+        self.script = {text: list(answers) for text, answers in script.items()}
+        self.requests = []
+
+    @staticmethod
+    def post_of(payload):
+        content = payload["messages"][-1]["content"]
+        return content[len(prelabel.USER_PREFIX):] if content.startswith(prelabel.USER_PREFIX) else content
+
+    def __call__(self, payload):
+        self.requests.append(payload)
+        answers = self.script.get(self.post_of(payload)) or ['{"emotion": "none"}']
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if isinstance(answer, type) and issubclass(answer, Exception):
+            raise answer("fake model")
+        return answer
+
+    def asked(self):
+        """[(post text, the request carries the retry reminder), ...] in request order."""
+        reminder = prelabel.retry_reminder(prelabel.BUILT_IN["labels"])
+        return [(self.post_of(payload), reminder in payload["messages"][0]["content"]) for payload in self.requests]
+
+
+def probe_rows(path):
+    return [row for row in csv.reader(path.read_text(encoding="utf-8").splitlines())][1:]
+
+
+def check_prelabel_fake_model(report):
+    """Parsing, retries, stopping and resuming of the label script, driven by a fake model on posts of the sample;
+    every file is written under data/checks/prelabel-probe/ and removed afterwards."""
+    folder = PRELABEL_PROBE_DIR
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    sample_posts = prelabel.read_posts(REPO_DIR / SAMPLE_SOURCE)
+    text_by_id = dict(zip(sample_posts["post_id"], sample_posts["text"]))
+    selection, _ = prelabel.select_posts(sample_posts, None, prelabel.DEFAULT_BTC_SHARE, prelabel.DEFAULT_SEED)
+    posts = selection[:6]
+    texts = [post["text"] for post in posts]
+    ids = [post["post_id"] for post in posts]
+    if not report.check(len(set(texts)) == 6, "fake model: six sample posts with different texts to label"):
+        return
+    waits = []
+    common = {"text_by_id": text_by_id, "connect_retries": 2, "connect_wait": 0.25, "log": lambda text: None,
+              "sleep": waits.append}
+
+    def row(index, emotion):
+        return [ids[index], emotion, PRELABEL_DEFAULT_MODEL, prelabel.PROMPT_VERSION, own_text_hash(texts[index])]
+
+    # Good answers, odd case and whitespace, bad answers, a late good answer, and timeouts.
+    fake = FakeModel({texts[0]: [FAKE_GOOD], texts[1]: ['{"emotion": "  CONFIDENCE \\n"}'],
+                      texts[2]: ["not json", '{"emotion": "joy"}', '{"feeling": "panic"}'],
+                      texts[3]: ['{"emotion": 5}', '["mockery"]', '{"emotion": " Mockery"}'],
+                      texts[4]: [prelabel.AnswerTimeout], texts[5]: ['{"emotion": "greed"}']})
+    first_file = folder / "first.csv"
+    summary = prelabel.label_posts(posts, first_file, fake, **common)
+    expected = [row(0, "panic"), row(1, "confidence"), row(2, PRELABEL_UNPARSED), row(3, "mockery"),
+                row(4, PRELABEL_UNPARSED), row(5, "greed")]
+    rows = probe_rows(first_file)
+    report.check(rows == expected and summary["stopped"] is None and summary["labelled"] == 6,
+                 "fake model: a good answer gives its label, also in another case or with spaces around it; three bad "
+                 "answers (not JSON, a label not in the list, no emotion field) give unparsed; two bad answers and a "
+                 "good one give the good label; a request that times out three times gives unparsed and the next post "
+                 "is labelled; every row has the model, the prompt version and the text fingerprint",
+                 f"rows {rows}")
+    expected_asked = [(texts[0], False), (texts[1], False), (texts[2], False), (texts[2], True), (texts[2], True),
+                      (texts[3], False), (texts[3], True), (texts[3], True), (texts[4], False), (texts[4], True),
+                      (texts[4], True), (texts[5], False)]
+    settings = [index for index, payload in enumerate(fake.requests)
+                if payload["model"] != PRELABEL_DEFAULT_MODEL or payload["stream"] is not False
+                or payload["options"].get("temperature") != 0 or payload["options"].get("seed") != prelabel.DEFAULT_SEED
+                or payload["format"]["properties"]["emotion"]["enum"] != EMOTION_LABELS]
+    report.check(fake.asked() == expected_asked and not settings,
+                 "fake model: a post is asked at most 3 times; the first question has no reminder, every retry (after "
+                 "a bad answer or a timeout) carries the fixed reminder; every request has the model, temperature 0, "
+                 "the seed and the nine-label format",
+                 f"asked {[(ids[texts.index(text)], retry) for text, retry in fake.asked()]}; requests with other settings {settings}")
+
+    # The server cannot be reached: stop without writing; a short outage is ridden out.
+    fake = FakeModel({texts[0]: [FAKE_GOOD], texts[1]: [prelabel.ServerUnavailable], texts[2]: [FAKE_GOOD]})
+    waits.clear()
+    stop_file = folder / "stop.csv"
+    summary = prelabel.label_posts(posts[:3], stop_file, fake, **common)
+    asked = [text for text, _ in fake.asked()]
+    report.check(probe_rows(stop_file) == [row(0, "panic")] and bool(summary["stopped"]) and waits == [0.25, 0.25]
+                 and asked == [texts[0]] + [texts[1]] * 3,
+                 "fake model: when the server cannot be reached the run waits and tries twice more, then stops the "
+                 "whole run; that post is not written (not even as unparsed) and no later post is asked",
+                 f"rows {probe_rows(stop_file)}, stopped {summary['stopped']!r}, waits {waits}, asked {len(asked)}")
+    fake = FakeModel({texts[0]: [FAKE_GOOD], texts[1]: [prelabel.ServerUnavailable, '{"emotion": "anger"}'],
+                      texts[2]: [FAKE_GOOD]})
+    waits.clear()
+    outage_file = folder / "outage.csv"
+    summary = prelabel.label_posts(posts[:3], outage_file, fake, **common)
+    report.check(probe_rows(outage_file) == [row(0, "panic"), row(1, "anger"), row(2, "panic")]
+                 and summary["stopped"] is None and waits == [0.25],
+                 "fake model: after a short outage the same post is asked again and the run goes on",
+                 f"rows {probe_rows(outage_file)}, waits {waits}")
+
+    # Resuming: --limit, a second run, and a partial last line.
+    resume_file = folder / "resume.csv"
+    prelabel.label_posts(posts, resume_file, FakeModel({text: [FAKE_GOOD] for text in texts}), limit=2, **common)
+    after_limit = [item[0] for item in probe_rows(resume_file)]
+    fake = FakeModel({text: [FAKE_GOOD] for text in texts})
+    summary = prelabel.label_posts(posts, resume_file, fake, **common)
+    resumed = probe_rows(resume_file)
+    report.check(after_limit == ids[:2] and resumed == [row(index, "panic") for index in range(6)]
+                 and [text for text, _ in fake.asked()] == texts[2:] and summary["already_in_file"] == 2,
+                 "resume: --limit 2 labels two posts; the next run skips them (they are not asked again) and appends "
+                 "the other four, each id once",
+                 f"after --limit {after_limit}; then {[item[0] for item in resumed]}; asked again {len(fake.asked())}")
+    raw = resume_file.read_bytes()
+    resume_file.write_bytes(raw[:-7])  # a run stopped while writing: the last line loses its end
+    fake = FakeModel({text: [FAKE_GOOD] for text in texts})
+    summary = prelabel.label_posts(posts, resume_file, fake, **common)
+    report.check(probe_rows(resume_file) == resumed and summary["dropped_partial_line_bytes"] == len(raw.split(b"\n")[-2]) - 6
+                 and [text for text, _ in fake.asked()] == [texts[5]] and resume_file.read_bytes() == raw,
+                 "resume: a partial last line is dropped and that post labelled again; the file ends as it would have",
+                 f"dropped {summary['dropped_partial_line_bytes']} bytes, asked {len(fake.asked())}")
+
+    # --retry-unparsed: in place.
+    retry_file = folder / "retry.csv"
+    shutil.copyfile(first_file, retry_file)
+    fake = FakeModel({texts[2]: ['{"emotion": "despair"}'], texts[4]: ['{"emotion": "anger"}']})
+    summary = prelabel.label_posts(posts, retry_file, fake, retry_unparsed=True, **common)
+    expected = [row(0, "panic"), row(1, "confidence"), row(2, "despair"), row(3, "mockery"), row(4, "anger"),
+                row(5, "greed")]
+    report.check(probe_rows(retry_file) == expected and [text for text, _ in fake.asked()] == [texts[2], texts[4]]
+                 and summary["replaced"] == 2 and not list(folder.glob(".*.tmp")),
+                 "--retry-unparsed asks only the unparsed rows and replaces each in place: same row count, same order, "
+                 "each id once, no temporary file left", f"rows {probe_rows(retry_file)}")
+
+    # A file from another prompt version, model or data source is never added to.
+    wrong = []
+    for what, column, value, every in (("prompt version", 3, "v0", True), ("model", 2, "another:1b", True),
+                                       ("text fingerprint", 4, "00000000", False)):
+        mixed = folder / "mixed.csv"
+        rows = probe_rows(first_file)
+        for item in rows if every else rows[:1]:
+            item[column] = value
+        mixed.write_text("".join(prelabel.row_line(item) for item in [PRELABEL_COLUMNS] + rows), encoding="utf-8")
+        before = mixed.read_bytes()
+        fake = FakeModel({})
+        stopped = raises_stop(lambda: prelabel.label_posts(posts, mixed, fake, **common))
+        if not (stopped and mixed.read_bytes() == before and not fake.requests):
+            wrong.append(what)
+    report.check(not wrong, "emotion pre-labels: an existing file from another prompt version, another model or another "
+                 "data source stops the run before anything is asked or written", f"not stopped: {wrong}")
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def read_csv_file(path):
+    """(header, rows, problems) of a CSV file; a file that does not end with a newline is a problem."""
+    raw = path.read_bytes()
+    problems = [] if raw.endswith(b"\n") else ["does not end with a complete line"]
+    try:
+        lines = list(csv.reader(raw.decode("utf-8").splitlines()))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        return None, [], problems + [str(exc)]
+    if not lines:
+        return None, [], problems + ["empty"]
+    return lines[0], lines[1:], problems
+
+
+def prelabel_file_problems(path):
+    """(rows with five fields, problems) of a label file: header, one value format per column, one model and one
+    prompt version (the script's), each id once."""
+    header, rows, problems = read_csv_file(path)
+    if header != PRELABEL_COLUMNS:
+        problems.append(f"header {header}")
+    good = []
+    for number, item in enumerate(rows, start=2):
+        if len(item) != len(PRELABEL_COLUMNS):
+            problems.append(f"line {number}: {len(item)} fields")
+            continue
+        post_id, emotion, _, _, digest = item
+        match = re.fullmatch(r"[A-Za-z0-9_]+:([0-9]+)", post_id)
+        if not match or int(match.group(1)) < 2:
+            problems.append(f"line {number}: id {post_id!r}")
+        if emotion not in EMOTION_LABELS + [PRELABEL_UNPARSED]:
+            problems.append(f"line {number}: emotion {emotion!r}")
+        if not re.fullmatch(r"[0-9a-f]{8}", digest):
+            problems.append(f"line {number}: text_hash {digest!r}")
+        good.append(item)
+    models, versions = sorted({item[2] for item in good}), sorted({item[3] for item in good})
+    if models != [prelabel.DEFAULT_MODEL] or models != [PRELABEL_DEFAULT_MODEL]:
+        problems.append(f"models {models}")
+    if versions != [prelabel.PROMPT_VERSION]:
+        problems.append(f"prompt versions {versions}")
+    repeated = sorted(post_id for post_id, times in Counter(item[0] for item in good).items() if times > 1)
+    if repeated:
+        problems.append(f"ids more than once: {repeated[:3]}")
+    if not good:
+        problems.append("no rows")
+    return good, problems
+
+
+def per_label(rows, column=1):
+    counts = Counter(item[column] for item in rows)
+    return {label: counts.get(label, 0) for label in EMOTION_LABELS + [PRELABEL_UNPARSED]}
+
+
+def review_draw(rows, size, seed):
+    """The documented review draw, written here apart from the script: for every label (list order) its ids in file
+    order shuffled with random.Random(seed); then the labels in turn, one id each per round, a label with none left
+    skipped, until size ids are drawn or none are left. Unparsed rows never take part."""
+    queues = []
+    for label in EMOTION_LABELS:
+        ids = [item[0] for item in rows if item[1] == label]
+        random.Random(seed).shuffle(ids)
+        queues.append([(post_id, label) for post_id in ids])
+    in_turn = [pair for round_ in itertools.zip_longest(*queues) for pair in round_ if pair is not None]
+    return in_turn[:size]
+
+
+def check_prelabel_files(report):
+    """The two label files and the review table in the repository (static)."""
+    parsed = {}
+    for name, relative in (("sample", PRELABEL_SAMPLE_FILE), ("full", PRELABEL_FULL_FILE)):
+        path = REPO_DIR / relative
+        if not report.check(path.is_file(), f"emotion pre-labels: {relative} exists"):
+            continue
+        rows, problems = prelabel_file_problems(path)
+        report.check(not problems, f"emotion pre-labels: {relative} has exactly the columns "
+                     f"{', '.join(PRELABEL_COLUMNS)} and every cell fits its column (id <sheet>:<row>, one of the nine "
+                     "labels or unparsed, the script's model and prompt version as the only values, 8 lower-case "
+                     "hexadecimal digits), each id once", "; ".join(problems[:5]))
+        parsed[name] = rows
+        report.info(f"{relative}: {len(rows)} rows; per label {json.dumps(per_label(rows))}")
+
+    if "sample" in parsed:
+        sample = prelabel.read_posts(REPO_DIR / SAMPLE_SOURCE)
+        with_text = {post_id: text for post_id, text in zip(sample["post_id"], sample["text"]) if text.strip()}
+        ids = [item[0] for item in parsed["sample"]]
+        changed = [item[0] for item in parsed["sample"] if item[0] in with_text and item[4] != own_text_hash(with_text[item[0]])]
+        report.check(set(ids) == set(with_text) and len(ids) == len(with_text) and not changed,
+                     f"emotion pre-labels: {PRELABEL_SAMPLE_FILE} labels every post of the sample "
+                     f"({len(with_text)}), each once, and every fingerprint is that of the sample post's text",
+                     f"{len(ids)} rows, {len(set(ids) - set(with_text))} ids not in the sample, "
+                     f"{len(set(with_text) - set(ids))} sample posts missing, fingerprints differing {changed[:3]}")
+
+    template = REPO_DIR / REVIEW_TEMPLATE_FILE
+    if not report.check(template.is_file(), f"emotion pre-labels: {REVIEW_TEMPLATE_FILE} exists") or "full" not in parsed:
+        return
+    header, rows, problems = read_csv_file(template)
+    full = {item[0]: item[1] for item in parsed["full"]}
+    if header != REVIEW_TEMPLATE_COLUMNS:
+        problems.append(f"header {header}")
+    problems += [f"line {number}: {len(item)} fields" for number, item in enumerate(rows, start=2) if len(item) != 3]
+    rows = [item for item in rows if len(item) == 3]
+    filled = [item[0] for item in rows if item[2] != ""]
+    repeated = sorted(post_id for post_id, times in Counter(item[0] for item in rows).items() if times > 1)
+    unknown = [item[0] for item in rows if item[0] not in full]
+    differing = [item[0] for item in rows if item[0] in full and full[item[0]] != item[1]]
+    unparsed = [item[0] for item in rows if item[1] == PRELABEL_UNPARSED]
+    available = sum(label != PRELABEL_UNPARSED for label in full.values())
+    expected = review_draw(parsed["full"], REVIEW_TEMPLATE_SIZE, REVIEW_TEMPLATE_SEED)
+    same_draw = [(item[0], item[1]) for item in rows] == expected
+    report.check(not problems and not filled and not repeated and not unknown and not differing and not unparsed
+                 and same_draw and len(rows) == min(REVIEW_TEMPLATE_SIZE, available),
+                 f"emotion pre-labels: {REVIEW_TEMPLATE_FILE} has exactly the columns "
+                 f"{', '.join(REVIEW_TEMPLATE_COLUMNS)}, an empty human_label everywhere, each id once and in "
+                 f"{PRELABEL_FULL_FILE} with its label there (never unparsed), and is exactly the documented draw "
+                 f"(labels in turn, seed {REVIEW_TEMPLATE_SEED}), {REVIEW_TEMPLATE_SIZE} rows or every usable row",
+                 f"problems {problems[:3]}; filled {filled[:3]}; repeated {repeated[:3]}; not in the label file "
+                 f"{unknown[:3]}; other label {differing[:3]}; unparsed {unparsed[:3]}; same draw {same_draw}; "
+                 f"{len(rows)} rows of {available} usable")
+    report.info(f"{REVIEW_TEMPLATE_FILE}: {len(rows)} rows; per label {json.dumps(per_label(rows))}")
+
+
+def check_prelabel_full(report, switches):
+    """The full label file against the full dataset (the posts the full run read, from its cache), and the numbers."""
+    import pandas as pd
+
+    path = REPO_DIR / PRELABEL_FULL_FILE
+    if not report.check(path.is_file(), f"emotion pre-labels: {PRELABEL_FULL_FILE} exists"):
+        return
+    rows, _ = prelabel_file_problems(path)
+    source = switches["DATA_SOURCE"]
+    namespace = {"__name__": "notebook_cells"}
+    with contextlib.redirect_stdout(io.StringIO()):
+        exec(compile(cell_defining("source_fingerprint"), "cell defining source_fingerprint", "exec"), namespace)
+    fingerprint = namespace["source_fingerprint"](source if "://" in source else str(REPO_DIR / source))
+    cache = REPO_DIR / switches["WORK_DIR"] / "cache" / f"posts-{fingerprint}.parquet"
+    if cache.is_file():
+        posts, origin = pd.read_parquet(cache, columns=["post_id", "text"]), f"the full run's cache {shown(cache)}"
+    elif "://" not in source and (REPO_DIR / source).is_file():
+        posts, origin = prelabel.read_posts(REPO_DIR / source), source
+    else:
+        report.check(False, "emotion pre-labels: the full dataset is available to compare the label file with",
+                     f"no cache {shown(cache)} and no local file {source}")
+        return
+    text_by_id = dict(zip(posts["post_id"], posts["text"]))
+    missing = [item[0] for item in rows if item[0] not in text_by_id]
+    changed = [item[0] for item in rows if item[0] in text_by_id and own_text_hash(text_by_id[item[0]]) != item[4]]
+    report.check(bool(rows) and not missing and not changed,
+                 f"emotion pre-labels: every id of {PRELABEL_FULL_FILE} is a post of the full dataset and its "
+                 "fingerprint is that of that post's text",
+                 f"{len(rows)} rows; {len(missing)} ids missing {missing[:3]}; {len(changed)} other texts {changed[:3]}")
+    examples = {item["post"].strip().lower() for item in prelabel.EXAMPLES_V1}
+    found = sorted(examples & set(posts["text"].str.strip().str.lower()))
+    report.check(not found, "emotion pre-labels: none of the prompt's hand-written examples is a post of the full "
+                 "dataset", f"found {found}")
+    btc = Counter("btc" if re.search(r"\b(?:bitcoin|btc)\b", text_by_id.get(item[0], ""), re.IGNORECASE) else "other"
+                  for item in rows)
+    by_label_btc = Counter((item[1], "btc" if re.search(r"\b(?:bitcoin|btc)\b", text_by_id.get(item[0], ""),
+                                                        re.IGNORECASE) else "other") for item in rows)
+    print(f"\nEmotion pre-labels ({PRELABEL_FULL_FILE}, compared with {origin})")
+    print(f"  rows:                          {len(rows)}   model {sorted({item[2] for item in rows})}   prompt "
+          f"{sorted({item[3] for item in rows})}")
+    print(f"  mention Bitcoin / other:       {btc['btc']} / {btc['other']}")
+    print("  label             rows   share   Bitcoin   other")
+    for label in EMOTION_LABELS + [PRELABEL_UNPARSED]:
+        count = sum(item[1] == label for item in rows)
+        print(f"  {label:16s} {count:5d}   {count / len(rows) if rows else 0:5.1%}   {by_label_btc[(label, 'btc')]:7d}"
+              f"   {by_label_btc[(label, 'other')]:5d}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -2680,6 +3231,9 @@ def main():
     rules = load_format_rules(report)
     built_in_drawers = check_drawer_words(report)
     check_panel_source(report, defaults, others)
+    check_prelabel_script(report)
+    check_prelabel_reading(report)
+    check_prelabel_fake_model(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
