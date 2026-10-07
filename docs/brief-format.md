@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.2** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.3** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -19,7 +19,7 @@ How to read the tables:
 
 | Column | Meaning |
 | --- | --- |
-| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>` and `<n_drawers>` stand for every key of an object whose keys vary (described in the row of that object). |
+| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>`, `<sheet>`, `<n_drawers>`, `<emotion>` and `<prelabel>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
 | Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
@@ -37,6 +37,7 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `topics` | The topic post table, taken from every post of the data source, not from the working sample, with all three classes in their natural shares. With the default switches: every post that mentions Bitcoin. | `topics.scope`; `topics.n_posts`; `topics.sampled`; `topics.class_counts` |
 | `drawers` | The same posts as `topics`, put into drawers by a word list (a post can be in several drawers or in none); the posts in no drawer are grouped in `drawers.other`. | `drawers.post_table`; `drawers.n_posts`; `drawers.word_list_version`; `drawers.other.n_posts` |
 | `why` | The same posts as `topics`, scored by the model chosen in `sentiment`. The fair comparison uses only the posts the model never saw. The calibration reads the chosen model's recognition rates on the test posts that match the topic posts from `sentiment.evaluation`. The drawer rows use the drawers of `drawers`. | `why.post_table`; `why.model`; `why.overall.n_posts`; `why.fair_comparison`; `why.calibration.rates_from`; `why.any_drawer.n_posts` |
+| `emotions` | First the emotion data: the posts of a pre-label file (silver labels from a language model, read from `EMOTION_LABELS_SOURCE`) that fit the data source and are left after four steps, split into training, validation and test parts. Then the same posts as `topics`, each given an emotion by the chosen network; the drawer rows use the drawers of `drawers`. | `emotions.labels_source`; `emotions.labels_file.n_matched`; `emotions.dropped`; `emotions.n_posts`; `emotions.split`; `emotions.scoring.post_table`; `emotions.overall.n_posts` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -660,6 +661,207 @@ A hand-written example of a fair comparison with no posts, as it appears in a sm
 }
 ```
 
+### emotions
+
+Chapter 11: eight crypto emotions and `none`, learned from **silver labels**: labels that a language model gave to StockTwits posts, not a person. The evaluation shows how well the networks learned those labels, not how well they recognise emotions. The emotion distributions describe what the chosen network says about the topic posts; they include posts the network learned from, so they are not an evaluation.
+
+The emotions are the nine labels of the pre-label files, in this order: `panic`, `greed`, `excitement`, `anger`, `mockery`, `despair`, `wait_and_see`, `confidence`, `none`. An object keyed by `<emotion>` has one key per class in `emotions.classes` (with the default switches all nine; with `EMOTION_KEEP_NONE` off, or with emotions left out, fewer).
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `emotions` | object | yes | no | Chapter 11: eight crypto emotions (and `none`) learned from silver labels, and the emotions of the topic posts. |
+| `emotions.label_kind` | string | yes | no | A sentence for people saying what the labels are: silver labels given by a language model, not by a person; the evaluation shows how well the networks learned them, not how well they recognise emotions. |
+| `emotions.labels_source` | string | yes | no | The pre-label file as given by the switch `EMOTION_LABELS_SOURCE`: a web address or a local path. |
+| `emotions.labels_file` | object | yes | no | The pre-label file as read, after its rows were checked against the data source. |
+| `emotions.labels_file.n_rows` | integer | yes | no | Rows of the file. |
+| `emotions.labels_file.n_matched` | integer | yes | no | Rows whose `post_id` is a post of the data source and whose text fingerprint is that of the post's text; equal to `n_rows` (otherwise the notebook stops). |
+| `emotions.labels_file.label_counts` | object | yes | no | Rows per value of the file's `emotion` column: the nine labels and `unparsed`; they add up to `n_rows`. |
+| `emotions.labels_file.label_counts.panic` | integer | yes | no | Rows labelled `panic`. |
+| `emotions.labels_file.label_counts.greed` | integer | yes | no | Rows labelled `greed`. |
+| `emotions.labels_file.label_counts.excitement` | integer | yes | no | Rows labelled `excitement`. |
+| `emotions.labels_file.label_counts.anger` | integer | yes | no | Rows labelled `anger`. |
+| `emotions.labels_file.label_counts.mockery` | integer | yes | no | Rows labelled `mockery`. |
+| `emotions.labels_file.label_counts.despair` | integer | yes | no | Rows labelled `despair`. |
+| `emotions.labels_file.label_counts.wait_and_see` | integer | yes | no | Rows labelled `wait_and_see`. |
+| `emotions.labels_file.label_counts.confidence` | integer | yes | no | Rows labelled `confidence`. |
+| `emotions.labels_file.label_counts.none` | integer | yes | no | Rows labelled `none`. |
+| `emotions.labels_file.label_counts.unparsed` | integer | yes | no | Rows for which the labelling model gave no usable answer. |
+| `emotions.labels_file.models` | array | yes | no | The labelling models named in the file, sorted. |
+| `emotions.labels_file.models[]` | string | — | no | A model name. |
+| `emotions.labels_file.prompt_versions` | array | yes | no | The prompt versions named in the file, sorted. |
+| `emotions.labels_file.prompt_versions[]` | string | — | no | A prompt version. |
+| `emotions.emotion_names` | array | yes | no | The switch `EMOTION_NAMES`: the emotions the networks may learn, in their order. |
+| `emotions.emotion_names[]` | string | — | no | One of the eight emotions (never `none`). |
+| `emotions.keep_none` | boolean | yes | no | The switch `EMOTION_KEEP_NONE`: `true` when `none` is learned as a class (nine classes with the defaults), `false` when posts labelled `none` are left out. |
+| `emotions.min_class_posts` | integer | yes | no | The switch `EMOTION_MIN_CLASS_POSTS` (at least 10). |
+| `emotions.dropped` | array | yes | no | The four steps that leave posts out, in this order: `unparsed`, `none`, `not_in_emotion_names`, `too_few_posts`. The posts they leave out and `n_posts` add up to `labels_file.n_matched`. |
+| `emotions.dropped[]` | object | — | no | One step. |
+| `emotions.dropped[].step` | string | yes | no | `"unparsed"`, `"none"`, `"not_in_emotion_names"` or `"too_few_posts"`. |
+| `emotions.dropped[].rule` | string | yes | no | A sentence for people describing the step. |
+| `emotions.dropped[].labels` | array | yes | no | The labels the step leaves out (empty when it leaves out nothing by its rule, for example `none` when `keep_none` is `true`). |
+| `emotions.dropped[].labels[]` | string | — | no | A label (one of the nine, or `unparsed`). |
+| `emotions.dropped[].n_posts` | integer | yes | no | Posts the step left out. |
+| `emotions.classes` | array | yes | no | The classes the networks learned, in the order of `emotion_names` with `none` last (at least two). Every `<emotion>` key below is one of them. |
+| `emotions.classes[]` | string | — | no | An emotion. |
+| `emotions.n_posts` | integer | yes | no | The emotion data: the posts left after the four steps. |
+| `emotions.class_counts` | object | yes | no | Posts of the emotion data per class. |
+| `emotions.class_counts.<emotion>` | integer | — | no | Posts labelled with that emotion; they add up to `n_posts`. |
+| `emotions.split` | object | yes | no | The emotion data split into a training part, a validation part and a test part. |
+| `emotions.split.seed` | integer | yes | no | Random seed of both splits. |
+| `emotions.split.fractions` | object | yes | no | Intended size of each part. |
+| `emotions.split.fractions.train` | number | yes | no | 0.8. |
+| `emotions.split.fractions.validation` | number | yes | no | 0.1. |
+| `emotions.split.fractions.test` | number | yes | no | 0.1. |
+| `emotions.split.stratified_by` | string | yes | no | `"emotion"`: every part keeps the class shares of the emotion data. |
+| `emotions.split.n_posts` | object | yes | no | Posts in each part; they add up to `n_posts`. |
+| `emotions.split.n_posts.train` | integer | yes | no | Posts in the emotion training part. |
+| `emotions.split.n_posts.validation` | integer | yes | no | Posts in the emotion validation part. |
+| `emotions.split.n_posts.test` | integer | yes | no | Posts in the emotion test part. |
+| `emotions.split.class_counts` | object | yes | no | Posts per class in each part. |
+| `emotions.split.class_counts.train` | object | yes | no | In the training part, keyed by the classes. |
+| `emotions.split.class_counts.train.<emotion>` | integer | — | no | Posts of that class (at least one). |
+| `emotions.split.class_counts.validation` | object | yes | no | In the validation part, keyed by the classes. |
+| `emotions.split.class_counts.validation.<emotion>` | integer | — | no | Posts of that class (at least one). |
+| `emotions.split.class_counts.test` | object | yes | no | In the test part, keyed by the classes. |
+| `emotions.split.class_counts.test.<emotion>` | integer | — | no | Posts of that class (at least one). |
+| `emotions.vectorizers` | object | yes | no | The chapter's own two vectorizers, fitted on the emotion training part only. |
+| `emotions.vectorizers.vocab_size_requested` | integer | yes | no | Most words each keeps (`VOCAB_SIZE`). |
+| `emotions.vectorizers.fitted_on` | string | yes | no | `"emotion training part"`. |
+| `emotions.vectorizers.fitted_on_n_posts` | integer | yes | no | Posts they learned from: `split.n_posts.train`. |
+| `emotions.vectorizers.text` | string | yes | no | `"clean_text"`: the cleaned text. |
+| `emotions.vectorizers.storage` | string | yes | no | `"sparse float32"`. |
+| `emotions.vectorizers.count` | object | yes | no | The word-count vectorizer. |
+| `emotions.vectorizers.count.vocab_size` | integer | yes | no | Words it kept. |
+| `emotions.vectorizers.tfidf` | object | yes | no | The TF-IDF vectorizer. |
+| `emotions.vectorizers.tfidf.vocab_size` | integer | yes | no | Words it kept. |
+| `emotions.models` | array | yes | no | Network names, `["count_network", "tfidf_network"]`. Every `<model>` key below is one of them. |
+| `emotions.models[]` | string | — | no | A network name. |
+| `emotions.training` | object | yes | no | Training settings and history of the networks. |
+| `emotions.training.epochs` | integer | yes | no | Passes over the training part (`EPOCHS`). |
+| `emotions.training.batch_size` | integer | yes | no | Posts per training step (`BATCH_SIZE`). |
+| `emotions.training.optimizer` | string | yes | no | `"adam"`. |
+| `emotions.training.seed` | integer | yes | no | Seed set before building each network. |
+| `emotions.training.output_layer` | string | yes | no | The output layer: one softmax unit per class, for example `"9 units, softmax"`. |
+| `emotions.training.loss` | string | yes | no | `"sparse_categorical_crossentropy"`. |
+| `emotions.training.target_of_class` | object | yes | no | What the network learns for each class. |
+| `emotions.training.target_of_class.<emotion>` | integer | — | no | The class's position in `classes`, from 0. |
+| `emotions.training.history` | object | yes | no | Training history, one entry per network. |
+| `emotions.training.history.<model>` | object | — | no | One entry per Keras metric: `loss`, `accuracy`, `val_loss`, `val_accuracy`. |
+| `emotions.training.history.<model>.<metric>` | array | — | no | One value per pass over the training part. |
+| `emotions.training.history.<model>.<metric>[]` | number | — | yes | The value after that pass; `null` if it is not a finite number. |
+| `emotions.selection` | object | yes | no | How the network for the emotion calls was chosen. |
+| `emotions.selection.by` | string | yes | no | The rule: macro-F1 on the emotion validation part. |
+| `emotions.selection.validation_macro_f1` | object | yes | no | Every network's macro-F1 on the validation part. |
+| `emotions.selection.validation_macro_f1.<model>` | number | — | yes | The score; `null` when it cannot be computed. |
+| `emotions.selection.selected` | string | yes | no | The chosen network (a tie goes to `count_network`). |
+| `emotions.evaluation` | object | yes | no | The evaluation on the emotion test part. |
+| `emotions.evaluation.baselines` | array | yes | no | Names of the baselines: `"always_majority"` (always the most frequent class of the training part; on a tie the first in alphabetical order) and `"uniform_random"` (a class at random with equal chances, seeded). |
+| `emotions.evaluation.baselines[]` | string | — | no | A baseline name. |
+| `emotions.evaluation.majority_label` | string | yes | no | The class `always_majority` guesses. |
+| `emotions.evaluation.rows` | array | yes | no | The evaluation table: one row per network and per baseline, all on the emotion test part. |
+| `emotions.evaluation.rows[]` | object | — | no | One row. |
+| `emotions.evaluation.rows[].model` | string | yes | no | A network name or a baseline name. |
+| `emotions.evaluation.rows[].kind` | string | yes | no | `"model"` or `"baseline"`. |
+| `emotions.evaluation.rows[].n` | integer | yes | no | Posts of the test part. |
+| `emotions.evaluation.rows[].accuracy` | number | yes | yes | Share of posts given their silver label; `null` when there are no posts. |
+| `emotions.evaluation.rows[].per_class` | object | yes | no | Scores per class, keyed by the classes. |
+| `emotions.evaluation.rows[].per_class.<emotion>` | object | — | no | The scores of that class. |
+| `emotions.evaluation.rows[].per_class.<emotion>.precision` | number | yes | yes | Of the posts put into this class, the share labelled with it; `null` when none was put into it. |
+| `emotions.evaluation.rows[].per_class.<emotion>.recall` | number | yes | yes | Of the posts labelled with this class, the share found; `null` when there are none. |
+| `emotions.evaluation.rows[].per_class.<emotion>.f1` | number | yes | yes | Harmonic mean of precision and recall; `null` when it cannot be computed. |
+| `emotions.evaluation.rows[].per_class.<emotion>.support` | integer | yes | no | Test posts labelled with this class; they add up to `n`. |
+| `emotions.evaluation.rows[].macro_f1` | number | yes | yes | Mean of the per-class F1 scores that can be computed; `null` when none can. |
+| `emotions.beats_baselines` | object | yes | no | Per network, whether its macro-F1 on the test part is higher than that of both baselines. |
+| `emotions.beats_baselines.<model>` | boolean | — | no | `false` also when a score is missing. |
+| `emotions.confusion_matrices` | object | yes | no | One confusion matrix per network, on the emotion test part. |
+| `emotions.confusion_matrices.<model>` | object | — | no | The matrix of that network. |
+| `emotions.confusion_matrices.<model>.labels` | array | yes | no | Classes of the rows and of the columns, in order: equal to `classes`. |
+| `emotions.confusion_matrices.<model>.labels[]` | string | — | no | An emotion. |
+| `emotions.confusion_matrices.<model>.rows` | string | yes | no | `"true emotion"`: the silver label. |
+| `emotions.confusion_matrices.<model>.columns` | string | yes | no | `"predicted emotion"`. |
+| `emotions.confusion_matrices.<model>.counts` | array | yes | no | One list per true class. |
+| `emotions.confusion_matrices.<model>.counts[]` | array | — | no | One count per predicted class. |
+| `emotions.confusion_matrices.<model>.counts[][]` | integer | — | no | Posts with this true and this predicted class. |
+| `emotions.confusion_matrices.<model>.n` | integer | yes | no | All cells added up: the test posts. |
+| `emotions.scoring` | object | yes | no | The emotion call for every topic post. |
+| `emotions.scoring.function` | string | yes | no | `"emotion_proba"`: the notebook's function that gives the chosen network's probabilities for cleaned texts, one column per class. |
+| `emotions.scoring.model` | string | yes | no | The network used: equal to `selection.selected`. |
+| `emotions.scoring.post_table` | string | yes | no | `"topic_posts"`: the same posts as `topics`. |
+| `emotions.scoring.table` | string | yes | no | `"emotion_posts"`: the notebook's table with one row per topic post (`post_id`, `emotion`, `emotion_probability`, `in_emotion_data`). |
+| `emotions.scoring.n_scored` | integer | yes | no | Topic posts given an emotion: equal to `topics.n_posts`. |
+| `emotions.scoring.n_in_emotion_data` | integer | yes | no | Topic posts that are also in the emotion data (the networks learned from them, were chosen with them or were tested on them). |
+| `emotions.overall` | object | yes | no | All topic posts. |
+| `emotions.overall.n_posts` | integer | yes | no | Topic posts: equal to `scoring.n_scored`. |
+| `emotions.overall.counts` | object | yes | no | Posts per class by the chosen network's call, keyed by the classes; they add up to `n_posts`. `any_drawer` + `no_drawer` = `overall`, class by class. |
+| `emotions.overall.counts.<emotion>` | integer | — | no | Posts called that emotion. |
+| `emotions.overall.shares` | object | yes | no | Share of each class, keyed by the classes. |
+| `emotions.overall.shares.<emotion>` | number | — | yes | `counts.<emotion>` ÷ `n_posts`; `null` when there are no posts. |
+| `emotions.overall.quotes_per_class` | integer | yes | no | Most example posts per class (3 for `overall`, 1 for every drawer, `any_drawer` and `no_drawer`). |
+| `emotions.overall.quotes` | object | yes | no | Example posts, keyed by the classes (every class is there). Only posts not in the emotion data, the highest probability of the class first, each text once in the group; a class has none when no such post was called it. |
+| `emotions.overall.quotes.<emotion>` | array | — | no | The examples of that class, at most `quotes_per_class`. |
+| `emotions.overall.quotes.<emotion>[]` | object | — | no | One example post, called that emotion by the chosen network. |
+| `emotions.overall.quotes.<emotion>[].post_id` | string | yes | no | The post's `post_id`. |
+| `emotions.overall.quotes.<emotion>[].text` | string | yes | no | The post's original text. |
+| `emotions.overall.quotes.<emotion>[].probability` | number | yes | no | The chosen network's probability of that emotion: the largest of `probabilities`. |
+| `emotions.overall.quotes.<emotion>[].probabilities` | object | yes | no | The chosen network's probability of every class, keyed by the classes; they add up to 1. |
+| `emotions.overall.quotes.<emotion>[].probabilities.<emotion>` | number | — | no | The probability of that class. |
+| `emotions.drawers` | array | yes | no | One entry per drawer of `drawers.drawers`, in the same order. |
+| `emotions.drawers[]` | object | — | no | One drawer. |
+| `emotions.drawers[].drawer` | string | yes | no | Drawer id, as in `drawers.drawers[].drawer`. |
+| `emotions.drawers[].name` | string | yes | no | English name of the drawer. |
+| `emotions.drawers[].n_posts` | integer | yes | no | Posts in the drawer: equal to `drawers.drawers[].n_posts`. |
+| `emotions.drawers[].counts` | object | yes | no | Posts per class by the chosen network's call, keyed by the classes; they add up to `n_posts`. |
+| `emotions.drawers[].counts.<emotion>` | integer | — | no | Posts called that emotion. |
+| `emotions.drawers[].shares` | object | yes | no | Share of each class, keyed by the classes. |
+| `emotions.drawers[].shares.<emotion>` | number | — | yes | `counts.<emotion>` ÷ `n_posts`; `null` when there are no posts. |
+| `emotions.drawers[].quotes_per_class` | integer | yes | no | Most example posts per class (3 for `overall`, 1 for every drawer, `any_drawer` and `no_drawer`). |
+| `emotions.drawers[].quotes` | object | yes | no | Example posts, keyed by the classes (every class is there). Only posts not in the emotion data, the highest probability of the class first, each text once in the group; a class has none when no such post was called it. |
+| `emotions.drawers[].quotes.<emotion>` | array | — | no | The examples of that class, at most `quotes_per_class`. |
+| `emotions.drawers[].quotes.<emotion>[]` | object | — | no | One example post, called that emotion by the chosen network. |
+| `emotions.drawers[].quotes.<emotion>[].post_id` | string | yes | no | The post's `post_id`. |
+| `emotions.drawers[].quotes.<emotion>[].text` | string | yes | no | The post's original text. |
+| `emotions.drawers[].quotes.<emotion>[].probability` | number | yes | no | The chosen network's probability of that emotion: the largest of `probabilities`. |
+| `emotions.drawers[].quotes.<emotion>[].probabilities` | object | yes | no | The chosen network's probability of every class, keyed by the classes; they add up to 1. |
+| `emotions.drawers[].quotes.<emotion>[].probabilities.<emotion>` | number | — | no | The probability of that class. |
+| `emotions.any_drawer` | object | yes | no | The topic posts in at least one drawer. |
+| `emotions.any_drawer.n_posts` | integer | yes | no | Equal to `drawers.n_in_any_drawer`. |
+| `emotions.any_drawer.counts` | object | yes | no | Posts per class by the chosen network's call, keyed by the classes; they add up to `n_posts`. |
+| `emotions.any_drawer.counts.<emotion>` | integer | — | no | Posts called that emotion. |
+| `emotions.any_drawer.shares` | object | yes | no | Share of each class, keyed by the classes. |
+| `emotions.any_drawer.shares.<emotion>` | number | — | yes | `counts.<emotion>` ÷ `n_posts`; `null` when there are no posts. |
+| `emotions.any_drawer.quotes_per_class` | integer | yes | no | Most example posts per class (3 for `overall`, 1 for every drawer, `any_drawer` and `no_drawer`). |
+| `emotions.any_drawer.quotes` | object | yes | no | Example posts, keyed by the classes (every class is there). Only posts not in the emotion data, the highest probability of the class first, each text once in the group; a class has none when no such post was called it. |
+| `emotions.any_drawer.quotes.<emotion>` | array | — | no | The examples of that class, at most `quotes_per_class`. |
+| `emotions.any_drawer.quotes.<emotion>[]` | object | — | no | One example post, called that emotion by the chosen network. |
+| `emotions.any_drawer.quotes.<emotion>[].post_id` | string | yes | no | The post's `post_id`. |
+| `emotions.any_drawer.quotes.<emotion>[].text` | string | yes | no | The post's original text. |
+| `emotions.any_drawer.quotes.<emotion>[].probability` | number | yes | no | The chosen network's probability of that emotion: the largest of `probabilities`. |
+| `emotions.any_drawer.quotes.<emotion>[].probabilities` | object | yes | no | The chosen network's probability of every class, keyed by the classes; they add up to 1. |
+| `emotions.any_drawer.quotes.<emotion>[].probabilities.<emotion>` | number | — | no | The probability of that class. |
+| `emotions.no_drawer` | object | yes | no | The topic posts in no drawer. |
+| `emotions.no_drawer.n_posts` | integer | yes | no | Equal to `drawers.n_in_no_drawer`. |
+| `emotions.no_drawer.counts` | object | yes | no | Posts per class by the chosen network's call, keyed by the classes; they add up to `n_posts`. |
+| `emotions.no_drawer.counts.<emotion>` | integer | — | no | Posts called that emotion. |
+| `emotions.no_drawer.shares` | object | yes | no | Share of each class, keyed by the classes. |
+| `emotions.no_drawer.shares.<emotion>` | number | — | yes | `counts.<emotion>` ÷ `n_posts`; `null` when there are no posts. |
+| `emotions.no_drawer.quotes_per_class` | integer | yes | no | Most example posts per class (3 for `overall`, 1 for every drawer, `any_drawer` and `no_drawer`). |
+| `emotions.no_drawer.quotes` | object | yes | no | Example posts, keyed by the classes (every class is there). Only posts not in the emotion data, the highest probability of the class first, each text once in the group; a class has none when no such post was called it. |
+| `emotions.no_drawer.quotes.<emotion>` | array | — | no | The examples of that class, at most `quotes_per_class`. |
+| `emotions.no_drawer.quotes.<emotion>[]` | object | — | no | One example post, called that emotion by the chosen network. |
+| `emotions.no_drawer.quotes.<emotion>[].post_id` | string | yes | no | The post's `post_id`. |
+| `emotions.no_drawer.quotes.<emotion>[].text` | string | yes | no | The post's original text. |
+| `emotions.no_drawer.quotes.<emotion>[].probability` | number | yes | no | The chosen network's probability of that emotion: the largest of `probabilities`. |
+| `emotions.no_drawer.quotes.<emotion>[].probabilities` | object | yes | no | The chosen network's probability of every class, keyed by the classes; they add up to 1. |
+| `emotions.no_drawer.quotes.<emotion>[].probabilities.<emotion>` | number | — | no | The probability of that class. |
+| `emotions.human_review` | object | yes | no | Agreement of a person with the pre-labels, from a filled-in review table (`labels/emotions-review-template.csv` in the repository). Not weighted: the review table holds about the same number of rows per label, so an overall agreement must weight each label's agreement by the label's share of the labelled rows of the pre-label file. |
+| `emotions.human_review.source` | string | yes | no | The switch `EMOTION_REVIEW_SOURCE`; `""` when no table was read. |
+| `emotions.human_review.n_reviewed` | integer | yes | no | Rows whose `human_label` is filled in; 0 when no table was read. |
+| `emotions.human_review.agreement` | number | yes | yes | Share of those rows whose `human_label` equals `prelabel` (spaces around it and case ignored); `null` when no row is filled in. |
+| `emotions.human_review.by_prelabel` | object | yes | no | The same per pre-label, keyed by the nine labels (always all nine). |
+| `emotions.human_review.by_prelabel.<prelabel>` | object | — | no | One of the nine labels. |
+| `emotions.human_review.by_prelabel.<prelabel>.n_reviewed` | integer | yes | no | Filled-in rows with this pre-label. |
+| `emotions.human_review.by_prelabel.<prelabel>.agreement` | number | yes | yes | Share of them on which the person agrees; `null` when there are none. |
+
 ## Daily results
 
 The current format knows one granularity, `"batch"`: every section describes the whole data source at once. The StockTwits data has no dates, so it cannot say "how was today". Results per day need dated data and come with a later version of the format. They will be added in this way, so that no field of the current format changes its name, type or meaning:
@@ -685,6 +887,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | 1.0 | First fixed format. |
 | 1.1 | Chapter 10 counts the model's calls at 0.5 and calibrates the bullish share with the recognition rates of chapter 8, and marks rows with too few bullish or bearish posts. New: `why.min_bullish_bearish_posts` and `why.calibration`; in `why.overall` and every `why.topics[]` row `too_few_bullish_bearish`, `half_counts`, `half_bullish_share` and `calibrated_bullish_share`; in every `fair` block `half_counts`, `half_bullish_share`, `calibrated_bullish_share`, `half_minus_label_pp` and `calibrated_minus_label_pp`. Additions only: no field of 1.0 changed. |
 | 1.2 | Chapter 9 puts the topic posts into drawers chosen by a person through a versioned word list and groups the posts in no drawer; chapter 10 gives every drawer the same row as a topic. New: the top-level section `drawers`; in `why` the fields `drawers` (one row per drawer), `any_drawer` and `no_drawer`. Additions only: no field of 1.1 changed. |
+| 1.3 | Chapter 11 learns eight crypto emotions and `none` from silver labels (a pre-label file), evaluates two networks against two baselines and gives every topic post an emotion, overall and per drawer, with example posts and an interface for a person's review. New: the top-level section `emotions`. Additions only: no field of 1.2 changed. |
 
 ## Reading a brief
 

@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 The brief: format, check, save and panel.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Topics · 10 Why · 11 Emotions · 12 The brief: format, check, save and panel.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 简报：格式、校验、保存和面板。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 话题 · 10 为什么 · 11 情绪 · 12 简报：格式、校验、保存和面板。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -187,18 +187,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 11 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers` and `why`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 11 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 12 saves as `WORK_DIR/brief.json`. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset; `"daily"` is kept for dated data), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 12 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 11 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 11 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 12 章把它存成 `WORK_DIR/brief.json`。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`topics`、`drawers`、`why`、`emotions`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果，`"daily"` 留给带日期的数据）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 12 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.2",  # the format of chapter 11's rules (docs/brief-format.md in the repository)
+    "format_version": "1.3",  # the format of chapter 12's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -211,6 +211,7 @@ brief = {
     "topics": None,
     "drawers": None,
     "why": None,
+    "emotions": None,
 }
 list(brief)  # show the top-level fields
 
@@ -3691,7 +3692,7 @@ print(f"Review table: {EMOTION_REVIEW_SOURCE or '(none)'}; rows reviewed by a pe
 pd.DataFrame.from_dict(human_review["by_prelabel"], orient="index").rename_axis("prelabel")
 
 # %% [markdown]
-# ## 11. The brief: format, check, save and panel
+# ## 12. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
 #
@@ -3704,7 +3705,7 @@ pd.DataFrame.from_dict(human_review["by_prelabel"], orient="index").rename_axis(
 #
 # ***
 #
-# ## 11. 简报：格式、校验、保存和面板
+# ## 12. 简报：格式、校验、保存和面板
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，分四步：
 #
@@ -3732,13 +3733,13 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.2",
+  "title": "Ledger Eyes brief, format 1.3",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.2"},
+    "format_version": {"type": "string", "const": "1.3"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -4437,6 +4438,245 @@ BRIEF_SCHEMA_TEXT = r"""{
         "any_drawer": {"$ref": "#/$defs/why_row"},
         "no_drawer": {"$ref": "#/$defs/why_row"}
       }
+    },
+    "emotions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label_kind", "labels_source", "labels_file", "emotion_names", "keep_none", "min_class_posts", "dropped",
+                   "classes", "n_posts", "class_counts", "split", "vectorizers", "models", "training", "selection",
+                   "evaluation", "beats_baselines", "confusion_matrices", "scoring", "overall", "drawers", "any_drawer",
+                   "no_drawer", "human_review"],
+      "properties": {
+        "label_kind": {"type": "string"},
+        "labels_source": {"type": "string"},
+        "labels_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["n_rows", "n_matched", "label_counts", "models", "prompt_versions"],
+          "properties": {
+            "n_rows": {"$ref": "#/$defs/count"},
+            "n_matched": {"$ref": "#/$defs/count"},
+            "label_counts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence", "none",
+                           "unparsed"],
+              "properties": {
+                "panic": {"$ref": "#/$defs/count"},
+                "greed": {"$ref": "#/$defs/count"},
+                "excitement": {"$ref": "#/$defs/count"},
+                "anger": {"$ref": "#/$defs/count"},
+                "mockery": {"$ref": "#/$defs/count"},
+                "despair": {"$ref": "#/$defs/count"},
+                "wait_and_see": {"$ref": "#/$defs/count"},
+                "confidence": {"$ref": "#/$defs/count"},
+                "none": {"$ref": "#/$defs/count"},
+                "unparsed": {"$ref": "#/$defs/count"}
+              }
+            },
+            "models": {"type": "array", "items": {"type": "string"}},
+            "prompt_versions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "emotion_names": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/emotion"}},
+        "keep_none": {"type": "boolean"},
+        "min_class_posts": {"type": "integer", "minimum": 10},
+        "dropped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step", "rule", "labels", "n_posts"],
+            "properties": {
+              "step": {"type": "string", "enum": ["unparsed", "none", "not_in_emotion_names", "too_few_posts"]},
+              "rule": {"type": "string"},
+              "labels": {"type": "array", "items": {"type": "string"}},
+              "n_posts": {"$ref": "#/$defs/count"}
+            }
+          }
+        },
+        "classes": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/emotion"}},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "class_counts": {"$ref": "#/$defs/emotion_counts"},
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts"],
+          "properties": {
+            "seed": {"type": "integer"},
+            "fractions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {"train": {"$ref": "#/$defs/share"}, "validation": {"$ref": "#/$defs/share"}, "test": {"$ref": "#/$defs/share"}}
+            },
+            "stratified_by": {"type": "string"},
+            "n_posts": {"$ref": "#/$defs/part_counts"},
+            "class_counts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {
+                "train": {"$ref": "#/$defs/emotion_counts"},
+                "validation": {"$ref": "#/$defs/emotion_counts"},
+                "test": {"$ref": "#/$defs/emotion_counts"}
+              }
+            }
+          }
+        },
+        "vectorizers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf"],
+          "properties": {
+            "vocab_size_requested": {"$ref": "#/$defs/positive"},
+            "fitted_on": {"type": "string"},
+            "fitted_on_n_posts": {"$ref": "#/$defs/count"},
+            "text": {"type": "string"},
+            "storage": {"type": "string"},
+            "count": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["vocab_size"],
+              "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            },
+            "tfidf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["vocab_size"],
+              "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            }
+          }
+        },
+        "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "training": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["epochs", "batch_size", "optimizer", "seed", "output_layer", "loss", "target_of_class", "history"],
+          "properties": {
+            "epochs": {"$ref": "#/$defs/positive"},
+            "batch_size": {"$ref": "#/$defs/positive"},
+            "optimizer": {"type": "string"},
+            "seed": {"type": "integer"},
+            "output_layer": {"type": "string"},
+            "loss": {"type": "string"},
+            "target_of_class": {"$ref": "#/$defs/emotion_counts"},
+            "history": {
+              "type": "object",
+              "propertyNames": {"title": "model"},
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": {"title": "metric"},
+                "additionalProperties": {"type": "array", "items": {"type": ["number", "null"]}}
+              }
+            }
+          }
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["by", "validation_macro_f1", "selected"],
+          "properties": {
+            "by": {"type": "string"},
+            "validation_macro_f1": {"type": "object", "propertyNames": {"title": "model"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+            "selected": {"type": "string"}
+          }
+        },
+        "evaluation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baselines", "majority_label", "rows"],
+          "properties": {
+            "baselines": {"type": "array", "items": {"type": "string"}},
+            "majority_label": {"$ref": "#/$defs/emotion"},
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["model", "kind", "n", "accuracy", "per_class", "macro_f1"],
+                "properties": {
+                  "model": {"type": "string"},
+                  "kind": {"type": "string", "enum": ["model", "baseline"]},
+                  "n": {"$ref": "#/$defs/count"},
+                  "accuracy": {"$ref": "#/$defs/share_or_null"},
+                  "per_class": {
+                    "type": "object",
+                    "propertyNames": {"title": "emotion", "$ref": "#/$defs/emotion"},
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["precision", "recall", "f1", "support"],
+                      "properties": {
+                        "precision": {"$ref": "#/$defs/share_or_null"},
+                        "recall": {"$ref": "#/$defs/share_or_null"},
+                        "f1": {"$ref": "#/$defs/share_or_null"},
+                        "support": {"$ref": "#/$defs/count"}
+                      }
+                    }
+                  },
+                  "macro_f1": {"$ref": "#/$defs/share_or_null"}
+                }
+              }
+            }
+          }
+        },
+        "beats_baselines": {"type": "object", "propertyNames": {"title": "model"}, "additionalProperties": {"type": "boolean"}},
+        "confusion_matrices": {
+          "type": "object",
+          "propertyNames": {"title": "model"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["labels", "rows", "columns", "counts", "n"],
+            "properties": {
+              "labels": {"type": "array", "items": {"$ref": "#/$defs/emotion"}},
+              "rows": {"type": "string"},
+              "columns": {"type": "string"},
+              "counts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/count"}}},
+              "n": {"$ref": "#/$defs/count"}
+            }
+          }
+        },
+        "scoring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["function", "model", "post_table", "table", "n_scored", "n_in_emotion_data"],
+          "properties": {
+            "function": {"type": "string"},
+            "model": {"type": "string"},
+            "post_table": {"type": "string"},
+            "table": {"type": "string"},
+            "n_scored": {"$ref": "#/$defs/count"},
+            "n_in_emotion_data": {"$ref": "#/$defs/count"}
+          }
+        },
+        "overall": {"$ref": "#/$defs/emotion_group"},
+        "drawers": {"type": "array", "items": {"$ref": "#/$defs/emotion_drawer"}},
+        "any_drawer": {"$ref": "#/$defs/emotion_group"},
+        "no_drawer": {"$ref": "#/$defs/emotion_group"},
+        "human_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "n_reviewed", "agreement", "by_prelabel"],
+          "properties": {
+            "source": {"type": "string"},
+            "n_reviewed": {"$ref": "#/$defs/count"},
+            "agreement": {"$ref": "#/$defs/share_or_null"},
+            "by_prelabel": {
+              "type": "object",
+              "propertyNames": {"title": "prelabel", "$ref": "#/$defs/emotion"},
+              "required": ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence", "none"],
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["n_reviewed", "agreement"],
+                "properties": {"n_reviewed": {"$ref": "#/$defs/count"}, "agreement": {"$ref": "#/$defs/share_or_null"}}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -4541,6 +4781,53 @@ BRIEF_SCHEMA_TEXT = r"""{
         "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"},
         "half_minus_label_pp": {"$ref": "#/$defs/points_or_null"},
         "calibrated_minus_label_pp": {"$ref": "#/$defs/points_or_null"}
+      }
+    },
+    "emotion": {"type": "string", "enum": ["panic", "greed", "excitement", "anger", "mockery", "despair", "wait_and_see", "confidence", "none"]},
+    "emotion_counts": {"type": "object", "propertyNames": {"title": "emotion", "$ref": "#/$defs/emotion"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+    "emotion_shares": {"type": "object", "propertyNames": {"title": "emotion", "$ref": "#/$defs/emotion"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+    "emotion_quotes": {
+      "type": "object",
+      "propertyNames": {"title": "emotion", "$ref": "#/$defs/emotion"},
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["post_id", "text", "probability", "probabilities"],
+          "properties": {
+            "post_id": {"type": "string"},
+            "text": {"type": "string"},
+            "probability": {"$ref": "#/$defs/share"},
+            "probabilities": {"type": "object", "propertyNames": {"title": "emotion", "$ref": "#/$defs/emotion"}, "additionalProperties": {"$ref": "#/$defs/share"}}
+          }
+        }
+      }
+    },
+    "emotion_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_posts", "counts", "shares", "quotes_per_class", "quotes"],
+      "properties": {
+        "n_posts": {"$ref": "#/$defs/count"},
+        "counts": {"$ref": "#/$defs/emotion_counts"},
+        "shares": {"$ref": "#/$defs/emotion_shares"},
+        "quotes_per_class": {"$ref": "#/$defs/count"},
+        "quotes": {"$ref": "#/$defs/emotion_quotes"}
+      }
+    },
+    "emotion_drawer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drawer", "name", "n_posts", "counts", "shares", "quotes_per_class", "quotes"],
+      "properties": {
+        "drawer": {"type": "string"},
+        "name": {"type": "string"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "counts": {"$ref": "#/$defs/emotion_counts"},
+        "shares": {"$ref": "#/$defs/emotion_shares"},
+        "quotes_per_class": {"$ref": "#/$defs/count"},
+        "quotes": {"$ref": "#/$defs/emotion_quotes"}
       }
     }
   }

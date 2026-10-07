@@ -71,7 +71,8 @@ from notebook_build import NOTEBOOK, SOURCE, build_notebook_text  # noqa: E402
 REQUIREMENTS = REPO_DIR / "requirements.txt"
 SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
 FULL_SOURCE = "data/raw/st-data-full.xlsx"
-TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers"]
+TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "why", "drawers",
+                    "emotions"]
 SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -127,7 +128,7 @@ DRAWER_FILE_PROBES = [("moon shot soon", ["moon"]), ("no moon shot today", [])]
 DRAWER_QUOTES = 5  # spot-check quotes per drawer, at most
 DRAWER_STABLE_ROW_FIELDS = ["drawer", "name", "n_posts", "too_few_posts", "label_counts", "label_bullish_share",
                             "label_vs_overall_pp", "too_few_bullish_bearish"]  # why.drawers fields that ignore training
-# Chapter 11: the brief's format rules, its documentation and the panel.
+# Chapter 12: the brief's format rules, its documentation and the panel.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
@@ -1947,7 +1948,7 @@ def print_drawers(brief):
             print(f"        [{quote.get('label')}, {quote.get('post_id')}] {quote.get('text')}")
 
 
-# ---------------------------------------------------------------- the brief's format and the panel (chapter 11)
+# ---------------------------------------------------------------- the brief's format and the panel (chapter 12)
 
 def code_cells():
     """The notebook source's code cells, in order."""
