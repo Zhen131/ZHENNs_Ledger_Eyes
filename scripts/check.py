@@ -180,7 +180,8 @@ CHECK_SETTINGS = {PANEL_SWITCH: False}  # every run of both checks: the panel is
 PANEL_TABLES = ["scope", "evaluation", "topics", "why"]  # the panel's tables, in tab order
 PANEL_MORE_TABLES = ["calibration", "calibrated", "drawers", "emotions", "new_words", "validation",
                      "sources"]  # the panel's tables after the first four, in tab order
-PANEL_CHART_LABELS = ["Bullish share by day", "The two layers side by side"]  # the panel's two charts, in tab order
+PANEL_CHART_LABELS = ["Bullish share by day", "The two layers side by side",  # the panel's charts, in tab order
+                      "The two layers, media by window"]
 PANEL_EMOTION_COLUMNS = ["row", "name", "posts"]  # the emotion table's first columns; one column per class follows
 PANEL_DASH = "—"  # what the panel shows where the brief has null
 LOOPBACK_HOST = "127.0.0.1"  # the only address the panel may listen on
@@ -2544,7 +2545,7 @@ def check_save_refuses(report, label, brief, rules):
 # host other than this machine. It executes the notebook's panel cell, then builds the panel from a brief file
 # and from a copy with marked values, and prints the tables and the page's table components as JSON.
 # It also reports every image on the page (label, size, colours, a hash of its pixels) for both, and builds the
-# panel from two more copies next to the marked one, each with one number of one chart changed.
+# panel from three more copies next to the marked one, each with one number of one chart changed.
 PANEL_PROBE = r'''
 import json, os, sys
 LOOPBACK = {"127.0.0.1", "::1", "localhost", b"127.0.0.1", b"::1", b"localhost"}
@@ -2600,7 +2601,7 @@ for key, path in (("brief", brief_file), ("marked", marked_file)):
                        for value in components],
     }
     result[key]["images"] = chart_images(page)
-for key in ("daily_changed", "layers_changed"):  # copies with one number of a chart changed, next to the marked copy
+for key in ("daily_changed", "layers_changed", "window_changed"):  # copies with one number of a chart changed, next to the marked copy
     path = os.path.join(os.path.dirname(marked_file), key + "-brief.json")
     if os.path.isfile(path):
         result[key] = {"images": chart_images(namespace["build_panel"](path))}
@@ -2625,6 +2626,7 @@ PANEL_NEW_WORD = {"word": "PANEL-MARK-NEW-WORD", "n_posts": 1, "past_daily_mean"
 PANEL_CHART_CHANGES = [  # (copy, the number changed in it, the chart that must change: position in PANEL_CHART_LABELS)
     ("daily_changed", ("daily", "layers", "retail", "days", 0, "calibrated_bullish_share"), 0),
     ("layers_changed", ("layers", "days", 0, "calibrated_bullish_share", "media"), 1),
+    ("window_changed", ("layers", "media_window", "comparison", "days", 0, "calibrated_bullish_share", "media"), 2),
 ]
 
 
@@ -2758,7 +2760,7 @@ def panel_more_expected(brief):
 
 def check_panel_more(report, label, brief, probe):
     """The panel after its first four tables: the new tables with their rows from the brief and "—" for null, the
-    two charts, drawn from the file's numbers only, and a new word added in a copy of the file."""
+    charts, drawn from the file's numbers only, and a new word added in a copy of the file."""
     built = probe["brief"]
     tables = built["tables"]
     expected_rows, nulls, classes = panel_more_expected(brief)
@@ -2798,7 +2800,7 @@ def check_panel_more(report, label, brief, probe):
     report.check([image.get("label") for image in images] == PANEL_CHART_LABELS
                  and all(image.get("sha256") and image.get("bytes", 0) > 0 and image.get("colours", 0) > 1
                          for image in images),
-                 f"{label}: the panel shows its two charts ({'; '.join(PANEL_CHART_LABELS)}) as pictures that are not "
+                 f"{label}: the panel shows its charts ({'; '.join(PANEL_CHART_LABELS)}) as pictures that are not "
                  "empty (a file with more than one colour)",
                  f"{[(image.get('label'), image.get('size'), image.get('bytes'), image.get('colours')) for image in images]}")
 
@@ -2815,7 +2817,8 @@ def check_panel_more(report, label, brief, probe):
     report.check(all(outcome.values()),
                  f"{label}: the charts are drawn from the brief file: a daily share changed in a copy changes only the "
                  "chart by day, a share of the two layers changed in a copy changes only the chart of the two layers, "
-                 "and the copy with the marked texts changes neither", f"{outcome}")
+                 "a media window share of the comparison by window changed in a copy changes only the chart of the media "
+                 "layer by window, and the copy with the marked texts changes none", f"{outcome}")
 
     marker = PANEL_NEW_WORD["word"]
     marked_rows = as_dict(probe["marked"]["tables"].get("new_words")).get("rows") or []
@@ -2843,7 +2846,7 @@ def check_panel_charts_source(report):
     pyplot = sorted(name for name in imports if name and "pyplot" in name)
     report.check(panel_cell != "" and {"matplotlib.figure", "matplotlib.backends.backend_agg"} <= imports
                  and not pyplot and not writing and {"panel_charts", "Image"} <= calls | functions,
-                 "the panel cell draws its two charts with Matplotlib in memory (a Figure on the Agg canvas, no pyplot) "
+                 "the panel cell draws its charts with Matplotlib in memory (a Figure on the Agg canvas, no pyplot) "
                  "and writes no file (no savefig, imsave, write_text, write_bytes, to_csv, to_json, dump, open, mkdir, "
                  "show or print_png); the pictures go to Gradio as arrays of pixels",
                  f"imports {sorted(name for name in imports if name and name.startswith('matplotlib'))}; pyplot {pyplot}; "
