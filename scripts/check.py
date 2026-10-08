@@ -56,6 +56,12 @@ quick: static checks, then the notebook runs three times on the bundled
        switches, where chapter 15 may connect, and its parsers and caches with
        fake sources are checked. A sixth run reads no prices at all, which the
        notebook must take as "not obtained".
+       The media layer by window (chapters 14 and 15, MEDIA_WINDOW_DAYS) is
+       recomputed by the check in every brief from the media layer's days of
+       the daily section, with the comparison by window and its correlations;
+       before any run, its switch and its cells on made-up daily counts are
+       checked. A seventh run with a window of one day and a too-few bar of 1
+       must give exactly the media layer by day.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
@@ -72,7 +78,9 @@ full:  static checks, then one run on the full dataset with the default
        Fear and Greed Index from the web (Yahoo Finance through yfinance, then
        Coinbase, then Stooq; alternative.me) the first time and from its caches
        in WORK_DIR/cache/ afterwards; the layers and validation sections are
-       checked (every coefficient recomputed from the cache) and printed.
+       checked (every coefficient recomputed from the cache) and printed, the
+       media layer by window too, with every day the two layers lean opposite
+       ways when the media layer is read by window.
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -1279,6 +1287,8 @@ def threshold_run(report, defaults, overrides, default_brief, rules=None, built_
     check_new_words(report, THRESHOLD_LABEL, brief, switches)
     check_layers(report, THRESHOLD_LABEL, brief, switches)
     check_validation(report, THRESHOLD_LABEL, brief, switches)
+    check_media_window(report, THRESHOLD_LABEL, brief, switches)
+    check_media_window_validation(report, THRESHOLD_LABEL, brief, switches)
     check_format(report, THRESHOLD_LABEL, brief, rules)
     check_panel_output(report, THRESHOLD_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     why = as_dict(brief.get("why"))
@@ -2432,6 +2442,25 @@ BROKEN_BRIEFS = [
     ("7 value the format does not allow", ("validation", "layers", "retail", "next_day_change", "n_days"), lambda old: -3,
      "validation.layers.retail.next_day_change.n_days", "minimum"),
     ("2 required field missing in a section", ("layers", "date_from"), DELETE, "layers", "date_from"),
+    ("2 required field missing in a section", ("layers", "media_window", "window_days"), DELETE, "layers.media_window",
+     "window_days"),
+    ("2 required field missing in a section", ("validation", "media_window"), DELETE, "validation", "media_window"),
+    ("7 value the format does not allow", ("layers", "media_window", "window_days"), lambda old: 0,
+     "layers.media_window.window_days", "minimum"),
+    ("3 wrong type", ("layers", "media_window", "days", 0, "n_posts"), lambda old: "12", "layers.media_window.days[0].n_posts",
+     "integer"),
+    ("7 value the format does not allow", ("layers", "media_window", "days", 0, "half_bullish_share"), lambda old: 1.5,
+     "layers.media_window.days[0].half_bullish_share", "1.5"),
+    ("3 wrong type", ("layers", "media_window", "comparison", "days", 0, "opposite"), lambda old: "yes",
+     "layers.media_window.comparison.days[0].opposite", "boolean"),
+    ("7 value the format does not allow", ("validation", "media_window", "fear_greed", "spearman"), lambda old: 1.5,
+     "validation.media_window.fear_greed.spearman", "1.5"),
+    ("7 value the format does not allow", ("validation", "media_window", "next_day_change", "n_days"), lambda old: -3,
+     "validation.media_window.next_day_change.n_days", "minimum"),
+    ("7 value the format does not allow", ("layers", "media_window", "comparison", "n_days_opposite"), lambda old: -1,
+     "layers.media_window.comparison.n_days_opposite", "minimum"),
+    ("7 value the format does not allow", ("layers", "media_window", "short_windows"), lambda old: "sometimes",
+     "layers.media_window.short_windows", "sometimes"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -2456,6 +2485,13 @@ NULL_ALLOWED = [
     ("layers", "media_recognition", "true_bullish_rate"),
     ("validation", "layers", "retail", "fear_greed", "spearman"),
     ("validation", "price", "fetched_on"),
+    ("layers", "media_window", "date_from"),
+    ("layers", "media_window", "days", 0, "half_bullish_share"),
+    ("layers", "media_window", "days", 0, "calibrated_bullish_share"),
+    ("layers", "media_window", "comparison", "days", 0, "calibrated_bullish_share", "media"),
+    ("layers", "media_window", "comparison", "days", 0, "opposite"),
+    ("validation", "media_window", "fear_greed", "spearman"),
+    ("validation", "media_window", "next_day_change", "spearman"),
 ]
 
 
@@ -5276,6 +5312,8 @@ def spike_run(report, defaults, overrides, rules=None, built_in=None):
                  f"{SPIKE_LABEL}: with both small files of chapter 15 and a too-few bar of 1, coefficients can be computed: "
                  f"{index_coefficients} against the index and {change_coefficients} against the next day's change are not "
                  "null and agree with the check's own computation")
+    check_media_window(report, SPIKE_LABEL, brief, switches)
+    check_media_window_validation(report, SPIKE_LABEL, brief, switches)
     check_format(report, SPIKE_LABEL, brief, rules)
     reported = {}  # word -> {day: (posts, ratio, example texts)}
     for name, layer in as_dict(as_dict(brief.get("new_words")).get("layers")).items():
@@ -6020,6 +6058,8 @@ def price_none_run(report, defaults, overrides, rules=None, built_in=None):
     check_daily(report, PRICE_NONE_LABEL, brief, switches)
     check_layers(report, PRICE_NONE_LABEL, brief, switches)
     index_coefficients, _ = check_validation(report, PRICE_NONE_LABEL, brief, switches)
+    check_media_window(report, PRICE_NONE_LABEL, brief, switches)
+    check_media_window_validation(report, PRICE_NONE_LABEL, brief, switches)
     check_format(report, PRICE_NONE_LABEL, brief, rules)
     check_panel_output(report, PRICE_NONE_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
     validation = as_dict(brief.get("validation"))
@@ -6087,6 +6127,526 @@ def print_validation(brief):
               f"with a share; against the index: {as_dict(entry.get('fear_greed')).get('spearman')} "
               f"({as_dict(entry.get('fear_greed')).get('n_days')} days); against the next day's change: "
               f"{as_dict(entry.get('next_day_change')).get('spearman')} ({as_dict(entry.get('next_day_change')).get('n_days')} days)")
+
+
+# ---------------------------------------------------------------- the media layer by window (chapters 14 and 15)
+
+MEDIA_WINDOW_DEFAULT = 30
+# Locked (only add): values of MEDIA_WINDOW_DAYS the switch check cell must accept (True) or stop at (False).
+MEDIA_WINDOW_PROBES = [
+    (30, True),
+    (1, True),
+    (7, True),
+    (365, True),
+    (0, False),
+    (-7, False),
+    (2.5, False),
+    (30.0, False),
+    ("30", False),
+    (True, False),
+    (False, False),
+    (None, False),
+]
+MEDIA_WINDOW_LAYER = "media"  # the layer chapter 14 reads by window; the retail layer stays by day
+SHORT_WINDOW_RULES = ["no_share", "available_days"]  # what a window reaching back before the layer's first day gets
+# One more run of the quick check: a window of one day is the media layer by day, and a too-few bar of 1 gives the
+# sample's media days shares, so that the window and the day are compared on numbers, not only on nulls.
+MEDIA_WINDOW_ONE_LABEL = "media window of one day run"
+MEDIA_WINDOW_ONE_SETTINGS = {"MEDIA_WINDOW_DAYS": 1, "DAILY_MIN_POSTS": 1}
+
+
+def check_media_window_switch(report, defaults, others):
+    """MEDIA_WINDOW_DAYS: in the parameters cell with its default and not two-state; the switch check cell, executed from
+    the source after the parameters cell, accepts positive integers and stops with the switch's name at other values."""
+    default = defaults.get("MEDIA_WINDOW_DAYS", "missing")
+    report.check(type(default) is int and default == MEDIA_WINDOW_DEFAULT and "MEDIA_WINDOW_DAYS" not in others,
+                 f"MEDIA_WINDOW_DAYS is in the parameters cell with the default {MEDIA_WINDOW_DEFAULT} and is not two-state",
+                 f"default {default!r}, other value {others.get('MEDIA_WINDOW_DAYS', 'none')!r}")
+    wrong = []
+    for value, accepted in MEDIA_WINDOW_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace["MEDIA_WINDOW_DAYS"] = value
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{value!r} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and "MEDIA_WINDOW_DAYS" in stopped[0]):
+            wrong.append(f"{value!r} not refused with the switch's name: {problems[:1]}")
+    report.check(not wrong, "the switch check cell accepts MEDIA_WINDOW_DAYS when it is a positive integer (1 too) and stops "
+                 f"with the switch's name otherwise ({len(MEDIA_WINDOW_PROBES)} cases: 0, a negative number, a decimal, "
+                 "text, True, False and None are refused)", "; ".join(wrong[:3]))
+
+
+def function_from_cell(name):
+    """The source of the top-level function name, taken alone from the code cell that defines it (None when absent)."""
+    source = cell_defining(name) or ""
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(source, node)
+    return None
+
+
+def media_window_recomputed(media_days, window_days, short_rule, min_posts, calibration):
+    """The media layer by window, recomputed from the media layer's days of daily (every calendar day of its period, in
+    order): per day the days of the period the window holds, its posts and bullish calls at 0.5 added up, the too-few
+    mark and both shares; INVALID shares where the days' counts are malformed."""
+    rows = []
+    for position, day in enumerate(media_days):
+        held = [as_dict(item) for item in media_days[max(0, position - window_days + 1):position + 1]]
+        posts = [item.get("n_posts") for item in held]
+        bullish = [as_dict(item.get("half_counts")).get("bullish") for item in held]
+        if not all(is_count(value) for value in posts + bullish):
+            rows.append({"date": as_dict(day).get("date"), "valid": False})
+            continue
+        n, n_bullish = sum(posts), sum(bullish)
+        too_few = n < min_posts
+        counted = None if too_few or (short_rule == "no_share" and len(held) < window_days) else share_of(n_bullish, n)
+        rows.append({"date": as_dict(day).get("date"), "valid": True, "n_window_days": len(held), "n_posts": n,
+                     "bullish": n_bullish, "too_few_posts": too_few, "half_bullish_share": counted,
+                     "calibrated_bullish_share": calibrated_from(counted, calibration)})
+    return rows
+
+
+def check_media_window(report, label, brief, switches):
+    """layers.media_window: the media layer by window recomputed by the check from the media layer's days of daily, its
+    calibration and its bar, and the two layers compared again (retail by day, media by window) recomputed with the
+    leans of chapter 14. Returns the window shares (counted, calibrated) that are not null and agree."""
+    layers = as_dict(brief.get("layers"))
+    window = as_dict(layers.get("media_window"))
+    if not report.check(bool(window), f"{label}: layers.media_window has content"):
+        return 0, 0
+    daily = as_dict(brief.get("daily"))
+    daily_layers = as_dict(daily.get("layers"))
+    calibration = as_dict(daily.get("calibration"))
+    media = as_dict(daily_layers.get(MEDIA_WINDOW_LAYER))
+    media_days = media.get("days") or []
+    window_days, short_rule = window.get("window_days"), window.get("short_windows")
+    problems = []
+    if (window.get("layer"), window_days, window.get("min_posts"), daily.get("min_posts")) != \
+            (MEDIA_WINDOW_LAYER, switches["MEDIA_WINDOW_DAYS"], switches["DAILY_MIN_POSTS"], switches["DAILY_MIN_POSTS"]):
+        problems.append(f"layer {window.get('layer')!r}, window_days {window_days!r}, min_posts {window.get('min_posts')!r} "
+                        f"(switches MEDIA_WINDOW_DAYS {switches['MEDIA_WINDOW_DAYS']!r}, DAILY_MIN_POSTS "
+                        f"{switches['DAILY_MIN_POSTS']!r}; daily.min_posts {daily.get('min_posts')!r})")
+    if short_rule not in SHORT_WINDOW_RULES:
+        problems.append(f"short_windows {short_rule!r}")
+    if (window.get("date_from"), window.get("date_to")) != (media.get("date_from"), media.get("date_to")):
+        problems.append(f"period {window.get('date_from')} to {window.get('date_to')}, the media layer of daily "
+                        f"{media.get('date_from')} to {media.get('date_to')}")
+    days = window.get("days") if isinstance(window.get("days"), list) else []
+    checked = {"counted": 0, "calibrated": 0}
+    if [as_dict(day).get("date") for day in days] != [as_dict(day).get("date") for day in media_days]:
+        problems.append(f"days {len(days)}, not the {len(media_days)} days of the media layer of daily in order")
+    elif isinstance(window_days, int) and window_days >= 1 and short_rule in SHORT_WINDOW_RULES:
+        expected = media_window_recomputed(media_days, window_days, short_rule, switches["DAILY_MIN_POSTS"], calibration)
+        for day, row in zip(days, expected):
+            day = as_dict(day)
+            where = day.get("date")
+            if not row["valid"]:
+                problems.append(f"{where}: the counts of daily that the window adds up are malformed")
+                continue
+            halves = as_dict(day.get("half_counts"))
+            found = (day.get("n_window_days"), day.get("n_posts"), halves.get("bullish"), halves.get("bearish"),
+                     day.get("too_few_posts"))
+            wanted = (row["n_window_days"], row["n_posts"], row["bullish"], row["n_posts"] - row["bullish"],
+                      row["too_few_posts"])
+            if found != wanted or sorted(halves) != sorted(HALF_CALLS):
+                problems.append(f"{where}: days, posts, calls at 0.5 and too few {found} (recomputed {wanted})")
+            for field in ("half_bullish_share", "calibrated_bullish_share"):
+                if not (is_score(day.get(field)) and same_value(day.get(field), row[field])):
+                    problems.append(f"{where}: {field} {day.get(field)!r} (recomputed "
+                                    f"{row[field] if row[field] is not INVALID else 'not computable'!r})")
+                elif day.get(field) is not None:
+                    checked["counted" if field == "half_bullish_share" else "calibrated"] += 1
+    counted = {"n_days": len(days),
+               "n_days_with_share": sum(as_dict(day).get("calibrated_bullish_share") is not None for day in days),
+               "n_days_too_few": sum(as_dict(day).get("too_few_posts") is True for day in days)}
+    problems += [f"{key} {window.get(key)!r} (counted {value!r})" for key, value in counted.items() if window.get(key) != value]
+    report.check(not problems, f"{label}: layers.media_window recomputed by the check from the media layer's days of daily "
+                 f"(window of {window_days!r} days, short windows {short_rule!r}, too few below "
+                 f"{switches['DAILY_MIN_POSTS']} posts, the rates of daily.calibration): every day of the media layer's "
+                 "period in order, the days its window holds, its posts and calls at 0.5 added up from that day and the "
+                 "days before it only, the too-few mark, both shares (null when too few) and the counts; "
+                 f"{checked['counted']} counted and {checked['calibrated']} calibrated window shares were not null and agree",
+                 "; ".join(problems[:5]))
+
+    comparison = as_dict(window.get("comparison"))
+    gap = switches["LAYER_GAP"]
+    present = all(layer in daily_layers for layer in LAYER_PAIR)
+    first = max(as_dict(daily_layers[layer]).get("date_from") for layer in LAYER_PAIR) if present else None
+    last = min(as_dict(daily_layers[layer]).get("date_to") for layer in LAYER_PAIR) if present else None
+    if first is not None and first > last:
+        first = last = None
+    problems = []
+    if comparison.get("compared") != LAYER_PAIR:
+        problems.append(f"compared {comparison.get('compared')!r}")
+    if (comparison.get("date_from"), comparison.get("date_to")) != (first, last) or \
+            (comparison.get("date_from"), comparison.get("date_to")) != (layers.get("date_from"), layers.get("date_to")):
+        problems.append(f"period {comparison.get('date_from')} to {comparison.get('date_to')} (expected {first} to {last}, "
+                        f"layers {layers.get('date_from')} to {layers.get('date_to')})")
+    rows = comparison.get("days") if isinstance(comparison.get("days"), list) else []
+    if [as_dict(day).get("date") for day in rows] != calendar_days(first, last):
+        problems.append(f"days {len(rows)}, not every calendar day of the overlap ({len(calendar_days(first, last))})")
+    sides = {layer: {as_dict(day).get("date"): as_dict(day).get("calibrated_bullish_share")
+                     for day in (days if layer == MEDIA_WINDOW_LAYER else as_dict(daily_layers.get(layer)).get("days") or [])}
+             for layer in LAYER_PAIR}  # the media side from the window series, the other side by day from daily
+    with_share, both, opposite_dates = dict.fromkeys(LAYER_PAIR, 0), 0, []
+    for day in rows:
+        day = as_dict(day)
+        shares = as_dict(day.get("calibrated_bullish_share"))
+        if list(shares) != LAYER_PAIR:
+            problems.append(f"{day.get('date')}: layers {list(shares)}")
+            continue
+        for layer in LAYER_PAIR:
+            if shares[layer] != sides[layer].get(day.get("date"), "missing"):
+                problems.append(f"{day.get('date')} {layer}: {shares[layer]!r}, the "
+                                f"{'window series' if layer == MEDIA_WINDOW_LAYER else 'daily section'} has "
+                                f"{sides[layer].get(day.get('date'), 'no such day')!r}")
+            with_share[layer] += shares[layer] is not None
+        leans = [check_lean(shares[layer], gap) for layer in LAYER_PAIR]
+        expected = None if None in leans else sorted(leans) == ["bearish", "bullish"]
+        if day.get("opposite") is not expected:
+            problems.append(f"{day.get('date')}: opposite {day.get('opposite')!r} with shares {shares} (expected {expected})")
+        both += expected is not None
+        if expected:
+            opposite_dates.append(day.get("date"))
+    counted = {"n_days": len(rows), "n_days_with_share": with_share, "n_days_both": both,
+               "n_days_opposite": len(opposite_dates), "opposite_dates": opposite_dates}
+    problems += [f"{key} {comparison.get(key)!r} (counted {value!r})" for key, value in counted.items()
+                 if comparison.get(key) != value]
+    report.check(not problems, f"{label}: layers.media_window.comparison covers the overlap of the two layers' periods "
+                 f"({first} to {last}, the period of layers), every calendar day of it in order, each with the retail "
+                 "layer's calibrated share of that day in daily and the calibrated share of the media window that ends "
+                 "with it; the leans (LAYER_GAP) and the opposite days recomputed agree, and so do the days with a share, "
+                 f"the days both take part ({both}), the opposite days ({len(opposite_dates)}) and their dates",
+                 "; ".join(problems[:5]))
+    return checked["counted"], checked["calibrated"]
+
+
+def check_media_window_validation(report, label, brief, switches):
+    """validation.media_window: the media layer by window against the index and the next day's change, every coefficient
+    and its days recomputed by the check (rank_correlation) from the window series and the files the run read. Returns
+    the coefficients against the index and against the next day's change that are not null and agree."""
+    from datetime import date, timedelta
+    validation = as_dict(brief.get("validation"))
+    entry = as_dict(validation.get("media_window"))
+    if not report.check(bool(entry), f"{label}: validation.media_window has content"):
+        return 0, 0
+    window = as_dict(as_dict(brief.get("layers")).get("media_window"))
+    shares = {as_dict(day).get("date"): as_dict(day).get("calibrated_bullish_share") for day in window.get("days") or []
+              if as_dict(day).get("calibrated_bullish_share") is not None}
+    problems = []
+    if (entry.get("layer"), entry.get("window_days"), entry.get("date_from"), entry.get("date_to"),
+            entry.get("n_days_with_share")) != (MEDIA_WINDOW_LAYER, window.get("window_days"), window.get("date_from"),
+                                                window.get("date_to"), len(shares)):
+        problems.append(f"layer {entry.get('layer')!r}, window_days {entry.get('window_days')!r}, period "
+                        f"{entry.get('date_from')} to {entry.get('date_to')}, days with a share "
+                        f"{entry.get('n_days_with_share')!r} (the window series: {window.get('window_days')!r} days, "
+                        f"{window.get('date_from')} to {window.get('date_to')}, {len(shares)} days with a share)")
+    closes, values, read_problems = read_validation_inputs(brief, switches)
+    problems += read_problems
+    following = {}
+    for day, close in (closes or {}).items():
+        after_day = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        if after_day in closes:
+            following[day] = closes[after_day] / close - 1
+    checked = {"fear_greed": 0, "next_day_change": 0}
+    for key, other in (("fear_greed", values or {}), ("next_day_change", following)):
+        pairs = [(share, other[day]) for day, share in shares.items() if day in other]
+        expected = rank_correlation(pairs, switches["VALIDATION_MIN_DAYS"])
+        found = as_dict(entry.get(key))
+        value = found.get("spearman")
+        close = (value is None and expected is None) or (is_number(value) and expected is not None and -1 <= value <= 1
+                                                         and abs(value - expected) <= CORRELATION_TOLERANCE)
+        if found.get("n_days") != len(pairs) or not close:
+            problems.append(f"{key}: {found.get('n_days')!r} days, {value!r} (recomputed {len(pairs)} days, {expected!r})")
+        checked[key] += value is not None and close
+    for key, block in (("next_day_change", as_dict(validation.get("price"))), ("fear_greed", as_dict(validation.get("fear_greed")))):
+        if block.get("source") == "not_obtained" and as_dict(entry.get(key)) != {"n_days": 0, "spearman": None}:
+            problems.append(f"{key}: not obtained, but {entry.get(key)}")
+    report.check(not problems, f"{label}: validation.media_window, recomputed by the check (average ranks, Pearson of the "
+                 "ranks) from the window series of layers.media_window and the files the run read: the media layer's "
+                 "period, its days with a share, and for the index and the next day's change the days that take part "
+                 f"and the coefficient (within {CORRELATION_TOLERANCE}, in [-1, 1], null below VALIDATION_MIN_DAYS, for a "
+                 f"single value or when not obtained); {checked['fear_greed']} coefficient(s) against the index and "
+                 f"{checked['next_day_change']} against the next day's change were not null and agree",
+                 "; ".join(problems[:5]))
+    return checked["fear_greed"], checked["next_day_change"]
+
+
+def media_window_by_day_problems(brief):
+    """With a window of one day, the media layer by window must equal the media layer by day: the window series against
+    the media layer's days of daily, the comparison against layers, the correlations against validation.layers.media.
+    Returns (problems, media shares that are not null and agree, coefficients that are not null and agree)."""
+    layers, validation = as_dict(brief.get("layers")), as_dict(brief.get("validation"))
+    window = as_dict(layers.get("media_window"))
+    comparison = as_dict(window.get("comparison"))
+    media = as_dict(as_dict(as_dict(brief.get("daily")).get("layers")).get(MEDIA_WINDOW_LAYER))
+    problems, shares, coefficients = [], 0, 0
+    if window.get("window_days") != 1:
+        problems.append(f"window_days {window.get('window_days')!r}, not 1")
+    days, media_days = window.get("days") or [], media.get("days") or []
+    if (window.get("date_from"), window.get("date_to"), len(days)) != (media.get("date_from"), media.get("date_to"),
+                                                                      len(media_days)):
+        problems.append(f"window series {window.get('date_from')} to {window.get('date_to')} ({len(days)} days), media layer "
+                        f"{media.get('date_from')} to {media.get('date_to')} ({len(media_days)} days)")
+    for day, by_day in zip(days, media_days):
+        day, by_day = as_dict(day), as_dict(by_day)
+        keys = ("date", "n_posts", "half_counts", "too_few_posts")
+        if [day.get(key) for key in keys] != [by_day.get(key) for key in keys] or day.get("n_window_days") != 1:
+            problems.append(f"{day.get('date')}: {[day.get(key) for key in keys]} vs the day {[by_day.get(key) for key in keys]}")
+        for field in ("half_bullish_share", "calibrated_bullish_share"):
+            if not same_value(day.get(field), by_day.get(field)):
+                problems.append(f"{day.get('date')} {field}: window {day.get(field)!r}, day {by_day.get(field)!r}")
+            elif field == "calibrated_bullish_share" and day.get(field) is not None:
+                shares += 1
+    for key in ("compared", "date_from", "date_to", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite",
+                "opposite_dates"):
+        if comparison.get(key) != layers.get(key):
+            problems.append(f"comparison.{key} {comparison.get(key)!r}, layers {layers.get(key)!r}")
+    rows, old_rows = comparison.get("days") or [], layers.get("days") or []
+    if len(rows) != len(old_rows):
+        problems.append(f"comparison has {len(rows)} days, layers {len(old_rows)}")
+    for row, old in zip(rows, old_rows):
+        row, old = as_dict(row), as_dict(old)
+        new_shares, old_shares = as_dict(row.get("calibrated_bullish_share")), as_dict(old.get("calibrated_bullish_share"))
+        if row.get("date") != old.get("date") or row.get("opposite") is not old.get("opposite") \
+                or list(new_shares) != list(old_shares) \
+                or not all(same_value(new_shares[layer], old_shares[layer]) for layer in old_shares):
+            problems.append(f"{row.get('date')}: {new_shares} {row.get('opposite')!r} vs layers {old_shares} "
+                            f"{old.get('opposite')!r}")
+    entry = as_dict(validation.get("media_window"))
+    by_day = as_dict(as_dict(validation.get("layers")).get(MEDIA_WINDOW_LAYER))
+    if (entry.get("date_from"), entry.get("date_to"), entry.get("n_days_with_share")) != \
+            (by_day.get("date_from"), by_day.get("date_to"), by_day.get("n_days_with_share")):
+        problems.append(f"validation period and days with a share {entry.get('date_from')} {entry.get('date_to')} "
+                        f"{entry.get('n_days_with_share')!r}, by day {by_day.get('date_from')} {by_day.get('date_to')} "
+                        f"{by_day.get('n_days_with_share')!r}")
+    for key in ("fear_greed", "next_day_change"):
+        new, old = as_dict(entry.get(key)), as_dict(by_day.get(key))
+        if new.get("n_days") != old.get("n_days") or not same_value(new.get("spearman"), old.get("spearman")):
+            problems.append(f"validation {key}: window {new}, by day {old}")
+        elif new.get("spearman") is not None:
+            coefficients += 1
+    return problems, shares, coefficients
+
+
+def check_media_window_probe(report):
+    """Chapter 14's and 15's cells of the media layer by window, executed from the source on made-up daily counts
+    (no run): a small overlap, a window longer than the whole period, a window of one day, periods that do not meet
+    and a missing media layer; the window series, the comparison and the correlations must follow the rules."""
+    from datetime import date as calendar_date, timedelta
+    import numpy as np
+    import pandas as pd
+    helpers = {name: function_from_cell(name) for name in ("calibrate_bullish_share", "daily_shares", "shown_rate")}
+    if not report.check(all(helpers.values()), "chapter 13's daily_shares (and the helpers it needs) can be read alone "
+                        "from the source", f"{[name for name, source in helpers.items() if not source]}"):
+        return
+    rates = {"status": "applied", "true_bullish_rate": 0.75, "false_bullish_rate": 0.25}  # made-up, a gap of 0.5
+
+    def table(first, posts, bullish):
+        days = list(pd.date_range(first, periods=len(posts), freq="D").strftime("%Y-%m-%d"))
+        return pd.DataFrame({"posts": posts, "bullish": bullish}, index=days, dtype="int64")
+
+    media = table("2022-01-01", [4, 4, 4, 0, 12, 3], [4, 0, 4, 0, 3, 3])
+    retail = table("2022-01-03", [20, 20, 20, 20, 20], [18, 2, 18, 2, 18])
+    cases = {  # name: (daily counts per layer, MEDIA_WINDOW_DAYS, DAILY_MIN_POSTS)
+        "a small overlap, a window of 3 days": ({"media": media, "retail": retail}, 3, 10),
+        "a window longer than the whole period": ({"media": media, "retail": retail}, 10, 10),
+        "a window of one day": ({"media": media, "retail": retail}, 1, 1),
+        "periods that do not meet": ({"media": media, "retail": table("2022-02-01", [20, 20], [18, 2])}, 3, 10),
+        "no media layer": ({"retail": retail}, 3, 10),
+    }
+    expected = {  # window days, posts, calibrated shares; comparison period and opposite marks; index and change days
+        "a small overlap, a window of 3 days": (
+            [1, 2, 3, 3, 3, 3], [4, 8, 12, 8, 16, 15], [None, None, (8 / 12 - 0.25) / 0.5, None, 0.375, 0.3],
+            ("2022-01-03", "2022-01-06"), [False, None, True, False], (3, 2)),
+        "a window longer than the whole period": (
+            [1, 2, 3, 4, 5, 6], [4, 8, 12, 12, 24, 27], [None] * 6, ("2022-01-03", "2022-01-06"), [None] * 4, (0, 0)),
+        "periods that do not meet": (
+            [1, 2, 3, 3, 3, 3], [4, 8, 12, 8, 16, 15], [None, None, (8 / 12 - 0.25) / 0.5, None, 0.375, 0.3],
+            (None, None), [], (3, 2)),
+        "no media layer": ([], [], [], (None, None), [], (0, 0)),
+    }
+    index = {"2022-01-03": 10, "2022-01-05": 30, "2022-01-06": 20, "2022-01-07": 40}
+    closes = {"2022-01-03": 100.0, "2022-01-04": 101.0, "2022-01-05": 99.0, "2022-01-06": 98.0}
+    wrong = []
+    for name, (tables, window_days, min_posts) in cases.items():
+        namespace = {"__name__": "notebook_cells", "pd": pd, "np": np, "calendar_date": calendar_date,
+                     "timedelta": timedelta, "brief": {}, "LAYER_GAP": 0.1,
+                     "MEDIA_WINDOW_DAYS": window_days, "DAILY_MIN_POSTS": min_posts, "VALIDATION_MIN_DAYS": 2,
+                     "dated_rates": rates, "FEAR_GREED_ATTRIBUTION": "made-up index", "daily_tables": tables,
+                     "btc_close": pd.Series(closes), "fear_greed": pd.Series(index), "validation_from": "2022-01-01",
+                     "validation_to": "2022-01-07", "price_record": {"source": "local_file"},
+                     "fear_greed_record": {"source": "local_file"}}
+        for source in helpers.values():
+            exec(compile(source, "helper", "exec"), namespace)
+        daily_layers = {}
+        for layer, frame in tables.items():  # the daily section of chapter 13, as far as these cells read it
+            rows = []
+            for day, row in frame.iterrows():
+                posts, bullish = int(row["posts"]), int(row["bullish"])
+                too_few, counted, calibrated = namespace["daily_shares"](posts, bullish)
+                rows.append({"date": day, "n_posts": posts, "half_counts": {"bullish": bullish, "bearish": posts - bullish},
+                             "half_bullish_share": counted, "calibrated_bullish_share": calibrated, "too_few_posts": too_few})
+            daily_layers[layer] = {"date_from": frame.index[0], "date_to": frame.index[-1], "days": rows}
+        namespace["daily_layers"] = daily_layers
+        problems = run_cells(["LAYER_PAIR", "MEDIA_WINDOW_LAYER", "window_shares", "spearman", "window_by_day"], namespace)
+        if problems:
+            wrong.append(f"{name}: {problems[:1]}")
+            continue
+        brief = namespace["brief"]
+        window = as_dict(as_dict(brief.get("layers")).get("media_window"))
+        comparison = as_dict(window.get("comparison"))
+        entry = as_dict(as_dict(brief.get("validation")).get("media_window"))
+        days = window.get("days") or []
+        if name == "a window of one day":
+            same, shares, coefficients = media_window_by_day_problems({**brief, "daily": {"layers": daily_layers}})
+            if same or shares == 0 or coefficients == 0:
+                wrong.append(f"{name}: not the media layer by day ({shares} shares and {coefficients} coefficients "
+                             f"compared): {same[:2]}")
+            continue
+        found = ([day.get("n_window_days") for day in days], [day.get("n_posts") for day in days],
+                 [day.get("calibrated_bullish_share") for day in days], (comparison.get("date_from"), comparison.get("date_to")),
+                 [day.get("opposite") for day in comparison.get("days") or []],
+                 (as_dict(entry.get("fear_greed")).get("n_days"), as_dict(entry.get("next_day_change")).get("n_days")))
+        want = expected[name]
+        close = len(found[2]) == len(want[2]) and all(same_value(value, target) for value, target in zip(found[2], want[2]))
+        if found[:2] != want[:2] or not close or found[3:] != want[3:]:
+            wrong.append(f"{name}: {found} (expected {want})")
+        if name == "a small overlap, a window of 3 days":
+            pairs = [(day["calibrated_bullish_share"], index[day["date"]]) for day in days
+                     if day["calibrated_bullish_share"] is not None and day["date"] in index]
+            if not same_value(as_dict(entry.get("fear_greed")).get("spearman"), rank_correlation(pairs, 2)) or \
+                    (comparison.get("n_days_both"), comparison.get("opposite_dates")) != (3, ["2022-01-05"]):
+                wrong.append(f"{name}: coefficient {entry.get('fear_greed')}, both {comparison.get('n_days_both')!r}, "
+                             f"opposite {comparison.get('opposite_dates')!r}")
+    report.check(not wrong, "chapters 14 and 15's cells of the media layer by window on made-up daily counts: windows add "
+                 "up the day and the days before it only; a window that is not whole has its counts and no share; a "
+                 "window longer than the whole period gives no share and no error; a window of one day is the media "
+                 "layer by day; periods that do not meet and a missing media layer give a null period, no days and 0 "
+                 "counts without an error; the opposite days and the correlations follow", "; ".join(wrong[:3]))
+
+
+def stable_media_window(brief):
+    """What two runs with the same switches must agree on in the media layer by window: everything that does not depend
+    on training (the window, the bar, the rule for the first days, every day's posts and too-few mark, the period of the
+    comparison and its days)."""
+    window = as_dict(as_dict(as_dict(brief).get("layers")).get("media_window"))
+    comparison = as_dict(window.get("comparison"))
+    entry = as_dict(as_dict(as_dict(brief).get("validation")).get("media_window"))
+    return {
+        "window": {key: window.get(key) for key in ("layer", "window_days", "min_posts", "short_windows", "date_from",
+                                                    "date_to", "n_days", "n_days_too_few")},
+        "days": [(as_dict(day).get("date"), as_dict(day).get("n_window_days"), as_dict(day).get("n_posts"),
+                  as_dict(day).get("too_few_posts")) for day in window.get("days") or []],
+        "comparison": {key: comparison.get(key) for key in ("compared", "date_from", "date_to", "n_days")},
+        "comparison days": [as_dict(day).get("date") for day in comparison.get("days") or []],
+        "validation": {key: entry.get(key) for key in ("layer", "window_days", "date_from", "date_to")},
+    }
+
+
+def compare_media_window(report, first, again):
+    """Two runs with the default switches: the same window, bar, rule, posts and too-few marks, and comparison days."""
+    left, right = stable_media_window(first), stable_media_window(again)
+    report.check(bool(left["window"].get("window_days")) and left == right,
+                 "default switches run twice: the same media window (days, bar, rule for the first days), every window's "
+                 "posts and too-few mark, and the same period and days of the comparison by window",
+                 "" if left == right else "differing parts: " + ", ".join(key for key in left if left[key] != right[key]))
+
+
+def media_window_one_run(report, defaults, overrides, rules=None, built_in=None):
+    """One more run of the quick check with MEDIA_WINDOW_DAYS 1 and DAILY_MIN_POSTS 1: a window of one day is the media
+    layer by day, so every field of the media layer by window must equal the one by day, on days that have shares."""
+    parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_SAMPLE_FILE, **DATED_SAMPLE_SETTINGS,
+                  **VALIDATION_SAMPLE_SETTINGS, "WORK_DIR": "data/checks/quick-media-window-1", **overrides,
+                  **MEDIA_WINDOW_ONE_SETTINGS}
+    parameters = panel_settings(report, MEDIA_WINDOW_ONE_LABEL, parameters, overrides)
+    switches = {**defaults, **parameters}
+    report.info(f"{MEDIA_WINDOW_ONE_LABEL}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
+    kept = [name for name in MEDIA_WINDOW_ONE_SETTINGS if name in overrides]
+    if kept:
+        report.info(f"{MEDIA_WINDOW_ONE_LABEL}: keeps its own values of {', '.join(kept)} instead of the -p values")
+    check_offline_sources(report, MEDIA_WINDOW_ONE_LABEL, parameters, defaults)
+    brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
+    brief_path.unlink(missing_ok=True)  # a stale brief must never pass
+    ok, _, _ = run_notebook(report, MEDIA_WINDOW_ONE_LABEL, parameters, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    brief = read_brief(report, MEDIA_WINDOW_ONE_LABEL, brief_path) if ok else None
+    if brief is None:
+        return
+    check_brief(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_sentiment(report, MEDIA_WINDOW_ONE_LABEL, brief, switches, full_run=False)
+    check_topics(report, MEDIA_WINDOW_ONE_LABEL, brief, switches, full_run=False)
+    check_why(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_calibration(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_drawers(report, MEDIA_WINDOW_ONE_LABEL, brief, switches, built_in)
+    check_emotions(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_dated_data(report, MEDIA_WINDOW_ONE_LABEL, brief, switches, quick_default=True)
+    check_daily(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_new_words(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_layers(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_validation(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    _, calibrated = check_media_window(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    index_coefficients, change_coefficients = check_media_window_validation(report, MEDIA_WINDOW_ONE_LABEL, brief, switches)
+    check_format(report, MEDIA_WINDOW_ONE_LABEL, brief, rules)
+    check_panel_output(report, MEDIA_WINDOW_ONE_LABEL, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+    check_counterexamples(report, MEDIA_WINDOW_ONE_LABEL, brief, rules)
+    check_panel(report, MEDIA_WINDOW_ONE_LABEL, brief_path, brief)
+    problems, shares, coefficients = media_window_by_day_problems(brief)
+    report.check(not problems and shares > 0 and coefficients > 0,
+                 f"{MEDIA_WINDOW_ONE_LABEL}: with a window of one day the media layer by window equals the media layer "
+                 "by day: every window's posts, calls at 0.5, too-few mark and both shares equal those of the day in "
+                 "daily; the comparison by window equals layers (period, days, both shares, opposite marks, every count "
+                 "and the opposite dates); validation.media_window equals validation.layers.media (period, days with a "
+                 f"share, days and coefficients); {shares} media shares and {coefficients} coefficients that are not null "
+                 "were compared (both must be more than 0)", "; ".join(problems[:5]))
+    report.check(calibrated > 0 and index_coefficients > 0 and change_coefficients > 0,
+                 f"{MEDIA_WINDOW_ONE_LABEL}: the check's own computation agrees on window shares and coefficients that are "
+                 f"not null: {calibrated} calibrated window shares, {index_coefficients} coefficient(s) against the index "
+                 f"and {change_coefficients} against the next day's change (each must be more than 0)")
+
+
+def print_media_window(brief):
+    """Print the media layer by window (full run): the window, its series, the comparison with every opposite day, and
+    its correlations."""
+    import statistics
+    layers, validation = as_dict(brief.get("layers")), as_dict(brief.get("validation"))
+    window = as_dict(layers.get("media_window"))
+    if not window:
+        return
+    comparison, entry = as_dict(window.get("comparison")), as_dict(validation.get("media_window"))
+    days = window.get("days") or []
+    posts_by_day = {as_dict(day).get("date"): as_dict(day).get("n_posts") for day in days}
+
+    def spread(values):
+        return (f"lowest {min(values)}, median {statistics.median(values)}, highest {max(values)}" if values
+                else "no days")
+
+    print("\nThe media layer by window (full run)")
+    print(f"  window:                        {window.get('window_days')} UTC days up to and including each day; too few "
+          f"below {window.get('min_posts')} posts; short windows: {window.get('short_windows')}")
+    print(f"  media layer:                   {window.get('date_from')} to {window.get('date_to')} ({window.get('n_days')} "
+          f"days); a calibrated share on {window.get('n_days_with_share')} days, too few on {window.get('n_days_too_few')}; "
+          f"counted share on {sum(as_dict(day).get('half_bullish_share') is not None for day in days)} days")
+    print(f"  headlines per window:          {spread([as_dict(day).get('n_posts') for day in days])} (whole period)")
+    inside = [count for day, count in posts_by_day.items()
+              if comparison.get("date_from") and comparison["date_from"] <= day <= comparison["date_to"]]
+    print(f"                                 {spread(inside)} (days both layers cover)")
+    print(f"  comparison by window:          {comparison.get('date_from')} to {comparison.get('date_to')} "
+          f"({comparison.get('n_days')} days); days with a share {comparison.get('n_days_with_share')}")
+    print(f"  days both take part:           {comparison.get('n_days_both')}")
+    print(f"  days leaning opposite ways:    {comparison.get('n_days_opposite')}")
+    print("    date        retail (day)  media (window)  headlines in the window")
+    for day in comparison.get("days") or []:
+        if day.get("opposite"):
+            shares = as_dict(day.get("calibrated_bullish_share"))
+            print(f"    {day.get('date')}  {shares.get('retail'):.4f}        {shares.get(MEDIA_WINDOW_LAYER):.4f}          "
+                  f"{posts_by_day.get(day.get('date'))}")
+    print(f"  against the market:            {entry.get('date_from')} to {entry.get('date_to')}, "
+          f"{entry.get('n_days_with_share')} days with a share; against the index: "
+          f"{as_dict(entry.get('fear_greed')).get('spearman')} ({as_dict(entry.get('fear_greed')).get('n_days')} days); "
+          f"against the next day's change: {as_dict(entry.get('next_day_change')).get('spearman')} "
+          f"({as_dict(entry.get('next_day_change')).get('n_days')} days)")
 
 
 # ---------------------------------------------------------------- modes
@@ -6163,6 +6723,8 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
             check_new_words(report, label, brief, switches)
             check_layers(report, label, brief, switches)
             check_validation(report, label, brief, switches)
+            check_media_window(report, label, brief, switches)
+            check_media_window_validation(report, label, brief, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -6177,9 +6739,11 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
     compare_dated(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL), briefs.get("other switches"))
     compare_daily(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     compare_layers_validation(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    compare_media_window(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
     threshold_run(report, defaults, overrides, briefs.get("default switches"), rules, built_in)
     spike_run(report, defaults, overrides, rules, built_in)
     price_none_run(report, defaults, overrides, rules, built_in)
+    media_window_one_run(report, defaults, overrides, rules, built_in)
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
@@ -6218,6 +6782,8 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     check_new_words(report, "full run", brief, switches)
     check_layers(report, "full run", brief, switches)
     check_validation(report, "full run", brief, switches)
+    check_media_window(report, "full run", brief, switches)
+    check_media_window_validation(report, "full run", brief, switches)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -6249,6 +6815,7 @@ def full(report, defaults, overrides, rules=None, built_in=None):
     print_new_words(brief)
     print_layers(brief)
     print_validation(brief)
+    print_media_window(brief)
     print("\nTimes (full run)")
     for line in daily_lines(REPO_DIR / switches["WORK_DIR"] / "runs" / "full.ipynb"):
         print(f"  {line}")
@@ -6300,6 +6867,8 @@ def main():
     check_validation_chapters(report)
     check_validation_probes(report)
     check_layers_probe(report)
+    check_media_window_switch(report, defaults, others)
+    check_media_window_probe(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
