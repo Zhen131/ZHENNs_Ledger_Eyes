@@ -278,7 +278,7 @@ print("Switches look fine.")
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "1.6",  # the format of chapter 16's rules (docs/brief-format.md in the repository)
+    "format_version": "1.7",  # the format of chapter 16's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -5211,6 +5211,8 @@ for item in event_items:
 #
 # The results go into the brief's `layers` section, which carries its own period; `scope` still says `"batch"`. The chapter only describes: it predicts nothing and gives no advice to buy or sell.
 #
+# A single day of news is often too thin for a share, so the chapter ends by reading the media layer once more by window, over the `MEDIA_WINDOW_DAYS` UTC days up to each day, and comparing the two layers again with it (`layers.media_window`).
+#
 # ***
 #
 # ## 14. 两层：媒体和散户的情绪并排看
@@ -5221,6 +5223,8 @@ for item in event_items:
 # 2. **模型在新闻标题上认得准不准。** 新闻带着由读者投票得出的标签，所以这里难得可以量一下：第 4～8 章的多空模型，遇到不是 StockTwits 帖子的文字，认出看多、看空的本事怎么样。
 #
 # 结果写进简报的 `layers` 一节，这一节自带时段；`scope` 仍写 `"batch"`。这一章只陈述：不预测任何东西，也不给任何买卖建议。
+#
+# 单独一天的新闻往往太少，算不出比例，所以这一章最后再按窗口看一遍媒体层：取截至每一天的 `MEDIA_WINDOW_DAYS` 个 UTC 日，用它再比一次两层（`layers.media_window`）。
 
 # %% [markdown]
 # ### Side by side, day by day
@@ -5231,7 +5235,7 @@ for item in event_items:
 # - **Opposite.** The two layers **lean opposite ways** on a day when one leans bullish and the other bearish. When either layer takes no part that day, the question is not asked (`null`).
 # - **Why 0.5 as the middle, not each layer's own average.** It is simple and easy to explain. The two averages may well differ anyway: news headlines and tweets are written in a different tone, so a layer that is always a little more bullish than the other can make days look opposite partly because of its tone. Read the list of opposite days with that in mind.
 #
-# **The media layer is thin.** With the default switches the news have a few headlines a day, so with `DAILY_MIN_POSTS = 100` almost every media day is marked too few in chapter 13 and takes no part. Then there are few or no days on which both layers take part. A smaller `DAILY_MIN_POSTS` lets more media days take part, at the price of larger chance errors.
+# **The media layer is thin.** With the default switches the news have a few headlines a day, so with `DAILY_MIN_POSTS = 100` almost every media day is marked too few in chapter 13 and takes no part. Then there are few or no days on which both layers take part. A smaller `DAILY_MIN_POSTS` lets more media days take part, at the price of larger chance errors. The last part of this chapter keeps the bar and reads the media layer by window instead.
 #
 # ***
 #
@@ -5243,7 +5247,7 @@ for item in event_items:
 # - **唱反调。** 某一天一层偏多、另一层偏空，就是两层在**唱反调**。那天只要有一层不参加，就不判（写 `null`）。
 # - **为什么拿 0.5 当中线，不拿各层自己的平均。** 简单，讲得清。两层的平均本来就可能不一样：新闻标题和推文的口气不同，一层要是总比另一层偏多一点，有些日子看起来唱反调，一部分原因只是口气不同。看唱反调的日子时要记得这一点。
 #
-# **媒体层很薄。** 按默认开关，新闻每天只有几条标题，`DAILY_MIN_POSTS = 100` 时，媒体层几乎每一天在第 13 章都标了「不够」，不参加比较。这样两层都参加的日子就很少，甚至一天都没有。把 `DAILY_MIN_POSTS` 调小，能让更多媒体层的日子参加，代价是偶然误差更大。
+# **媒体层很薄。** 按默认开关，新闻每天只有几条标题，`DAILY_MIN_POSTS = 100` 时，媒体层几乎每一天在第 13 章都标了「不够」，不参加比较。这样两层都参加的日子就很少，甚至一天都没有。把 `DAILY_MIN_POSTS` 调小，能让更多媒体层的日子参加，代价是偶然误差更大。这一章最后一部分不动门槛，改用窗口看媒体层。
 
 # %%
 # The two layers side by side on the days both cover: calibrated shares, leans and the days they lean opposite ways.
@@ -5422,6 +5426,175 @@ pd.DataFrame({
 }, index=["true bullish rate", "false bullish rate"])
 
 # %% [markdown]
+# ### The media layer by window
+#
+# The media layer is thin: the news have a few headlines a day, so with `DAILY_MIN_POSTS = 100` almost none of its days has a share of its own, and the comparison above has few or no days on which both layers take part. The rest of this chapter therefore also reads the media layer by **window**:
+#
+# - **Two time steps.** The retail layer stays by UTC day, exactly as above. The media layer's value of a day d is that of its scored headlines over the `MEDIA_WINDOW_DAYS` calendar days that end with day d, from day d − `MEDIA_WINDOW_DAYS` + 1 to day d: their posts and their calls at 0.5 are added up, and the sum is treated like a day of chapter 13 by its `daily_shares`: no share below `DAILY_MIN_POSTS` posts (the same bar as for a day; the media layer gets no bar of its own) and the calibration with the same two rates (`dated_rates`). A day without headlines counts 0 and still takes its place in the window.
+# - **Why a window, and why 30 days by default.** A single day of news rarely reaches the bar, while the bar itself is right (a share of a few headlines is mostly chance). The news have a few headlines a day, so it takes about a month of them to reach `DAILY_MIN_POSTS`. The price is that the media line is slow: it shows the tone of the last month, not of the day.
+# - **The window looks back only.** It holds day d and the days before it, never a later day. Chapter 15 pairs day d with the next day's change; that change is therefore never compared with a headline written after day d.
+# - **`MEDIA_WINDOW_DAYS = 1` is the media layer by day.** The window is then the day itself, and every number of this part equals the one of the parts above.
+# - **The first days of the period.** The first `MEDIA_WINDOW_DAYS` − 1 days of the media layer's period reach back to days before its first day, which the data does not hold. Their windows keep the counts of the days that exist but get no share (`null`), so that every share is that of a whole window of `MEDIA_WINDOW_DAYS` days.
+# - **A switch for a layer, not for this dataset.** The window applies to the media layer only; the retail layer has no window. Should the media layer later read other thin sources, for example the media channels of YouTube, the same switch applies to them.
+# - **The calibration is still an assumption.** The two rates were measured on StockTwits test posts. The part above measures them on the news headlines themselves; there they have come out closer together than `MIN_RATE_GAP` with the full data, so the news rates could not calibrate anything, and the headlines are calibrated with the StockTwits rates, which assumes that the model reads headlines as it reads StockTwits posts.
+#
+# The results go into `layers.media_window`, next to the fields above, which stay by day. Like the rest of the chapter, this part only describes: it predicts nothing and gives no advice to buy or sell.
+#
+# ***
+#
+# ### 媒体层按窗口看
+#
+# 媒体层很薄：新闻每天只有几条标题，`DAILY_MIN_POSTS = 100` 时它几乎没有哪一天自己算得出比例，上面的比较里两层都参加的日子也就很少，甚至一天都没有。所以这一章剩下的部分，把媒体层再按**窗口**看一遍：
+#
+# - **两层的时间粒度不一样。** 散户层照旧按 UTC 日，和上面完全一样。媒体层第 d 天的值，取以第 d 天结尾的 `MEDIA_WINDOW_DAYS` 个日历日（第 d − `MEDIA_WINDOW_DAYS` + 1 天到第 d 天）里所有打了分的标题：把条数和按 0.5 分的判断加起来，再用第 13 章的 `daily_shares` 当成一天来算：不到 `DAILY_MIN_POSTS` 条就没有比例（门槛和按天时一样，媒体层不另设门槛），校正用同样那两个认出率（`dated_rates`）。没有标题的日子算 0 条，照样在窗口里占一天。
+# - **为什么要窗口，默认为什么是 30 天。** 新闻单独一天很少够门槛，而门槛本身是对的（几条标题算出的比例大半是偶然）。新闻每天只有几条标题，大约要攒一个月才够 `DAILY_MIN_POSTS`。代价是媒体这条线比较慢：它反映的是最近一个月的口气，不是当天的。
+# - **窗口只往前看。** 窗口包括第 d 天和它之前的日子，从不包括之后的日子。第 15 章拿第 d 天去配第二天的涨跌，所以这个涨跌永远不会和第 d 天之后写的标题放在一起比。
+# - **`MEDIA_WINDOW_DAYS = 1` 就是按天看媒体层。** 这时窗口就是当天自己，这一部分的每个数都和上面几部分的数相同。
+# - **时段开头的那几天。** 媒体层时段最前面的 `MEDIA_WINDOW_DAYS` − 1 天，往前数会数到它第一天之前的日子，而数据里没有那些日子。这些窗口照写实际有的那几天的条数，但不给比例（`null`），这样每个比例都来自满满 `MEDIA_WINDOW_DAYS` 天的窗口。
+# - **这是给一层用的开关，不是只给这份数据用的。** 窗口只用在媒体层，散户层没有窗口。以后媒体层要是换成别的、同样很薄的来源，例如 YouTube 上的媒体频道，这个开关照样能用。
+# - **校正仍然是一个假设。** 两个认出率是在 StockTwits 的测试帖上量的。上面那部分在新闻标题上也量了这两个认出率；用完整数据时，它们之间的差小于 `MIN_RATE_GAP`，新闻上的认出率校正不了任何东西，所以标题仍用 StockTwits 的认出率校正，这等于假设模型读标题和读 StockTwits 帖子一样。
+#
+# 结果写进 `layers.media_window`，放在上面那些字段旁边；上面那些字段仍是按天的。和这一章别的部分一样，这里只陈述：不预测任何东西，也不给任何买卖建议。
+
+# %%
+# The media layer by window: posts and calls at 0.5 over the MEDIA_WINDOW_DAYS UTC days up to each day, and both shares.
+MEDIA_WINDOW_LAYER = "media"  # the layer read by window; the retail layer stays by day
+SHORT_WINDOW_RULE = "no_share"  # a window that reaches back before the layer's first day keeps its counts, gets no share
+
+
+def media_window_counts(table, window_days):
+    """For every calendar day of a table of daily counts (one row per day, columns posts and bullish): the posts and the
+    bullish calls at 0.5 of the window_days days up to and including that day, and how many of those days the table has."""
+    totals = table[["posts", "bullish"]].cumsum()  # up to and including each day
+    window = totals - totals.shift(window_days, fill_value=0)  # minus those up to the day before the window
+    window["days"] = [min(position + 1, window_days) for position in range(len(table))]
+    return window
+
+
+media_window_table = daily_tables.get(MEDIA_WINDOW_LAYER)  # chapter 13's counts per calendar day of the layer
+media_window_days = []
+if media_window_table is not None:
+    for day, row in media_window_counts(media_window_table, MEDIA_WINDOW_DAYS).iterrows():
+        n_posts, n_bullish, n_days = int(row["posts"]), int(row["bullish"]), int(row["days"])
+        too_few, counted, calibrated = daily_shares(n_posts, n_bullish)  # chapter 13's bar and calibration
+        if SHORT_WINDOW_RULE == "no_share" and n_days < MEDIA_WINDOW_DAYS:  # a window that is not whole
+            counted = calibrated = None
+        media_window_days.append({
+            "date": day, "n_window_days": n_days, "n_posts": n_posts,
+            "half_counts": {"bullish": n_bullish, "bearish": n_posts - n_bullish},
+            "too_few_posts": too_few, "half_bullish_share": counted, "calibrated_bullish_share": calibrated,
+        })
+media_window_period = daily_layers.get(MEDIA_WINDOW_LAYER, {})
+brief["layers"]["media_window"] = {
+    "layer": MEDIA_WINDOW_LAYER,
+    "window_days": MEDIA_WINDOW_DAYS,
+    "min_posts": DAILY_MIN_POSTS,
+    "short_windows": SHORT_WINDOW_RULE,
+    "rule": "the retail layer by UTC day; the media layer by window: the value of a day is that of its headlines over the "
+            "window_days UTC days that end with that day (that day and the days before it, never a later one), their posts "
+            "and calls at 0.5 added up, too few below min_posts posts, calibrated with the rates of daily.calibration; "
+            "short_windows says what a window that reaches back before the layer's first day gets",
+    "date_from": media_window_period.get("date_from"),
+    "date_to": media_window_period.get("date_to"),
+    "n_days": len(media_window_days),
+    "n_days_with_share": sum(day["calibrated_bullish_share"] is not None for day in media_window_days),
+    "n_days_too_few": sum(day["too_few_posts"] for day in media_window_days),
+    "days": media_window_days,
+}
+media_window_posts = pd.Series([day["n_posts"] for day in media_window_days], dtype="int64")
+print(f"Media layer by window of {MEDIA_WINDOW_DAYS} days: {media_window_period.get('date_from') or '—'} to "
+      f"{media_window_period.get('date_to') or '—'} ({len(media_window_days):,} days); a calibrated share on "
+      f"{brief['layers']['media_window']['n_days_with_share']:,} days, too few posts (below {DAILY_MIN_POSTS}) on "
+      f"{brief['layers']['media_window']['n_days_too_few']:,}")
+if len(media_window_posts):
+    print(f"Headlines per window: lowest {media_window_posts.min():,}, median {media_window_posts.median():,.0f}, "
+          f"highest {media_window_posts.max():,}")
+
+# %% [markdown]
+# ### The two layers again, the media layer by window
+#
+# The same comparison as above, on the same days both layers cover and with the same rules (`lean` and `opposite`, 0.5 ± `LAYER_GAP`), with one change: the media side of a day is now the calibrated share of the media window that ends with that day. The retail side is still the retail layer's calibrated share of that very day, copied from chapter 13. A day on which either side has no share takes no part.
+#
+# Two neighbouring days share `MEDIA_WINDOW_DAYS` − 1 days of headlines, so the media side changes slowly from day to day, and opposite days tend to come in runs: a month in which the news were bearish and the tweets bullish gives many opposite days, not many separate findings. The tone of headlines and tweets differs, as said above, so read the list with that in mind.
+#
+# ***
+#
+# ### 再比一次两层：媒体层按窗口
+#
+# 和上面一样的比较：同样是两层都覆盖的那些日子，同样的规则（`lean` 和 `opposite`，0.5 ± `LAYER_GAP`），只改一处：某一天媒体这一边的值，换成以这一天结尾的媒体窗口的校正后比例。散户这一边仍是散户层当天的校正后比例，从第 13 章原样照抄。那天只要有一边没有比例，就不参加。
+#
+# 相邻两天的窗口有 `MEDIA_WINDOW_DAYS` − 1 天是同一批标题，所以媒体这一边每天变得很慢，唱反调的日子往往连成一串：新闻偏空、推文偏多的一个月，会给出很多个唱反调的日子，而不是很多个各自独立的发现。像上面说的，标题和推文的口气本来就不同，看这张清单时要记得这一点。
+
+# %%
+# The retail layer by day against the media layer by window, on the days both layers cover: leans and opposite days.
+window_shares = {day["date"]: day["calibrated_bullish_share"] for day in media_window_days}
+window_layer_days = []
+for day in overlap_days:  # the days both layers cover, as above
+    shares = {layer: window_shares[day] if layer == MEDIA_WINDOW_LAYER else day_shares[layer][day] for layer in LAYER_PAIR}
+    window_layer_days.append({"date": day, "calibrated_bullish_share": shares, "opposite": opposite(list(shares.values()))})
+window_opposite_dates = [day["date"] for day in window_layer_days if day["opposite"]]
+brief["layers"]["media_window"]["comparison"] = {
+    "compared": list(LAYER_PAIR),
+    "date_from": overlap_from,
+    "date_to": overlap_to,
+    "n_days": len(window_layer_days),
+    "n_days_with_share": {layer: sum(day["calibrated_bullish_share"][layer] is not None for day in window_layer_days)
+                          for layer in LAYER_PAIR},
+    "n_days_both": sum(day["opposite"] is not None for day in window_layer_days),
+    "n_days_opposite": len(window_opposite_dates),
+    "opposite_dates": window_opposite_dates,
+    "days": window_layer_days,
+}
+window_comparison = brief["layers"]["media_window"]["comparison"]
+print(f"Retail by day against media by window of {MEDIA_WINDOW_DAYS} days, {overlap_from or '—'} to {overlap_to or '—'} "
+      f"({len(window_layer_days):,} days); days with a share: "
+      + ", ".join(f"{layer} {count:,}" for layer, count in window_comparison["n_days_with_share"].items())
+      + f"; both take part on {window_comparison['n_days_both']:,} days; opposite on {len(window_opposite_dates):,} days")
+window_posts_by_day = {day["date"]: day["n_posts"] for day in media_window_days}
+pd.DataFrame([{"date": day["date"], "retail calibrated (the day)": round(day["calibrated_bullish_share"]["retail"], 3),
+               "media calibrated (window)": round(day["calibrated_bullish_share"][MEDIA_WINDOW_LAYER], 3),
+               "headlines in the window": window_posts_by_day[day["date"]]}
+              for day in window_layer_days if day["opposite"]],
+             columns=["date", "retail calibrated (the day)", "media calibrated (window)", "headlines in the window"])
+
+# %% [markdown]
+# ### The two layers as a chart, the media layer by window
+#
+# The retail layer's calibrated share of every day and the media layer's calibrated share of the window that ends with that day, on the days both layers cover (a gap where a side has no share). The dashed lines are the two lean bars, 0.5 ± `LAYER_GAP`; a red band marks every day on which the two lean opposite ways.
+#
+# ***
+#
+# ### 两层画成图：媒体层按窗口
+#
+# 两层都覆盖的日子里，散户层每天的校正后比例，和以这一天结尾的媒体窗口的校正后比例（某一边没有比例就空着）。两条虚线是偏多、偏空的两道线，即 0.5 ± `LAYER_GAP`；两层唱反调的日子用红色竖条标出来。
+
+# %%
+# The retail share per UTC day and the media share of the window that ends with it; the days they lean opposite ways in red.
+if not window_layer_days:
+    print("The two layers have no day in common, so there is nothing to draw.")
+else:
+    window_dates = pd.to_datetime([day["date"] for day in window_layer_days])
+    figure, axis = plt.subplots(figsize=(11, 3.5))
+    for layer, color in zip(LAYER_PAIR, ["tab:purple", "tab:green"]):
+        values = [np.nan if day["calibrated_bullish_share"][layer] is None else day["calibrated_bullish_share"][layer]
+                  for day in window_layer_days]
+        span = f"the {MEDIA_WINDOW_DAYS} days up to each day" if layer == MEDIA_WINDOW_LAYER else "each day"
+        axis.plot(window_dates, values, linewidth=0.8, marker="o", markersize=2, color=color,
+                  label=f"{layer}, {span} ({window_comparison['n_days_with_share'][layer]:,} days with a share)")
+    for day in window_opposite_dates:
+        axis.axvline(pd.Timestamp(day), color="tab:red", alpha=0.3, linewidth=1.5)
+    axis.plot([], [], color="tab:red", alpha=0.3, linewidth=1.5, label=f"opposite ({len(window_opposite_dates):,} days)")
+    for bar in (LEAN_BULLISH_AT, LEAN_BEARISH_AT):
+        axis.axhline(bar, color="grey", linestyle="--", linewidth=0.8)
+    axis.set_ylim(0, 1)
+    axis.set_ylabel("calibrated bullish share")
+    axis.set_title(f"Retail by day, media by window of {MEDIA_WINDOW_DAYS} days, {overlap_from} to {overlap_to} (UTC days); "
+                   f"both take part on {window_comparison['n_days_both']:,} days")
+    axis.legend(loc="upper right", fontsize="small")
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
 # ## 15. Against the market: the BTC price and the Fear and Greed Index
 #
 # The bullish shares of chapter 13 come from a model, so it is worth putting them next to two things measured elsewhere, day by day:
@@ -5437,6 +5610,8 @@ pd.DataFrame({
 # - The Fear and Greed Index takes 15% of its value from statistics of social media posts, partly the same kind of source as the mood measured here, so a correlation with the index comes out higher than a check against an independent measure would.
 #
 # **The internet.** This is the only chapter that connects to the price sources and to alternative.me, and it needs no key and no account. A source that cannot be reached, asks for a key or an account, or gives no usable data counts as "not obtained": the chapter says why, leaves out what depends on it (its correlations are `null`) and the notebook goes on. Results are cached in `WORK_DIR/cache/`, so a later run with the same days does not connect to them again.
+#
+# The chapter ends with the same two correlations for the media layer read by window in chapter 14.
 #
 # ***
 #
@@ -5455,6 +5630,8 @@ pd.DataFrame({
 # - 恐惧贪婪指数有 15% 来自社交媒体上帖子的统计，和这里量的情绪有一部分同源，所以和这个指数的相关，会比和一个独立的量对照时偏高。
 #
 # **联网。** 只有这一章连价格来源和 alternative.me，不要任何钥匙，也不要注册。某个来源连不上、要钥匙或要注册、或者给不出能用的数据，就算「未取得」：这一章写明原因，跳过依赖它的东西（相关系数写 `null`），笔记本接着往下跑。拉到的数据缓存在 `WORK_DIR/cache/`，以后用同样的日子再跑，就不再连它们。
+#
+# 这一章最后，对第 14 章按窗口看的媒体层再算这两个相关系数。
 
 # %% [markdown]
 # ### Reading the web, and the caches
@@ -5958,6 +6135,52 @@ else:
     plt.show()
 
 # %% [markdown]
+# ### The media layer by window, against the market
+#
+# The media layer's own days rarely have a share, so its two coefficients above are mostly `null`. The next cell computes the same two Spearman rank correlations for the media layer by window of chapter 14 (`layers.media_window`): every day d of the media layer's period whose window has a calibrated share takes part, and the share of the window that ends with day d is paired with the index of day d and with the next day's change, close of day d + 1 ÷ close of day d − 1, all in UTC days. The window holds day d and the days before it only, so the next day's change is never set against a headline written after day d. The same `VALIDATION_MIN_DAYS` applies, and a coefficient is `null` below it or when either side has a single value. The retail layer is not computed again: its own days have shares.
+#
+# **Read these two coefficients more cautiously than those above.** Two neighbouring days share `MEDIA_WINDOW_DAYS` − 1 days of headlines, so the window shares of neighbouring days are far from independent: the series moves slowly and its ranks come in long runs. The chance error of a coefficient over n such days is larger than that over n independent days, while the reason for `VALIDATION_MIN_DAYS` counts the days as if they were independent; so a coefficient that passes the bar says less here than it seems. The two limits above hold as well. These numbers describe the past: no p-value, no test, no forecast and no advice to buy or sell. Index data from alternative.me.
+#
+# ***
+#
+# ### 媒体层按窗口，和行情对照
+#
+# 媒体层自己的单天很少有比例，所以它在上面的两个系数大多是 `null`。下一格对第 14 章按窗口看的媒体层（`layers.media_window`）算同样两个 Spearman 秩相关系数：媒体层时段里，窗口有校正后比例的每一天 d 都参加，拿以第 d 天结尾的窗口的比例，去配第 d 天的指数，以及第 d 天的第二天涨跌（第 d + 1 天收盘 ÷ 第 d 天收盘 − 1），日期都按 UTC。窗口只包括第 d 天和它之前的日子，所以第二天的涨跌永远不会和第 d 天之后写的标题放在一起比。`VALIDATION_MIN_DAYS` 照旧：天数不到它，或者某一边只有一个值，系数写 `null`。散户层不再算一遍：它自己的单天就有比例。
+#
+# **读这两个系数要比上面的更保守。** 相邻两天的窗口有 `MEDIA_WINDOW_DAYS` − 1 天是同一批标题，所以相邻日子的窗口比例远不是互相独立的：这条序列变得很慢，名次一长串一长串地连在一起。n 个这样的日子算出的系数，偶然误差比 n 个独立的日子大；而 `VALIDATION_MIN_DAYS` 的理由是把日子当成互相独立来算的，所以一个过了这道线的系数，在这里能说明的比看上去少。上面的两条局限照样成立。这些数描述的是过去：不报 p 值，不做检验，不预测，也不给任何买卖建议。指数数据出自 alternative.me。
+
+# %%
+# Spearman's rank correlation of the media layer's window shares (chapter 14) with the index and the next day's change.
+window_by_day = {day["date"]: day["calibrated_bullish_share"] for day in media_window_days
+                 if day["calibrated_bullish_share"] is not None}  # the days whose window has a calibrated share
+window_with_index = [(share, index_by_day[day]) for day, share in window_by_day.items() if day in index_by_day]
+window_with_change = [(share, next_day_change[day]) for day, share in window_by_day.items() if day in next_day_change]
+window_layer = brief["layers"]["media_window"]
+brief["validation"]["media_window"] = {
+    "layer": window_layer["layer"],
+    "window_days": window_layer["window_days"],
+    "share": "calibrated_bullish_share of layers.media_window.days, the window that ends with the day; a day whose window "
+             "has too few posts or no share takes no part",
+    "date_from": window_layer["date_from"],
+    "date_to": window_layer["date_to"],
+    "n_days_with_share": len(window_by_day),
+    "fear_greed": {"n_days": len(window_with_index), "spearman": spearman(window_with_index)},
+    "next_day_change": {"n_days": len(window_with_change), "spearman": spearman(window_with_change)},
+}
+window_validation = brief["validation"]["media_window"]
+print(f"Media layer by window of {window_layer['window_days']} days, {window_layer['date_from'] or '—'} to "
+      f"{window_layer['date_to'] or '—'}: {len(window_by_day):,} days with a share; a coefficient needs at least "
+      f"{VALIDATION_MIN_DAYS} days, and neighbouring windows share most of their headlines")
+print(f"Source of the index: {FEAR_GREED_ATTRIBUTION}")
+pd.DataFrame({f"{window_layer['layer']} by window of {window_layer['window_days']} days": {
+    "days with a share": window_validation["n_days_with_share"],
+    "vs index: days": window_validation["fear_greed"]["n_days"],
+    "vs index: Spearman": shown_rate(window_validation["fear_greed"]["spearman"]),
+    "vs next day's change: days": window_validation["next_day_change"]["n_days"],
+    "vs next day's change: Spearman": shown_rate(window_validation["next_day_change"]["spearman"]),
+}}).T
+
+# %% [markdown]
 # ## 16. The brief: format, check, save and panel
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, in four steps:
@@ -5999,14 +6222,14 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.6",
+  "title": "Ledger Eyes brief, format 1.7",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
                "dated_data", "daily", "new_words", "layers", "validation"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.6"},
+    "format_version": {"type": "string", "const": "1.7"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -7229,7 +7452,7 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": false,
       "required": ["compared", "share", "date_from", "date_to", "gap", "bullish_at_or_above", "bearish_at_or_below",
                    "opposite_rule", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite", "opposite_dates", "days",
-                   "media_recognition"],
+                   "media_recognition", "media_window"],
       "properties": {
         "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
         "share": {"type": "string"},
@@ -7283,13 +7506,79 @@ BRIEF_SCHEMA_TEXT = r"""{
             "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
           }
+        },
+        "media_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "window_days", "min_posts", "short_windows", "rule", "date_from", "date_to", "n_days",
+                       "n_days_with_share", "n_days_too_few", "days", "comparison"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "window_days": {"$ref": "#/$defs/positive"},
+            "min_posts": {"$ref": "#/$defs/positive"},
+            "short_windows": {"type": "string", "enum": ["no_share", "available_days"]},
+            "rule": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"},
+            "n_days_with_share": {"$ref": "#/$defs/count"},
+            "n_days_too_few": {"$ref": "#/$defs/count"},
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["date", "n_window_days", "n_posts", "half_counts", "too_few_posts", "half_bullish_share",
+                             "calibrated_bullish_share"],
+                "properties": {
+                  "date": {"$ref": "#/$defs/day"},
+                  "n_window_days": {"$ref": "#/$defs/positive"},
+                  "n_posts": {"$ref": "#/$defs/count"},
+                  "half_counts": {"$ref": "#/$defs/half_calls"},
+                  "too_few_posts": {"type": "boolean"},
+                  "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+                  "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
+                }
+              }
+            },
+            "comparison": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["compared", "date_from", "date_to", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite",
+                           "opposite_dates", "days"],
+              "properties": {
+                "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
+                "date_from": {"$ref": "#/$defs/day_or_null"},
+                "date_to": {"$ref": "#/$defs/day_or_null"},
+                "n_days": {"$ref": "#/$defs/count"},
+                "n_days_with_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+                "n_days_both": {"$ref": "#/$defs/count"},
+                "n_days_opposite": {"$ref": "#/$defs/count"},
+                "opposite_dates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+                "days": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["date", "calibrated_bullish_share", "opposite"],
+                    "properties": {
+                      "date": {"$ref": "#/$defs/day"},
+                      "calibrated_bullish_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+                      "opposite": {"type": ["boolean", "null"]}
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "validation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers"],
+      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers",
+                   "media_window"],
       "properties": {
         "day": {"type": "string", "enum": ["UTC"]},
         "date_from": {"$ref": "#/$defs/day"},
@@ -7361,6 +7650,22 @@ BRIEF_SCHEMA_TEXT = r"""{
               "fear_greed": {"$ref": "#/$defs/rank_correlation"},
               "next_day_change": {"$ref": "#/$defs/rank_correlation"}
             }
+          }
+        },
+        "media_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "window_days", "share", "date_from", "date_to", "n_days_with_share", "fear_greed",
+                       "next_day_change"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "window_days": {"$ref": "#/$defs/positive"},
+            "share": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days_with_share": {"$ref": "#/$defs/count"},
+            "fear_greed": {"$ref": "#/$defs/rank_correlation"},
+            "next_day_change": {"$ref": "#/$defs/rank_correlation"}
           }
         }
       }

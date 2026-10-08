@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 1.6",
+  "title": "Ledger Eyes brief, format 1.7",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "topics", "drawers", "why", "emotions",
                "dated_data", "daily", "new_words", "layers", "validation"],
   "properties": {
-    "format_version": {"type": "string", "const": "1.6"},
+    "format_version": {"type": "string", "const": "1.7"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -1230,7 +1230,7 @@
       "additionalProperties": false,
       "required": ["compared", "share", "date_from", "date_to", "gap", "bullish_at_or_above", "bearish_at_or_below",
                    "opposite_rule", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite", "opposite_dates", "days",
-                   "media_recognition"],
+                   "media_recognition", "media_window"],
       "properties": {
         "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
         "share": {"type": "string"},
@@ -1284,13 +1284,79 @@
             "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
             "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
           }
+        },
+        "media_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "window_days", "min_posts", "short_windows", "rule", "date_from", "date_to", "n_days",
+                       "n_days_with_share", "n_days_too_few", "days", "comparison"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "window_days": {"$ref": "#/$defs/positive"},
+            "min_posts": {"$ref": "#/$defs/positive"},
+            "short_windows": {"type": "string", "enum": ["no_share", "available_days"]},
+            "rule": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days": {"$ref": "#/$defs/count"},
+            "n_days_with_share": {"$ref": "#/$defs/count"},
+            "n_days_too_few": {"$ref": "#/$defs/count"},
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["date", "n_window_days", "n_posts", "half_counts", "too_few_posts", "half_bullish_share",
+                             "calibrated_bullish_share"],
+                "properties": {
+                  "date": {"$ref": "#/$defs/day"},
+                  "n_window_days": {"$ref": "#/$defs/positive"},
+                  "n_posts": {"$ref": "#/$defs/count"},
+                  "half_counts": {"$ref": "#/$defs/half_calls"},
+                  "too_few_posts": {"type": "boolean"},
+                  "half_bullish_share": {"$ref": "#/$defs/share_or_null"},
+                  "calibrated_bullish_share": {"$ref": "#/$defs/share_or_null"}
+                }
+              }
+            },
+            "comparison": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["compared", "date_from", "date_to", "n_days", "n_days_with_share", "n_days_both", "n_days_opposite",
+                           "opposite_dates", "days"],
+              "properties": {
+                "compared": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/layer"}},
+                "date_from": {"$ref": "#/$defs/day_or_null"},
+                "date_to": {"$ref": "#/$defs/day_or_null"},
+                "n_days": {"$ref": "#/$defs/count"},
+                "n_days_with_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+                "n_days_both": {"$ref": "#/$defs/count"},
+                "n_days_opposite": {"$ref": "#/$defs/count"},
+                "opposite_dates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/day"}},
+                "days": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["date", "calibrated_bullish_share", "opposite"],
+                    "properties": {
+                      "date": {"$ref": "#/$defs/day"},
+                      "calibrated_bullish_share": {"type": "object", "propertyNames": {"title": "layer", "$ref": "#/$defs/layer"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+                      "opposite": {"type": ["boolean", "null"]}
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "validation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers"],
+      "required": ["day", "date_from", "date_to", "share", "method", "alignment", "min_days", "price", "fear_greed", "layers",
+                   "media_window"],
       "properties": {
         "day": {"type": "string", "enum": ["UTC"]},
         "date_from": {"$ref": "#/$defs/day"},
@@ -1362,6 +1428,22 @@
               "fear_greed": {"$ref": "#/$defs/rank_correlation"},
               "next_day_change": {"$ref": "#/$defs/rank_correlation"}
             }
+          }
+        },
+        "media_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "window_days", "share", "date_from", "date_to", "n_days_with_share", "fear_greed",
+                       "next_day_change"],
+          "properties": {
+            "layer": {"type": "string", "enum": ["media"]},
+            "window_days": {"$ref": "#/$defs/positive"},
+            "share": {"type": "string"},
+            "date_from": {"$ref": "#/$defs/day_or_null"},
+            "date_to": {"$ref": "#/$defs/day_or_null"},
+            "n_days_with_share": {"$ref": "#/$defs/count"},
+            "fear_greed": {"$ref": "#/$defs/rank_correlation"},
+            "next_day_change": {"$ref": "#/$defs/rank_correlation"}
           }
         }
       }

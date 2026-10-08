@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **1.6** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **1.7** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -43,8 +43,8 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | `dated_data` | Not the StockTwits posts: the posts of two dated datasets (tweets as the `retail` layer, news headlines as the `media` layer) that are left after the date, language and Bitcoin steps and the daily cap, counted per layer and UTC day. It covers its own period, given in its own fields. | `dated_data.datasets.tweets.steps`; `dated_data.datasets.news.steps`; `dated_data.date_from`; `dated_data.date_to`; `dated_data.layers.<layer>.date_from`; `dated_data.layers.<layer>.date_to` |
 | `daily` | The same posts as `dated_data`, every post cleaned, scored by the sentiment model of `sentiment` (split at 0.5), given an emotion by the network of `emotions` and put into the drawers of `drawers`; counted per layer and UTC day, for the whole period and for every day, with the bullish shares calibrated by recognition rates read from `sentiment.evaluation`. It covers the same period as `dated_data`, given in its own fields. | `daily.post_table`; `daily.scoring.n_scored`; `daily.calibration.rates_from`; `daily.date_from`; `daily.date_to`; `daily.layers.<layer>.date_from`; `daily.layers.<layer>.date_to` |
 | `new_words` | The same posts as `dated_data`, by their cleaned texts: the words that suddenly appear in many more posts of a layer than on the days before. It covers the same period as `dated_data`, given in its own fields. | `new_words.post_table`; `new_words.date_from`; `new_words.date_to`; `new_words.layers.<layer>.date_from`; `new_words.layers.<layer>.date_to` |
-| `layers` | The days of `daily` that both the media and the retail layer cover (the overlap of their periods), with their calibrated bullish shares side by side; and, over the media layer's whole period, its news headlines with a bullish or bearish reader label, to measure the sentiment model on them. | `layers.compared`; `layers.date_from`; `layers.date_to`; `layers.media_recognition.date_from`; `layers.media_recognition.date_to`; `layers.media_recognition.label_rule` |
-| `validation` | The days of `daily` with a calibrated bullish share, every layer over its own period, against the BTC daily closes and the Fear and Greed Index of alternative.me (no daily price or index value is stored). | `validation.date_from`; `validation.date_to`; `validation.layers.<layer>.date_from`; `validation.layers.<layer>.date_to`; `validation.price.source`; `validation.fear_greed.source` |
+| `layers` | The days of `daily` that both the media and the retail layer cover (the overlap of their periods), with their calibrated bullish shares side by side; and, over the media layer's whole period, its news headlines with a bullish or bearish reader label, to measure the sentiment model on them. In `layers.media_window`, the media layer's posts of `daily` once more, added up over a window of days that ends with each day of its period, and the same overlap with the retail layer by day against the media layer by window. | `layers.compared`; `layers.date_from`; `layers.date_to`; `layers.media_recognition.date_from`; `layers.media_recognition.date_to`; `layers.media_recognition.label_rule`; `layers.media_window.window_days`; `layers.media_window.date_from`; `layers.media_window.date_to`; `layers.media_window.comparison.date_from`; `layers.media_window.comparison.date_to` |
+| `validation` | The days of `daily` with a calibrated bullish share, every layer over its own period, against the BTC daily closes and the Fear and Greed Index of alternative.me (no daily price or index value is stored). In `validation.media_window`, the days of `layers.media_window` with a calibrated share, over the media layer's period, against the same two. | `validation.date_from`; `validation.date_to`; `validation.layers.<layer>.date_from`; `validation.layers.<layer>.date_to`; `validation.price.source`; `validation.fear_greed.source`; `validation.media_window.window_days`; `validation.media_window.date_from`; `validation.media_window.date_to` |
 
 For example, with the default switches `scope.coins` is `"all"`, because the models learn from posts about all coins, while `topics.scope` is `"btc"`, because the topics and the topic × bullish table use only posts that mention Bitcoin.
 
@@ -1122,6 +1122,8 @@ Chapter 14: the two layers with data, the media layer (news headlines) and the r
 
 A layer **leans bullish** on a day when its calibrated share is at least `bullish_at_or_above` (0.5 + `gap`) and **leans bearish** when it is at most `bearish_at_or_below` (0.5 − `gap`). The two layers **lean opposite ways** on a day when one leans bullish and the other bearish. A day on which a layer's calibrated share is `null` (too few posts, or no calibration) takes no part. An object keyed by `<layer>` has one key per layer of `compared`.
 
+**The media layer by window** (`layers.media_window`). The news have a few headlines a day, so a single media day rarely reaches `daily.min_posts`. The section therefore also reads the media layer by **window**: the value of a day d is that of the media layer's posts over the `window_days` UTC days that end with day d (day d − `window_days` + 1 to day d; never a later day), their posts and calls at 0.5 added up from `daily.layers.media.days`, too few below `min_posts` posts (the same bar as for a day of `daily`), the counted share bullish ÷ posts and the calibrated share calibrated with the rates of `daily.calibration` (`null` unless its status is `applied`). The first `window_days` − 1 days of the media layer's period reach back before its first day; `short_windows` says what their windows get. With `window_days` 1 every number equals the media layer's by day. The retail layer has no window. `media_window.comparison` compares the two layers again on the same days as above and with the same leans, the retail side of a day being its calibrated share of that day in `daily` and the media side the calibrated share of the window that ends with that day. Neighbouring windows share all but one day of headlines, so the media side moves slowly and its days are not independent. All fields above `media_window` stay by day.
+
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
 | `layers` | object | yes | no | Chapter 14: the media and the retail layer side by side, and the model on the news headlines. |
@@ -1165,12 +1167,54 @@ A layer **leans bullish** on a day when its calibrated share is at least `bullis
 | `layers.media_recognition.label_bullish_share` | number | yes | yes | Bullish share of the labelled headlines by the readers' labels: `n_labelled_bullish` ÷ (`n_labelled_bullish` + `n_labelled_bearish`); `null` when there are none. |
 | `layers.media_recognition.half_bullish_share` | number | yes | yes | Counted bullish share of the same headlines: (`n_bullish_called_bullish` + `n_bearish_called_bullish`) ÷ (`n_labelled_bullish` + `n_labelled_bearish`); `null` when there are none. |
 | `layers.media_recognition.calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated with the StockTwits rates of `daily.calibration`, clipped to [0, 1]; `null` when the status there is not `applied` or the counted share is `null`. The news rates calibrate nothing. |
+| `layers.media_window` | object | yes | no | The media layer by window, and the two layers compared again with it (see above). It carries its own periods. |
+| `layers.media_window.layer` | string | yes | no | The layer read by window: `media`. |
+| `layers.media_window.window_days` | integer | yes | no | `MEDIA_WINDOW_DAYS`: how many UTC days a window holds, the day itself and the days before it; at least 1 (1 is the layer by day). |
+| `layers.media_window.min_posts` | integer | yes | no | The too-few bar of a window: `daily.min_posts` (`DAILY_MIN_POSTS`). |
+| `layers.media_window.short_windows` | string | yes | no | What a window that reaches back before the media layer's first day gets (the first `window_days` − 1 days of the period): `no_share` (its counts, but both shares `null`) or `available_days` (its shares from the days it holds). |
+| `layers.media_window.rule` | string | yes | no | How the two layers are read (the retail layer by day, the media layer by window), as an English sentence. |
+| `layers.media_window.date_from` | string | yes | yes | The media layer's first day, as in `daily`; `null` when the layer has no posts. |
+| `layers.media_window.date_to` | string | yes | yes | The media layer's last day, as in `daily`; `null` when the layer has no posts. |
+| `layers.media_window.n_days` | integer | yes | no | Calendar days from `date_from` to `date_to` (0 when they are `null`); equal to the length of `days`. |
+| `layers.media_window.n_days_with_share` | integer | yes | no | Days of `days` whose window has a calibrated share. |
+| `layers.media_window.n_days_too_few` | integer | yes | no | Days of `days` whose window has too few posts. |
+| `layers.media_window.days` | array | yes | no | One entry per calendar day of the media layer's period, sorted by date, the same days as `daily.layers.media.days`; empty when the layer has no posts. |
+| `layers.media_window.days[]` | object | — | no | The window that ends with one day. |
+| `layers.media_window.days[].date` | string | yes | no | The UTC day the window ends with, `YYYY-MM-DD`. |
+| `layers.media_window.days[].n_window_days` | integer | yes | no | Days of the period the window holds: `window_days`, fewer only for the first days of the period. |
+| `layers.media_window.days[].n_posts` | integer | yes | no | The media layer's posts on those days, added up from `daily.layers.media.days` (days without posts count 0). |
+| `layers.media_window.days[].half_counts` | object | yes | no | The window's posts split at 0.5, added up the same way. |
+| `layers.media_window.days[].half_counts.bullish` | integer | yes | no | Bullish at 0.5. |
+| `layers.media_window.days[].half_counts.bearish` | integer | yes | no | Bearish at 0.5. |
+| `layers.media_window.days[].too_few_posts` | boolean | yes | no | True when `n_posts` is below `min_posts`; both shares are then `null`. |
+| `layers.media_window.days[].half_bullish_share` | number | yes | yes | Counted bullish share of the window: `half_counts.bullish` ÷ `n_posts`; `null` when the window has too few posts, or when it is not whole and `short_windows` is `no_share`. |
+| `layers.media_window.days[].calibrated_bullish_share` | number | yes | yes | `half_bullish_share` calibrated with the rates of `daily.calibration`, clipped to [0, 1]; `null` as above or when the status there is not `applied`. |
+| `layers.media_window.comparison` | object | yes | no | The two layers compared again, on the days both cover, the retail layer by day and the media layer by window. |
+| `layers.media_window.comparison.compared` | array | yes | no | The two layers compared, in this order: `media`, `retail`, as in `layers.compared`. |
+| `layers.media_window.comparison.compared[]` | string | — | no | One layer. |
+| `layers.media_window.comparison.date_from` | string | yes | yes | The first day both layers cover, equal to `layers.date_from`; `null` as there. |
+| `layers.media_window.comparison.date_to` | string | yes | yes | The last day both layers cover, equal to `layers.date_to`; `null` as there. |
+| `layers.media_window.comparison.n_days` | integer | yes | no | Calendar days from `date_from` to `date_to` (0 when they are `null`); equal to the length of `days`. |
+| `layers.media_window.comparison.n_days_with_share` | object | yes | no | Per layer of `compared`, keyed by `<layer>`: the days of `days` on which its side has a calibrated share. |
+| `layers.media_window.comparison.n_days_with_share.<layer>` | integer | — | no | Days with a calibrated share on this layer's side. |
+| `layers.media_window.comparison.n_days_both` | integer | yes | no | Days of `days` on which both sides have a calibrated share, so that `opposite` is not `null`. |
+| `layers.media_window.comparison.n_days_opposite` | integer | yes | no | Days on which the two sides lean opposite ways; equal to the length of `opposite_dates`. |
+| `layers.media_window.comparison.opposite_dates` | array | yes | no | The days on which the two sides lean opposite ways, sorted. |
+| `layers.media_window.comparison.opposite_dates[]` | string | — | no | One day, `YYYY-MM-DD`. |
+| `layers.media_window.comparison.days` | array | yes | no | One entry per calendar day from `date_from` to `date_to`, sorted by date, the same days as `layers.days`; empty when they are `null`. |
+| `layers.media_window.comparison.days[]` | object | — | no | One day. |
+| `layers.media_window.comparison.days[].date` | string | yes | no | The UTC day, `YYYY-MM-DD`. |
+| `layers.media_window.comparison.days[].calibrated_bullish_share` | object | yes | no | Per layer of `compared`, keyed by `<layer>`: for `media` the calibrated share of the window that ends with that day (`media_window.days`), for `retail` that layer's calibrated share of that day in `daily`. |
+| `layers.media_window.comparison.days[].calibrated_bullish_share.<layer>` | number | — | yes | The share; `null` when that side takes no part that day. |
+| `layers.media_window.comparison.days[].opposite` | boolean | yes | yes | True when one side leans bullish and the other bearish (with `layers.bullish_at_or_above` and `layers.bearish_at_or_below`); `null` when a side takes no part that day. |
 
 ### validation
 
 Chapter 15: every layer's daily calibrated bullish share (from `daily`) set against two things measured elsewhere, the BTC price and the Crypto Fear and Greed Index of alternative.me, as Spearman rank correlations with the number of days that took part. It describes the past only: no p-value, no test and no forecast. The section carries its own period, every layer's period together, and every layer its own. **No daily price or index value is stored in the brief**: the price sources do not say that their data may be passed on, and the brief is not a price table. An object keyed by `<layer>` has one key per layer of `daily.layers`.
 
 A day d takes part when the layer has a calibrated share that day; it is paired with the index of day d and with the **next day's change**, close of day d + 1 ÷ close of day d − 1 (UTC days). A day missing on either side takes no part.
+
+`validation.media_window` does the same for the media layer by window (`layers.media_window`): a day d takes part when the window that ends with it has a calibrated share, and that share is paired with the index of day d and with the next day's change of day d. The window holds day d and the days before it only, so no headline written after day d is set against the next day's change. Neighbouring windows share all but one day of headlines, so these days are not independent and a coefficient over them says less than one over as many independent days.
 
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
@@ -1221,12 +1265,25 @@ A day d takes part when the layer has a calibrated share that day; it is paired 
 | `validation.layers.<layer>.next_day_change` | object | yes | no | The share against the next day's change of the BTC close. |
 | `validation.layers.<layer>.next_day_change.n_days` | integer | yes | no | Days that took part: a share, a close on that day and a close on the next. |
 | `validation.layers.<layer>.next_day_change.spearman` | number | yes | yes | Spearman's rank correlation, from −1 to 1; `null` as above. |
+| `validation.media_window` | object | yes | no | The media layer by window of `layers.media_window` against the index and the next day's change. It carries its own period. |
+| `validation.media_window.layer` | string | yes | no | `media`. |
+| `validation.media_window.window_days` | integer | yes | no | The window's days, as in `layers.media_window.window_days`. |
+| `validation.media_window.share` | string | yes | no | Which share is used, and which days take no part, as an English sentence. |
+| `validation.media_window.date_from` | string | yes | yes | The media layer's first day, as in `layers.media_window`; `null` when the layer has no posts. |
+| `validation.media_window.date_to` | string | yes | yes | The media layer's last day; `null` when the layer has no posts. |
+| `validation.media_window.n_days_with_share` | integer | yes | no | Days of `layers.media_window.days` with a calibrated share. |
+| `validation.media_window.fear_greed` | object | yes | no | The window's share against the index of the day the window ends with. |
+| `validation.media_window.fear_greed.n_days` | integer | yes | no | Days that took part: a share and an index value on the same day. |
+| `validation.media_window.fear_greed.spearman` | number | yes | yes | Spearman's rank correlation, from −1 to 1; `null` with fewer than `min_days` days or when either side has a single value. |
+| `validation.media_window.next_day_change` | object | yes | no | The window's share against the next day's change of the BTC close. |
+| `validation.media_window.next_day_change.n_days` | integer | yes | no | Days that took part: a share, a close on that day and a close on the next. |
+| `validation.media_window.next_day_change.spearman` | number | yes | yes | Spearman's rank correlation, from −1 to 1; `null` as above. |
 
 ## Daily results
 
 The StockTwits data has no dates, so the sections computed from it (`dataset`, `sentiment`, `topics`, `drawers`, `why` and `emotions`) describe the whole data source at once, and `scope.granularity` is `"batch"`. Results per day come from dated data and are added in this way, so that no field of an earlier format changes its name, type or meaning:
 
-1. Results per day go into **sections of their own** (so far `dated_data`, `daily`, `new_words`, `layers` and `validation`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods.
+1. Results per day go into **sections of their own** (so far `dated_data`, `daily`, `new_words`, `layers` and `validation`; later versions add more). Each such section carries its own period, `date_from` and `date_to` (UTC days, `YYYY-MM-DD`), for the whole section and, where it has layers, for every layer, because the layers can cover different periods. A result per day that belongs to an existing section may also go into a part of that section that carries its own period: `layers.media_recognition`, `layers.media_window` (with its `comparison`) and `validation.media_window` do so.
 2. A list of days has one entry per calendar day from the first to the last day of its period, sorted by date, each with `date` (`YYYY-MM-DD`) and the section's counts for that day; a day without posts is still listed, with counts of 0 (and `null` for a share that cannot be computed).
 3. The sections computed from the StockTwits data stay results for the whole data source; they get no `days`.
 4. `scope.granularity` stays `"batch"` for such a brief, which is half whole-batch and half per day. `"daily"` is kept for a later brief whose every section is computed per day (for example from comments collected day by day); it is not allowed in the current format.
@@ -1251,6 +1308,7 @@ These are additions, so MINOR goes up by one (see below), together with the new 
 | 1.4 | Chapter 12 reads two public datasets with dates, tweets as the `retail` layer and news headlines as the `media` layer, into one dated post table, and counts its posts per layer and UTC day. New: the top-level section `dated_data`, which carries its own period (`date_from`, `date_to`, per layer as well). `scope.granularity` stays `"batch"`; the rules for results per day are rewritten in [Daily results](#daily-results). Additions only: no field of 1.3 changed. |
 | 1.5 | Chapter 13 cleans and scores every dated post (bullish share at 0.5 and calibrated, emotion, drawers) and counts it per layer and UTC day, with example posts of chosen days, and finds the new words of every layer and day. New: the top-level sections `daily` and `new_words`, each carrying its own period like `dated_data`. The format check also refuses a day outside its layer's period. Additions only: no field of 1.4 changed. |
 | 1.6 | Chapter 14 puts the media and the retail layer side by side on the days both cover and lists the days they lean opposite ways, and measures the sentiment model on the news headlines with a reader label; chapter 15 sets every layer's daily share against the BTC daily closes and the Fear and Greed Index of alternative.me as Spearman rank correlations, with where the data came from. New: the top-level sections `layers` and `validation`, each carrying its own period. Additions only: no field of 1.5 changed. |
+| 1.7 | Chapters 14 and 15 also read the media layer by window: its posts over the `MEDIA_WINDOW_DAYS` UTC days that end with each day, added up, with the too-few bar and the calibration of `daily`; the two layers are compared again (the retail layer by day, the media layer by window), and the window's share is set against the Fear and Greed Index and the next day's change. New: `layers.media_window` (with its `comparison`) and `validation.media_window`, each carrying its own period. Additions only: no field of 1.6 changed. |
 
 ## Reading a brief
 
