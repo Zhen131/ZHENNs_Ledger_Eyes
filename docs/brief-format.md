@@ -744,7 +744,7 @@ The emotions are the nine labels of the pre-label files, in this order: `panic`,
 | `emotions.models` | array | yes | no | Network names, `["count_network", "tfidf_network"]`. Every `<model>` key below is one of them. |
 | `emotions.models[]` | string | — | no | A network name. |
 | `emotions.training` | object | yes | no | Training settings and history of the networks. |
-| `emotions.training.epochs` | integer | yes | no | Passes over the training part (`EPOCHS`). |
+| `emotions.training.epochs` | integer | yes | no | Passes over the training part (`EMOTION_EPOCHS`). |
 | `emotions.training.batch_size` | integer | yes | no | Posts per training step (`BATCH_SIZE`). |
 | `emotions.training.optimizer` | string | yes | no | `"adam"`. |
 | `emotions.training.seed` | integer | yes | no | Seed set before building each network. |
