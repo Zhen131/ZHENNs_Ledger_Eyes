@@ -77,6 +77,7 @@ LAYER_GAP = 0.1  # default: 0.1; or any number above 0 and at most 0.5 (chapter 
 PRICE_SOURCE = "auto"  # default: "auto" (chapter 15 tries Yahoo Finance through yfinance, then Coinbase, then Stooq, and uses the first that has every needed day); or the path of a local CSV file with the columns date and close; or "none" (no prices)
 FEAR_GREED_SOURCE = "https://api.alternative.me/fng/?limit=0&format=json"  # default: the whole history of the Crypto Fear and Greed Index of alternative.me (chapter 15); or the path of a local JSON file in the same shape; or "none"
 VALIDATION_MIN_DAYS = 30  # default: 30; or any positive integer (chapter 15: a correlation needs at least this many days; with 30 days a correlation of 0 can still come out about 0.37 either way by chance)
+MEDIA_WINDOW_DAYS = 30  # default: 30; or any positive integer (chapters 14 and 15: the media layer is also read by window, its share of a day taken over its headlines of this many UTC days up to and including that day; the news have a few headlines a day, so it takes about a month of them to reach DAILY_MIN_POSTS; 1 gives the day itself; the retail layer stays by day)
 LAUNCH_PANEL = True  # default: True (the last cell starts the panel); or False (the panel is only built; the checks always use False)
 
 # %% [markdown]
@@ -259,6 +260,8 @@ if (not isinstance(FEAR_GREED_SOURCE, str) or not FEAR_GREED_SOURCE.strip()
                      f"local JSON file, got {FEAR_GREED_SOURCE!r}")
 if isinstance(VALIDATION_MIN_DAYS, bool) or not isinstance(VALIDATION_MIN_DAYS, int) or VALIDATION_MIN_DAYS < 1:
     raise ValueError(f"VALIDATION_MIN_DAYS must be a positive integer, got {VALIDATION_MIN_DAYS!r}")
+if isinstance(MEDIA_WINDOW_DAYS, bool) or not isinstance(MEDIA_WINDOW_DAYS, int) or MEDIA_WINDOW_DAYS < 1:  # chapters 14, 15
+    raise ValueError(f"MEDIA_WINDOW_DAYS must be a positive integer, got {MEDIA_WINDOW_DAYS!r}")
 print("Switches look fine.")
 
 # %% [markdown]
