@@ -3899,14 +3899,15 @@ def check_emotions(report, label, brief, switches, full_run=False):
                  f"fitted on {vectors.get('fitted_on_n_posts')} posts, vocabulary sizes {vocab}")
     models = emotions.get("models") if isinstance(emotions.get("models"), list) else []
     training = as_dict(emotions.get("training"))
-    report.check(models == SENTIMENT_MODELS and training.get("epochs") == switches["EPOCHS"]
+    report.check(models == SENTIMENT_MODELS and training.get("epochs") == switches["EMOTION_EPOCHS"]
                  and training.get("batch_size") == switches["BATCH_SIZE"] and training.get("seed") == switches["RANDOM_SEED"]
                  and training.get("output_layer") == f"{len(classes)} units, softmax"
                  and training.get("loss") == "sparse_categorical_crossentropy"
                  and training.get("target_of_class") == {item: position for position, item in enumerate(classes)}
                  and sorted(as_dict(training.get("history"))) == sorted(models),
-                 f"{label}: a word-count and a TF-IDF network, one softmax unit per class, EPOCHS, BATCH_SIZE and the seed",
+                 f"{label}: a word-count and a TF-IDF network, one softmax unit per class, EMOTION_EPOCHS, BATCH_SIZE and the seed",
                  f"models {models}, output {training.get('output_layer')!r}, targets {training.get('target_of_class')}")
+    check_training_passes(report, label, brief, switches)
     selection = as_dict(emotions.get("selection"))
     validation = as_dict(selection.get("validation_macro_f1"))
     scores = {name: (validation.get(name) if is_number(validation.get(name)) else -1.0) for name in models}
@@ -4055,6 +4056,37 @@ def check_emotions(report, label, brief, switches, full_run=False):
                  "agreement null exactly when nothing was reviewed (always without a review table)", f"{review}")
 
 
+def history_problems(history, names, passes):
+    """Problems of training histories {network: {measure: [one value per pass]}}: every network in names has one, with
+    non-empty loss and val_loss, and every measure holds exactly passes values."""
+    history = as_dict(history)
+    problems = [f"{name}: no history" for name in names if name not in history]
+    for name, measures in history.items():
+        measures = as_dict(measures)
+        problems += [f"{name}: {key} missing or empty" for key in ("loss", "val_loss")
+                     if not (isinstance(measures.get(key), list) and measures[key])]
+        problems += [f"{name}.{key}: {len(values) if isinstance(values, list) else repr(values)} values, expected {passes}"
+                     for key, values in measures.items() if not isinstance(values, list) or len(values) != passes]
+    return problems
+
+
+def check_training_passes(report, label, brief, switches):
+    """Chapter 11 trains with EMOTION_EPOCHS and chapter 7 with EPOCHS. The recorded number alone could disagree with
+    the training that ran; the length of every training history shows how many passes really ran (and loss and
+    val_loss must be there and not empty, or an empty history would pass the length rule)."""
+    emotion_training = as_dict(as_dict(brief.get("emotions")).get("training"))
+    problems = history_problems(emotion_training.get("history"), SENTIMENT_MODELS, switches["EMOTION_EPOCHS"])
+    report.check(not problems, f"{label}: every emotion network's training history has non-empty loss and val_loss, and "
+                 "every measure holds EMOTION_EPOCHS values (chapter 11 trained EMOTION_EPOCHS passes)",
+                 f"EMOTION_EPOCHS {switches['EMOTION_EPOCHS']}; " + "; ".join(problems[:4]))
+    sentiment_training = as_dict(as_dict(brief.get("sentiment")).get("training"))
+    problems = history_problems(sentiment_training.get("history"), SENTIMENT_MODELS, switches["EPOCHS"])
+    report.check(sentiment_training.get("epochs") == switches["EPOCHS"] and not problems,
+                 f"{label}: sentiment.training.epochs is EPOCHS, and every chapter 7 network's training history has "
+                 "non-empty loss and val_loss, and every measure holds EPOCHS values",
+                 f"EPOCHS {switches['EPOCHS']}, recorded {sentiment_training.get('epochs')!r}; " + "; ".join(problems[:4]))
+
+
 def stable_emotions(brief):
     """The parts of the emotions section that do not depend on training, or None."""
     emotions = as_dict(brief).get("emotions") if isinstance(brief, dict) else None
@@ -4113,6 +4145,12 @@ def print_emotions(brief):
     vectors = as_dict(emotions.get("vectorizers"))
     print(f"  vectorizers:                   count {as_dict(vectors.get('count')).get('vocab_size')}, tfidf "
           f"{as_dict(vectors.get('tfidf')).get('vocab_size')} words, fitted on {vectors.get('fitted_on_n_posts')} posts")
+    training, n_train = as_dict(emotions.get("training")), as_dict(split.get("n_posts")).get("train")
+    print(f"  training:                      {training.get('epochs')} passes (EMOTION_EPOCHS) over {n_train} training "
+          f"posts in batches of {training.get('batch_size')} (BATCH_SIZE): "
+          + (f"{-(-n_train // training['batch_size']) * training['epochs']} steps per network"
+             if all(is_count(value) and value > 0 for value in (n_train, training.get("batch_size"), training.get("epochs")))
+             else "steps unknown"))
     selection = as_dict(emotions.get("selection"))
     print(f"  validation macro-F1:           {selection.get('validation_macro_f1')}   chosen: {selection.get('selected')}")
     evaluation = as_dict(emotions.get("evaluation"))

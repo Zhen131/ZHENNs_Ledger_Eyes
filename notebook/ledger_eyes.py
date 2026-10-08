@@ -3374,7 +3374,9 @@ pd.DataFrame([{"vectors": name, "vocabulary": len(vectorizer.vocabulary_),
 # %% [markdown]
 # ### One-layer networks with one output per emotion
 #
-# Chapter 7's network has a single sigmoid unit when there are two classes, and its helper functions follow the bullish and bearish classes (`CLASS_LABELS`). This chapter therefore has helpers of its own that take the list of classes as an argument. The network is the same kind as in chapter 7: a single dense layer, here with **one softmax unit per emotion**, sparse categorical cross-entropy, the Adam optimiser, the same `EPOCHS` and `BATCH_SIZE`, and `RANDOM_SEED` set before each network is built. Inside the network an emotion is its position in `emotion_classes`. One network learns from the word counts and one from the TF-IDF vectors.
+# Chapter 7's network has a single sigmoid unit when there are two classes, and its helper functions follow the bullish and bearish classes (`CLASS_LABELS`). This chapter therefore has helpers of its own that take the list of classes as an argument. The network is the same kind as in chapter 7: a single dense layer, here with **one softmax unit per emotion**, sparse categorical cross-entropy, the Adam optimiser, the same `BATCH_SIZE`, this chapter's own `EMOTION_EPOCHS` (default 20) as the number of passes, and `RANDOM_SEED` set before each network is built. Inside the network an emotion is its position in `emotion_classes`. One network learns from the word counts and one from the TF-IDF vectors.
+#
+# Chapter 11 has its own number of passes, `EMOTION_EPOCHS` (default 20), because its pre-labelled posts are far fewer than the posts chapter 7 trains on: with the same number of passes its networks would take far fewer training steps (each pass is the training posts ÷ `BATCH_SIZE` steps). Chapter 7 keeps its own `EPOCHS`. 20 is a default, not a tuned best value; the validation loss printed after every pass shows whether more passes still help.
 #
 # As in chapter 7, the validation part chooses one network by macro-F1 (a tie goes to the word-count network), and `emotion_proba(cleaned_texts)` gives the chosen network's probabilities for any cleaned texts: one row per text and one column per emotion in `emotion_classes`, every row adding up to 1.
 #
@@ -3382,7 +3384,9 @@ pd.DataFrame([{"vectors": name, "vocabulary": len(vectorizer.vocabulary_),
 #
 # ### 每种情绪一个输出的一层网络
 #
-# 第 7 章的网络在两类时只有一个 sigmoid 单元，它的那些辅助函数也都跟着看多看空的类别（`CLASS_LABELS`）走。所以本章另写一套辅助函数，类别名单作为参数传进去。网络和第 7 章是同一种：只有一个全连接层，这里**每种情绪一个 softmax 单元**；损失函数是稀疏分类交叉熵，优化器 Adam，`EPOCHS` 和 `BATCH_SIZE` 都一样，每搭一个网络之前都先设 `RANDOM_SEED`。网络内部，一种情绪就是它在 `emotion_classes` 里的位置号。一个网络学词数统计，一个学 TF-IDF。
+# 第 7 章的网络在两类时只有一个 sigmoid 单元，它的那些辅助函数也都跟着看多看空的类别（`CLASS_LABELS`）走。所以本章另写一套辅助函数，类别名单作为参数传进去。网络和第 7 章是同一种：只有一个全连接层，这里**每种情绪一个 softmax 单元**；损失函数是稀疏分类交叉熵，优化器 Adam，`BATCH_SIZE` 一样，训练轮数用本章自己的 `EMOTION_EPOCHS`（默认 20），每搭一个网络之前都先设 `RANDOM_SEED`。网络内部，一种情绪就是它在 `emotion_classes` 里的位置号。一个网络学词数统计，一个学 TF-IDF。
+#
+# 第 11 章单设训练轮数 `EMOTION_EPOCHS`（默认 20），因为有预标的情绪帖子比第 7 章训练用的帖子少得多：轮数一样的话，网络走的步数要少得多（每一轮的步数是训练帖子数 ÷ `BATCH_SIZE`）。第 7 章仍用自己的 `EPOCHS`。20 是默认值，不是调出来的最佳值；每一轮之后打印的验证集损失能看出再多练几轮还有没有用。
 #
 # 和第 7 章一样，用验证集上的 macro-F1 选一个网络（相等时选词数统计那个）。`emotion_proba(cleaned_texts)` 用选中的网络给任意一批清洗后的文字算概率：每条文字一行，`emotion_classes` 里每种情绪一列，每行加起来等于 1。
 
@@ -3449,7 +3453,7 @@ for name, vectors in [("count_network", "count"), ("tfidf_network", "tfidf")]:
     tf.keras.utils.set_random_seed(RANDOM_SEED)  # fixes Python, NumPy and TensorFlow random numbers
     network = build_emotion_network(emotion_features[vectors]["train"].shape[1], len(emotion_classes))
     history = network.fit(emotion_features[vectors]["train"], emotion_targets(emotion_train_df["emotion"], emotion_classes),
-                          epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=2,
+                          epochs=EMOTION_EPOCHS, batch_size=BATCH_SIZE, verbose=2,
                           validation_data=(emotion_features[vectors]["validation"],
                                            emotion_targets(emotion_val_df["emotion"], emotion_classes)))
     emotion_models[name] = {"model": network, "vectors": vectors, "history": history}
@@ -3479,7 +3483,7 @@ def emotion_proba(cleaned_texts, model=selected_emotion_model, vectorizer=select
 
 brief["emotions"]["models"] = list(emotion_models)
 brief["emotions"]["training"] = {
-    "epochs": EPOCHS,
+    "epochs": EMOTION_EPOCHS,
     "batch_size": BATCH_SIZE,
     "optimizer": "adam",
     "seed": RANDOM_SEED,
