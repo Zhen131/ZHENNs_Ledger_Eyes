@@ -8533,8 +8533,8 @@ def panel_window_chart(content):
     comparison = window["comparison"]
     figure = Figure(figsize=(11, 4.6), dpi=100, facecolor=PANEL_COLOURS["surface"], layout="constrained")
     axis = figure.add_subplot()
-    title = (f"Calibrated bullish share: retail per UTC day, media over the {window['window_days']:,} "
-             f"day{'s' if window['window_days'] != 1 else ''} up to each day")
+    title = "Calibrated bullish share, the media layer by window"
+    days_up_to = f"the {window['window_days']:,} day{'s' if window['window_days'] != 1 else ''} up to each day"
     if not comparison["days"]:
         axis.set_axis_off()
         panel_note(axis, "the two layers cover no common day")
@@ -8547,7 +8547,7 @@ def panel_window_chart(content):
     fallback = iter([PANEL_COLOURS["counted"], PANEL_COLOURS["calibrated"]])
     for layer in comparison["compared"]:
         dates, values = panel_series(comparison["days"], "calibrated_bullish_share", layer)
-        span = f"window of {window['window_days']:,} days" if layer == window["layer"] else "by day"
+        span = days_up_to if layer == window["layer"] else "each day"
         panel_line(axis, dates, values, PANEL_COLOURS.get(layer) or next(fallback),
                    f"{layer}, {span} ({comparison['n_days_with_share'][layer]:,} days with a share)")
     bars = (content["layers"]["bullish_at_or_above"], content["layers"]["bearish_at_or_below"])
@@ -8558,7 +8558,7 @@ def panel_window_chart(content):
     handles, _ = axis.get_legend_handles_labels()
     handles.append(Patch(color=PANEL_COLOURS["opposite"],
                          label=f"lean opposite ways ({comparison['n_days_opposite']:,} days)"))
-    figure.legend(handles=handles, loc="outside upper right", fontsize=9, frameon=False, ncol=3)
+    figure.legend(handles=handles, loc="outside upper right", fontsize=9, frameon=False, ncol=2)
     if comparison["n_days_both"] == 0:
         panel_note(axis, "no day on which both sides have a calibrated share")
     figure.suptitle(title, x=0.01, ha="left", fontsize=11, color=PANEL_COLOURS["text"])
