@@ -3534,6 +3534,48 @@ def check_emotion_switches(report, defaults, others):
                  "or non-text source)", "; ".join(wrong[:3]))
 
 
+# Chapter 11's own number of passes over the emotion training part (chapter 7 keeps EPOCHS).
+EMOTION_EPOCHS_DEFAULT = 20
+# Locked (only add): values of EMOTION_EPOCHS the switch check cell must accept (True) or stop at (False).
+EMOTION_EPOCHS_PROBES = [
+    (20, True),
+    (1, True),
+    (5, True),
+    (200, True),
+    (0, False),
+    (-3, False),
+    (2.5, False),
+    (20.0, False),
+    ("20", False),
+    (True, False),
+    (False, False),
+    (None, False),
+]
+
+
+def check_emotion_epochs_switch(report, defaults, others):
+    """EMOTION_EPOCHS: in the parameters cell with its default and not two-state; the switch check cell, executed from
+    the source after the parameters cell, accepts positive integers and stops with the switch's name at other values."""
+    default = defaults.get("EMOTION_EPOCHS", "missing")
+    report.check(type(default) is int and default == EMOTION_EPOCHS_DEFAULT and "EMOTION_EPOCHS" not in others,
+                 f"EMOTION_EPOCHS is in the parameters cell with the default {EMOTION_EPOCHS_DEFAULT} and is not two-state",
+                 f"default {default!r}, other value {others.get('EMOTION_EPOCHS', 'none')!r}")
+    wrong = []
+    for value, accepted in EMOTION_EPOCHS_PROBES:
+        namespace = {"__name__": "notebook_cells"}
+        problems = run_cells(["DATA_SOURCE"], namespace)  # the parameters cell
+        namespace["EMOTION_EPOCHS"] = value
+        problems += run_cells(["EMOTION_CHOICES"], namespace)  # the switch check cell
+        stopped = [problem for problem in problems if problem.startswith("cell defining EMOTION_CHOICES: ValueError")]
+        if accepted and problems:
+            wrong.append(f"{value!r} refused: {problems[0][:120]}")
+        elif not accepted and not (stopped and "EMOTION_EPOCHS" in stopped[0]):
+            wrong.append(f"{value!r} not refused with the switch's name: {problems[:1]}")
+    report.check(not wrong, "the switch check cell accepts EMOTION_EPOCHS when it is a positive integer and stops with the "
+                 f"switch's name otherwise ({len(EMOTION_EPOCHS_PROBES)} cases: True, False, a decimal, text, 0, a "
+                 "negative number and None are refused)", "; ".join(wrong[:3]))
+
+
 def chapter_cells():
     """{chapter number: [cells]} of the notebook source, a chapter starting at its '## <n>. ' heading."""
     chapters, current = {}, None
@@ -6205,6 +6247,7 @@ def main():
     check_prelabel_fake_model(report)
     check_prelabel_files(report)
     check_emotion_switches(report, defaults, others)
+    check_emotion_epochs_switch(report, defaults, others)
     check_emotion_chapter(report)
     check_emotion_probes(report)
     check_dated_switches(report, defaults, others)
