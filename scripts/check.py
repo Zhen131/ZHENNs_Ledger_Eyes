@@ -62,6 +62,15 @@ quick: static checks, then the notebook runs three times on the bundled
        before any run, its switch and its cells on made-up daily counts are
        checked. A seventh run with a window of one day and a too-few bar of 1
        must give exactly the media layer by day.
+       The level pre-label script (scripts/prelabel_levels.py) is checked
+       without Ollama and without the dataset: its interface and pinned
+       prompt, its requests, that it only talks to a loopback address, its
+       draw on a hand-written table, its voting, retries, resuming and
+       settings record driven by a fake model, its check-file command on
+       good and broken files, and that its files get LF line endings only;
+       the committed sample label file is checked statically; scripts/env.sh
+       is checked for the Python of a Windows virtual environment, and
+       requirements-prelabel.txt and .gitattributes statically.
 full:  static checks, then one run on the full dataset with the default
        switches; prints the key numbers from the brief. The calibrated
        bullish share must narrow the gap to the labels in the overall fair
@@ -81,6 +90,10 @@ full:  static checks, then one run on the full dataset with the default
        checked (every coefficient recomputed from the cache) and printed, the
        media layer by window too, with every day the two layers lean opposite
        ways when the media layer is read by window.
+       The level pre-label files are compared with the dataset (read from data/raw/, downloaded
+       from Hugging Face at the pinned revision the first time): the sample,
+       and the full label file and the review table when they are there
+       (they are labelled on another machine; when missing, a line says so).
 
 Both checks always set LAUNCH_PANEL to False: the panel is built, never started.
 
@@ -117,6 +130,7 @@ sys.path.insert(0, str(REPO_DIR / "scripts"))
 
 import jupytext  # noqa: E402
 import prelabel_emotions as prelabel  # noqa: E402
+import prelabel_levels as levels  # noqa: E402
 from notebook_build import NOTEBOOK, SOURCE, build_notebook_text  # noqa: E402
 
 REQUIREMENTS = REPO_DIR / "requirements.txt"
@@ -6649,6 +6663,903 @@ def print_media_window(brief):
           f"({as_dict(entry.get('next_day_change')).get('n_days')} days)")
 
 
+# ---------------------------------------------------------------- level pre-labels (scripts/prelabel_levels.py)
+# The checks never contact Ollama, and the quick check never reads the dataset: the draw is checked on a
+# hand-written table and the labelling loop with a fake model. The full check compares the files with the dataset.
+
+LEVEL_LABELS = ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only",
+                "none"]  # the seven labels, closest to cash first (interface of the label files)
+LEVEL_SIX = LEVEL_LABELS[:6]  # the levels of the ladder; none is not one
+LEVEL_FAILURES = ["unparsed", "disputed"]  # no vote at all; too few votes for the most frequent label
+LEVEL_COLUMNS = ["post_id", "level", "votes", "model", "prompt_version", "text_hash"]  # label files, in order
+LEVEL_REVIEW_COLUMNS = ["post_id", "prelabel", "human_label"]  # review table, in order
+LEVEL_DEFAULT_MODEL = "qwen2.5:7b"
+LEVEL_FULL_FILE = "labels/levels-prelabel-v1.csv"
+LEVEL_SAMPLE_FILE = "samples/levels-prelabel-sample.csv"
+LEVEL_REVIEW_FILE = "labels/levels-review-template.csv"
+LEVEL_DEFAULTS = {"DEFAULT_REVIEW_SIZE": 200, "DEFAULT_SEED": 42, "DEFAULT_SAMPLES": 5, "DEFAULT_TEMPERATURE": 0.7,
+                  "DEFAULT_MIN_VOTES": 3, "DEFAULT_COUNT": 8000, "DEFAULT_POOL_CAP": 1500}
+LEVEL_COUNT_RANGE = (6000, 10000)  # the default count must stay in this range
+LEVEL_DATASET = "TimKoornstra/financial-tweets-sentiment"
+LEVEL_DATASET_REVISION = "bba602698fd6f18226f6404fd8fb637ef67fa1eb"
+LEVEL_CORE_KEYWORDS = {"assets_dividends": ["dividend", "p/b", "book value"], "earnings": ["p/e", "pe ratio"],
+                       "revenue_business": ["revenue"]}  # may never be removed from the keyword pools
+# SHA-256 of everything fixed that is sent to the model, per released prompt version (see level_fingerprint_of).
+LEVEL_PROMPT_FINGERPRINTS = {
+    "v1": "bb2c509ade3a7caa5f688044db300c61f16e71a17bcf498dde2770a300fc4a59",
+}
+LEVEL_SAMPLE_SAMPLES = 3  # the committed sample was labelled with 3 samples and 2 votes
+LEVEL_SAMPLE_MIN_VOTES = 2
+LEVEL_PRELABEL_PACKAGES = ["pandas", "numpy", "pyarrow", "huggingface-hub", "fsspec"]  # requirements-prelabel.txt
+LEVEL_LF_PATTERNS = ["*.sh", "*.csv", "*.py", "*.json", "*.txt", "*.md"]  # .gitattributes: text eol=lf
+LEVEL_PROBE_DIR = REPO_DIR / "data" / "checks" / "levels-probe"
+ENV_PROBE_DIR = REPO_DIR / "data" / "checks" / "env-probe"
+LEVEL_FULL_SKIPPED = ("level pre-labels: labels/levels-prelabel-v1.csv not obtained (labelled on another machine); "
+                      "skipped")
+LEVEL_REVIEW_SKIPPED = ("level pre-labels: labels/levels-review-template.csv not obtained (labelled on another "
+                        "machine); skipped")
+LEVEL_MARK = "SENTIMENT-MARK-7319"  # a conspicuous sentiment value that must never reach a request
+
+
+def level_answer(label):
+    return json.dumps({"level": label})
+
+
+def level_fingerprint_of():
+    """The documented prompt fingerprint, computed here from what the script sends: SHA-256 of the compact ASCII JSON
+    (sorted keys) of {"first": the messages of a first request, "retry": the messages of a retry, "format": the answer
+    format}, with the script's placeholder in place of the post."""
+    first = levels.build_payload(levels.POST_PLACEHOLDER, retry=False, model="", seed=0, temperature=0)
+    again = levels.build_payload(levels.POST_PLACEHOLDER, retry=True, model="", seed=0, temperature=0)
+    text = json.dumps({"first": first["messages"], "retry": again["messages"], "format": first["format"]},
+                      ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def level_stops(function, *args, **kwargs):
+    """The message of the Stop raised by function, or None when it does not stop."""
+    try:
+        function(*args, **kwargs)
+    except levels.Stop as exc:
+        return str(exc)
+    return None
+
+
+def check_levels_interface(report):
+    """The script's interface: labels, failure values, columns, defaults, file paths, dataset and core keywords."""
+    parsed = levels.build_parser().parse_args(["label"])
+    review = levels.build_parser().parse_args(["review-template"])
+    pools = dict(levels.KEYWORD_POOLS)
+    interface = {
+        "labels": (levels.LEVEL_NAMES, LEVEL_LABELS),
+        "six levels": (levels.SIX_LEVELS, LEVEL_SIX),
+        "failure values": ([levels.UNPARSED, levels.DISPUTED], LEVEL_FAILURES),
+        "columns": (levels.COLUMNS, LEVEL_COLUMNS),
+        "review columns": (levels.REVIEW_COLUMNS, LEVEL_REVIEW_COLUMNS),
+        "default model": ((levels.DEFAULT_MODEL, parsed.model), (LEVEL_DEFAULT_MODEL, LEVEL_DEFAULT_MODEL)),
+        "full label file": (levels.default_output("full"), LEVEL_FULL_FILE),
+        "sample label file": (levels.default_output("sample"), LEVEL_SAMPLE_FILE),
+        "review table": (levels.default_output("review"), LEVEL_REVIEW_FILE),
+        "dataset": ((levels.DATASET, levels.DATASET_REVISION), (LEVEL_DATASET, LEVEL_DATASET_REVISION)),
+        "pool order": ([pool for pool, _ in levels.KEYWORD_POOLS], LEVEL_SIX[:3]),
+        "count range": (levels.COUNT_RANGE, LEVEL_COUNT_RANGE),
+    }
+    interface.update({name: (getattr(levels, name), value) for name, value in LEVEL_DEFAULTS.items()})
+    parser_defaults = {"DEFAULT_SAMPLES": parsed.samples, "DEFAULT_TEMPERATURE": parsed.temperature,
+                       "DEFAULT_MIN_VOTES": parsed.min_votes, "DEFAULT_COUNT": parsed.count,
+                       "DEFAULT_POOL_CAP": parsed.pool_cap, "DEFAULT_SEED": parsed.seed,
+                       "DEFAULT_REVIEW_SIZE": review.size}
+    interface.update({f"parser {name}": (value, LEVEL_DEFAULTS[name]) for name, value in parser_defaults.items()})
+    interface["review seed"] = (review.seed, LEVEL_DEFAULTS["DEFAULT_SEED"])
+    wrong = [f"{name}: {got!r}, expected {expected!r}" for name, (got, expected) in interface.items() if got != expected]
+    low, high = LEVEL_COUNT_RANGE
+    if not low <= levels.DEFAULT_COUNT <= high:
+        wrong.append(f"default count {levels.DEFAULT_COUNT} outside {LEVEL_COUNT_RANGE}")
+    missing = [f"{pool}: {word}" for pool, words in LEVEL_CORE_KEYWORDS.items() for word in words
+               if word not in pools.get(pool, [])]
+    report.check(not wrong and not missing,
+                 "level pre-labels: the script's seven labels (in order), unparsed and disputed, the six columns, the "
+                 "review table's three columns, the default model, the three file paths, the review size and seed, "
+                 "five samples, temperature 0.7, three votes, 8,000 posts (within 6,000 to 10,000), a pool cap of "
+                 "1,500, the dataset and its pinned revision, and the four core keyword groups are the documented "
+                 "interface", "; ".join(wrong + [f"core keyword missing: {item}" for item in missing]))
+
+
+def check_levels_prompt(report):
+    """Prompt v1 is pinned; a request carries the system message, the examples and the post, the seed and the
+    temperature it is given, and an answer format that allows only the seven labels; a retry adds the reminder."""
+    computed = level_fingerprint_of()
+    version = levels.PROMPT_VERSION
+    report.check(version in LEVEL_PROMPT_FINGERPRINTS and computed == LEVEL_PROMPT_FINGERPRINTS[version]
+                 and levels.prompt_fingerprint() == computed,
+                 f"level pre-labels: prompt {version} (system message with the ladder and the rules, hand-written "
+                 "examples, retry reminder, answer format) has the pinned SHA-256; a changed character needs a new "
+                 "version", f"computed {computed}, script {levels.prompt_fingerprint()}, pinned "
+                 f"{LEVEL_PROMPT_FINGERPRINTS.get(version)!r}")
+    answer_rules = {"type": "object", "properties": {"level": {"type": "string", "enum": LEVEL_LABELS}},
+                    "required": ["level"]}
+    problems = []
+    for temperature, seed in ((0.7, 42), (0.25, 107)):
+        first = levels.build_payload("a post", retry=False, model=LEVEL_DEFAULT_MODEL, seed=seed,
+                                     temperature=temperature)
+        again = levels.build_payload("a post", retry=True, model=LEVEL_DEFAULT_MODEL, seed=seed,
+                                     temperature=temperature)
+        for name, payload in (("first", first), ("retry", again)):
+            options = payload.get("options", {})
+            if sorted(payload) != ["format", "messages", "model", "options", "stream"]:
+                problems.append(f"{name}: fields {sorted(payload)}")
+            if payload.get("stream") is not False or options.get("temperature") != temperature \
+                    or options.get("seed") != seed or payload.get("model") != LEVEL_DEFAULT_MODEL:
+                problems.append(f"{name}: stream {payload.get('stream')!r}, options {options}")
+            if not is_count(options.get("num_predict")) or options["num_predict"] < 16:
+                problems.append(f"{name}: num_predict {options.get('num_predict')!r}")
+            if payload.get("format") != answer_rules:
+                problems.append(f"{name}: format {payload.get('format')}")
+            messages = payload["messages"]
+            examples = [{"role": role, "content": content} for item in levels.EXAMPLES_V1
+                        for role, content in (("user", levels.USER_PREFIX + item["post"]),
+                                              ("assistant", level_answer(item["level"])))]
+            if messages[0]["role"] != "system" or not messages[0]["content"].startswith(levels.system_prompt()):
+                problems.append(f"{name}: the first message is not the system message")
+            if messages[1:-1] != examples:
+                problems.append(f"{name}: the hand-written examples are not the messages between the system message "
+                                "and the post")
+            if messages[-1] != {"role": "user", "content": levels.USER_PREFIX + "a post"}:
+                problems.append(f"{name}: the post is not the last message")
+        reminder = levels.retry_reminder()
+        if reminder in first["messages"][0]["content"] \
+                or first["messages"][0]["content"] + "\n\n" + reminder != again["messages"][0]["content"] \
+                or first["messages"][1:] != again["messages"][1:]:
+            problems.append("a retry must differ from the first request only by the reminder at the end of the system "
+                            "message")
+    system = levels.system_prompt()
+    missing = [label for label in LEVEL_LABELS if label not in system]
+    covered = {item["level"] for item in levels.EXAMPLES_V1}
+    if missing or set(LEVEL_LABELS) - covered or covered - set(LEVEL_LABELS):
+        problems.append(f"labels missing from the system message {missing}; labels without an example "
+                        f"{sorted(set(LEVEL_LABELS) - covered)}; unknown example labels {sorted(covered - set(LEVEL_LABELS))}")
+    if [system.index(label) for label in LEVEL_LABELS if label in system] != sorted(
+            system.index(label) for label in LEVEL_LABELS if label in system):
+        problems.append("the system message does not list the labels in ladder order")
+    report.check(not problems, "level pre-labels: a request is not streamed and has the model, the seed and the "
+                 "temperature it is given, room for the longest answer and an answer format that allows only the "
+                 "seven labels; the system message lists the seven labels in ladder order, then come the hand-written "
+                 "examples (at least one per label), then the post; a retry adds only the fixed reminder",
+                 "; ".join(problems))
+
+
+def check_levels_hosts(report):
+    """The label script talks only to a loopback address, without a proxy."""
+    import urllib.parse
+    import urllib.request
+
+    refused = [host for host in REFUSED_HOSTS if level_stops(levels.loopback_base, host) is None]
+    accepted = [host for host in ACCEPTED_HOSTS if level_stops(levels.loopback_base, host) is not None]
+    default_host = levels.build_parser().parse_args(["label"]).host
+    default_ok = default_host == levels.DEFAULT_HOST and urllib.parse.urlsplit(default_host).hostname == "127.0.0.1"
+    report.check(not refused and not accepted and default_ok,
+                 "level pre-labels: the script refuses every address that is not http:// on a loopback host "
+                 f"({len(REFUSED_HOSTS)} cases), accepts 127.0.0.1, localhost and ::1, and defaults to 127.0.0.1",
+                 f"not refused {refused}; not accepted {accepted}; default {default_host!r}")
+    result = subprocess.run([sys.executable, str(REPO_DIR / "scripts" / "prelabel_levels.py"), "label",
+                             "--host", "http://example.com:11434"], capture_output=True, text=True, timeout=120)
+    report.check(result.returncode == 1 and "refusing" in result.stderr and not result.stdout,
+                 "level pre-labels: the label command with an outside address stops before doing anything",
+                 f"exit {result.returncode}, stderr {result.stderr.strip()[:160]!r}, stdout {result.stdout.strip()[:80]!r}")
+    names = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"]
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names[:6]:
+            os.environ[name] = "http://127.0.0.1:9"
+        for name in names[6:]:
+            os.environ.pop(name, None)
+        openers = [urllib.request.build_opener(), levels.no_proxy_opener(),
+                   levels.OllamaClient(levels.DEFAULT_HOST, 1).opener]
+        proxies = [[handler.proxies for handler in opener.handlers if isinstance(handler, urllib.request.ProxyHandler)]
+                   for opener in openers]
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    default_uses_proxy = any(proxy.get("http") for proxy in proxies[0])
+    report.check(default_uses_proxy and not any(proxy for proxy in proxies[1] + proxies[2]),
+                 "level pre-labels: requests ignore proxy settings (with proxy variables set, a default opener would "
+                 "use the proxy; the script's opener has no proxy at all)",
+                 f"default opener {proxies[0]}, script {proxies[1]}, client {proxies[2]}")
+
+
+LEVEL_DRAW_TEXTS = [  # a hand-written table; the comment says where each row must end up
+    "dividend raised again, nice",           # 0: pool assets_dividends
+    None,                                    # 1: empty (no value)
+    "   ",                                   # 2: empty after stripping
+    "P/B under 1 here, cheap",               # 3: assets_dividends (upper case, slash)
+    "p/e of 12 and revenue growing",         # 4: earnings and revenue_business -> earnings
+    "dividend, earnings and revenue all up",  # 5: three pools -> assets_dividends
+    "dividendo alto en este banco",          # 6: no pool (dividendo is not dividend)
+    "  dividend raised again, nice  ",       # 7: repeats row 0 after stripping -> left out
+    "Dividend raised again, nice",           # 8: case differs from row 0 -> kept, assets_dividends
+    "earnings beat on the top line",         # 9: earnings
+    "eps came in light",                     # 10: earnings
+    "profit margins under pressure",         # 11: earnings
+    "guidance raised for the year",          # 12: earnings
+    "sales were flat this quarter",          # 13: revenue_business
+    "users keep growing every month",        # 14: revenue_business
+] + [f"chart talk number {number}, looking good" for number in range(15, 30)]  # 15-29: no pool
+LEVEL_DRAW_POOLS = {"assets_dividends": [0, 3, 5, 8], "earnings": [4, 9, 10, 11, 12], "revenue_business": [13, 14]}
+
+
+def check_levels_draw(report):
+    """The draw on a hand-written table: ids, empty and repeated texts, pools, cap, fill, seed and row order."""
+    import pandas as pd
+
+    table = pd.DataFrame({"tweet": LEVEL_DRAW_TEXTS, "sentiment": [LEVEL_MARK] * len(LEVEL_DRAW_TEXTS),
+                          "url": ["https://example.com/source"] * len(LEVEL_DRAW_TEXTS)})
+    posts = levels.posts_from_table(table)
+    problems = []
+    if [post["post_id"] for post in posts] != [f"tim:{row}" for row in range(len(LEVEL_DRAW_TEXTS))]:
+        problems.append("ids are not tim:<row from 0>")
+    if any(sorted(post) != ["post_id", "text"] for post in posts) or posts[1]["text"] != "":
+        problems.append("posts must carry only post_id and text, an empty value as ''")
+    pools = {pool: [row for row, text in enumerate(LEVEL_DRAW_TEXTS)
+                    if text and text.strip() and row != 7 and levels.first_pool(text) == pool]  # row 7 repeats row 0
+             for pool in LEVEL_SIX[:3]}
+    if pools != LEVEL_DRAW_POOLS:
+        problems.append(f"pools {pools}, expected {LEVEL_DRAW_POOLS} (rows with several pools go to the first, P/B "
+                        "and p/e match, dividendo does not)")
+    selection, summary, steps = levels.select_posts(posts, count=20, pool_cap=3, seed=42)
+    ids = [post["post_id"] for post in selection]
+    rows = [int(post_id.split(":")[1]) for post_id in ids]
+    if (summary["empty_texts_left_out"], summary["repeated_texts_left_out"], summary["usable_posts"]) != (2, 1, 27):
+        problems.append(f"empty {summary['empty_texts_left_out']}, repeated {summary['repeated_texts_left_out']}, usable "
+                        f"{summary['usable_posts']} (expected 2, 1, 27)")
+    if {1, 2, 7} & set(rows) or len(set(ids)) != len(ids) or len(ids) != 20:
+        problems.append(f"selected rows {sorted(rows)}: 20 different posts without rows 1, 2 and 7")
+    if summary["pool_posts"] != {pool: len(members) for pool, members in LEVEL_DRAW_POOLS.items()}:
+        problems.append(f"pool posts {summary['pool_posts']}")
+    expected_steps = {"assets_dividends": 3, "earnings": 3, "revenue_business": 2, "random": 12}
+    if summary["taken_per_step"] != expected_steps or Counter(steps.values()) != Counter(expected_steps):
+        problems.append(f"taken per step {summary['taken_per_step']}, expected {expected_steps} (cap 3)")
+    for post_id, step in steps.items():
+        row = int(post_id.split(":")[1])
+        if step != "random" and row not in LEVEL_DRAW_POOLS[step]:
+            problems.append(f"{post_id} taken for {step} without being in that pool")
+    fill = [int(post_id.split(":")[1]) for post_id, step in steps.items() if step == "random"]
+    pool_taken = {int(post_id.split(":")[1]) for post_id, step in steps.items() if step != "random"}
+    if pool_taken & set(fill):
+        problems.append("the fill took a post that a pool had already taken")
+    left_over = [row for members in LEVEL_DRAW_POOLS.values() for row in members if row not in pool_taken]
+    if len(left_over) != 3:
+        problems.append(f"posts above the cap {left_over} (expected 3)")
+    if summary["fingerprint"] != hashlib.sha256("\n".join(ids).encode("ascii")).hexdigest() \
+            or summary["first_ids"] != ids[:5]:
+        problems.append("the selection fingerprint is not the SHA-256 of the ids in processing order joined by "
+                        "newlines")
+    if any(sorted(post) != ["post_id", "text"] for post in selection):
+        problems.append("the selection must carry only post_id and text")
+    again, again_summary, _ = levels.select_posts(posts, count=20, pool_cap=3, seed=42)
+    other, other_summary, _ = levels.select_posts(posts, count=20, pool_cap=3, seed=43)
+    if again != selection or again_summary["fingerprint"] != summary["fingerprint"]:
+        problems.append("the same seed gave another draw")
+    if other_summary["fingerprint"] == summary["fingerprint"]:
+        problems.append("another seed gave the same draw")
+    shuffled = list(posts)
+    random.Random(7).shuffle(shuffled)
+    mixed, mixed_summary, mixed_steps = levels.select_posts(shuffled, count=20, pool_cap=3, seed=42)
+    if mixed != selection or mixed_summary["fingerprint"] != summary["fingerprint"] or mixed_steps != steps:
+        problems.append("shuffling the rows of the table changed the draw (it must depend on the rows only)")
+    whole, whole_summary, _ = levels.select_posts(posts, count=100, pool_cap=10, seed=42)
+    if len(whole) != 27 or whole_summary["taken_per_step"]["random"] != 16:
+        problems.append(f"with room for every post, all 27 usable posts are taken ({len(whole)})")
+    message = level_stops(levels.select_posts, posts, count=7, pool_cap=3, seed=42)
+    if message is None or "pools" not in message:
+        problems.append(f"pools holding more than the count must stop the draw ({message!r})")
+    report.check(not problems, "level pre-labels: the draw on a hand-written table: ids tim:<row from 0>; empty and "
+                 "repeated texts (same after stripping, case counts) left out, the smallest row kept; keywords match "
+                 "whole words in any case (P/B, p/e; not dividendo); a post in several pools belongs to the first; a "
+                 "pool above the cap is drawn down to it; the fill comes from every post not taken yet; pools above "
+                 "the count stop the draw; the same seed gives the same draw and another seed another; shuffled rows "
+                 "give the same draw and fingerprint; posts carry only id and text", "; ".join(problems))
+
+
+class LevelFake:
+    """Stands in for Ollama: answers every post from a script {post text: [answer, ...]}, the last answer repeating.
+    An answer is the reply text, or an exception class to raise. Records every request."""
+
+    def __init__(self, script):
+        self.script = {text: list(answers) for text, answers in script.items()}
+        self.requests = []
+
+    @staticmethod
+    def post_of(payload):
+        content = payload["messages"][-1]["content"]
+        return content[len(levels.USER_PREFIX):] if content.startswith(levels.USER_PREFIX) else content
+
+    def __call__(self, payload):
+        self.requests.append(payload)
+        answers = self.script.get(self.post_of(payload)) or [level_answer("none")]
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if isinstance(answer, type) and issubclass(answer, Exception):
+            raise answer("fake model")
+        return answer
+
+    def asked(self, text=None):
+        """[(post text, seed, retry reminder present), ...] in request order (of one post when text is given)."""
+        reminder = levels.retry_reminder()
+        return [(self.post_of(payload), payload["options"]["seed"], reminder in payload["messages"][0]["content"])
+                for payload in self.requests if text is None or self.post_of(payload) == text]
+
+
+def level_probe_rows(path):
+    return [row for row in csv.reader(path.read_text(encoding="utf-8").splitlines())][1:]
+
+
+LEVEL_FAKE_POSTS = [  # hand-written posts for the fake model (never posts of the dataset)
+    "probe post zero: five votes alike",
+    "probe post one: four against one",
+    "probe post two: three, one and one",
+    "probe post three: two, two and one",
+    "probe post four: one sample fails, then three against one",
+    "probe post five: every sample fails",
+    "probe post six: labels in another case and with spaces",
+    "probe post seven: two bad attempts, then a good one",
+    "probe post eight: one sample times out three times",
+]
+
+
+def check_levels_fake_model(report):
+    """Voting, retries, stopping, resuming and the settings record of the label script, driven by a fake model on
+    hand-written posts; every file is written under data/checks/levels-probe/ and removed afterwards."""
+    import pandas as pd
+
+    folder = LEVEL_PROBE_DIR / "fake"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    records = REPO_DIR / levels.SETTINGS_DIR
+    records_before = sorted(path.name for path in records.glob("*")) if records.is_dir() else []
+    table = pd.DataFrame({"tweet": LEVEL_FAKE_POSTS, "sentiment": [LEVEL_MARK] * len(LEVEL_FAKE_POSTS),
+                          "url": [f"https://example.com/{LEVEL_MARK}"] * len(LEVEL_FAKE_POSTS)})
+    posts = levels.posts_from_table(table)
+    texts = [post["text"] for post in posts]
+    ids = [post["post_id"] for post in posts]
+    text_by_id = dict(zip(ids, texts))
+    waits, logged = [], []
+    common = {"text_by_id": text_by_id, "connect_retries": 2, "connect_wait": 0.25, "log": logged.append,
+              "sleep": waits.append, "seed": 100, "temperature": 0.55}
+    good, bad = level_answer, "not json at all"
+    E, P, S = "earnings", "price_chart", "story_macro"
+
+    def row(index, level, votes, model=LEVEL_DEFAULT_MODEL):
+        return [ids[index], level, votes, model, levels.PROMPT_VERSION, own_text_hash(texts[index])]
+
+    def record(name):
+        return folder / f"{name}.settings.json"
+
+    fake = LevelFake({texts[0]: [good(E)], texts[1]: [good(E)] * 4 + [good(P)],
+                      texts[2]: [good(E)] * 3 + [good(P), good(S)], texts[3]: [good(E), good(E), good(P), good(P), good(S)],
+                      texts[4]: [bad, '{"level": 5}', '{"label": "earnings"}', good(E), good(E), good(E), good(P)],
+                      texts[5]: [bad], texts[6]: ['{"level": "  PRICE_CHART \\n"}', '{"level": "Price_Chart"}'],
+                      texts[7]: [bad, '{"level": "growth"}', good(E), good(E)],
+                      texts[8]: [levels.AnswerTimeout] * 3 + [good(S)]})
+    first_file = folder / "first.csv"
+    summary = levels.label_posts(posts, first_file, fake, settings_path=record("first"), **common)
+    expected = [row(0, E, "5/5"), row(1, E, "4/5"), row(2, E, "3/5"), row(3, "disputed", "2/5"), row(4, E, "3/4"),
+                row(5, "unparsed", "0/0"), row(6, P, "5/5"), row(7, E, "5/5"), row(8, S, "4/4")]
+    rows = level_probe_rows(first_file)
+    report.check(rows == expected and summary["stopped"] is None and summary["labelled"] == 9,
+                 "level pre-labels, fake model: five votes alike give 5/5, four to one 4/5, three, one and one 3/5; "
+                 "two, two and one give disputed 2/5; a sample whose three attempts fail is not a vote (three to one "
+                 "of four: 3/4); every sample failing gives unparsed 0/0; another case and spaces count; two bad "
+                 "attempts and a good one make a vote; a sample that times out three times fails alone; every row "
+                 "has the model, the prompt version and the fingerprint", f"rows {rows}")
+    asked7 = fake.asked(texts[7])
+    asked0 = fake.asked(texts[0])
+    seeds_ok = [seed for _, seed, _ in asked0] == [100, 101, 102, 103, 104] \
+        and [(seed, retry) for _, seed, retry in asked7] == [(100, False), (100, True), (100, True), (101, False),
+                                                             (102, False), (103, False), (104, False)]
+    counts = Counter(text for text, _, _ in fake.asked())
+    settings = [index for index, payload in enumerate(fake.requests)
+                if payload["model"] != LEVEL_DEFAULT_MODEL or payload["stream"] is not False
+                or payload["options"].get("temperature") != 0.55
+                or payload["format"]["properties"]["level"]["enum"] != LEVEL_LABELS]
+    leaked = [index for index, payload in enumerate(fake.requests) if LEVEL_MARK in json.dumps(payload)]
+    report.check(seeds_ok and counts[texts[5]] == 15 and counts[texts[8]] == 7 and not settings and not leaked
+                 and summary["requests"] == len(fake.requests),
+                 "level pre-labels, fake model: sample i asks with the seed + i, its retries keep that seed and carry "
+                 "the reminder (first attempts do not); at most 3 attempts per sample (15 for a post whose samples all "
+                 "fail); every request has the model, the temperature given and the seven-label format; the "
+                 "dataset's sentiment (a conspicuous value in the table) is in no request",
+                 f"seeds of post 0 {[seed for _, seed, _ in asked0]}, post 7 {asked7}; requests per post "
+                 f"{[counts[text] for text in texts]}; other settings {settings}; sentiment in requests {leaked}")
+
+    # The server cannot be reached: stop without writing; a short outage is ridden out.
+    fake = LevelFake({texts[0]: [good(E)], texts[1]: [good(E), good(E), levels.ServerUnavailable],
+                      texts[2]: [good(E)]})
+    waits.clear()
+    stop_file = folder / "stop.csv"
+    summary = levels.label_posts(posts[:3], stop_file, fake, settings_path=record("stop"), **common)
+    asked = [text for text, _, _ in fake.asked()]
+    report.check(level_probe_rows(stop_file) == [row(0, E, "5/5")] and bool(summary["stopped"])
+                 and waits == [0.25, 0.25] and asked == [texts[0]] * 5 + [texts[1]] * 5 and texts[2] not in asked,
+                 "level pre-labels, fake model: when the server cannot be reached the run waits and tries twice more, "
+                 "then stops the whole run; that post is not written (although two samples were answered) and no "
+                 "later post is asked", f"rows {level_probe_rows(stop_file)}, stopped {summary['stopped']!r}, waits "
+                 f"{waits}, asked {len(asked)}")
+    fake = LevelFake({texts[0]: [good(E)], texts[1]: [good(E), levels.ServerUnavailable, good(E)], texts[2]: [good(E)]})
+    waits.clear()
+    outage_file = folder / "outage.csv"
+    summary = levels.label_posts(posts[:3], outage_file, fake, settings_path=record("outage"), **common)
+    report.check(level_probe_rows(outage_file) == [row(0, E, "5/5"), row(1, E, "5/5"), row(2, E, "5/5")]
+                 and summary["stopped"] is None and waits == [0.25],
+                 "level pre-labels, fake model: after a short outage the same sample is asked again and the run goes on",
+                 f"rows {level_probe_rows(outage_file)}, waits {waits}")
+
+    # Resuming: --limit, a second run, a partial last line.
+    alike = {text: [good(E)] for text in texts}
+    resume_file = folder / "resume.csv"
+    levels.label_posts(posts, resume_file, LevelFake(alike), settings_path=record("resume"), limit=2, **common)
+    after_limit = [item[0] for item in level_probe_rows(resume_file)]
+    fake = LevelFake(alike)
+    summary = levels.label_posts(posts, resume_file, fake, settings_path=record("resume"), **common)
+    resumed = level_probe_rows(resume_file)
+    report.check(after_limit == ids[:2] and resumed == [row(index, E, "5/5") for index in range(9)]
+                 and sorted(set(text for text, _, _ in fake.asked())) == sorted(texts[2:])
+                 and summary["already_in_file"] == 2,
+                 "level pre-labels, resume: --limit 2 labels two posts; the next run skips them (they are not asked "
+                 "again) and appends the others, each id once",
+                 f"after --limit {after_limit}; then {[item[0] for item in resumed]}")
+    raw = resume_file.read_bytes()
+    resume_file.write_bytes(raw[:-7])  # a run stopped while writing: the last line loses its end
+    fake = LevelFake(alike)
+    summary = levels.label_posts(posts, resume_file, fake, settings_path=record("resume"), **common)
+    report.check(level_probe_rows(resume_file) == resumed and resume_file.read_bytes() == raw
+                 and summary["dropped_partial_line_bytes"] == len(raw.split(b"\n")[-2]) - 6
+                 and [text for text, _, _ in fake.asked()] == [texts[8]] * 5,
+                 "level pre-labels, resume: a partial last line is dropped and that post labelled again; the file ends "
+                 "as it would have", f"dropped {summary['dropped_partial_line_bytes']} bytes, asked {len(fake.requests)}")
+
+    # --retry-unparsed: only unparsed rows, in place; a disputed result replaces, unparsed again stays.
+    retry_file = folder / "retry.csv"
+    fake = LevelFake({texts[0]: [bad], texts[1]: [good(E), good(E), good(P), good(P), good(S)], texts[2]: [bad],
+                      texts[3]: [good(E)]})
+    levels.label_posts(posts[:4], retry_file, fake, settings_path=record("retry"), **common)
+    before = level_probe_rows(retry_file)
+    fake = LevelFake({texts[0]: [good(P), good(P), good(S), good(S), good(E)], texts[2]: [bad]})
+    summary = levels.label_posts(posts[:4], retry_file, fake, settings_path=record("retry"), retry_unparsed=True,
+                                 **common)
+    after = level_probe_rows(retry_file)
+    report.check(before == [row(0, "unparsed", "0/0"), row(1, "disputed", "2/5"), row(2, "unparsed", "0/0"),
+                            row(3, E, "5/5")]
+                 and after == [row(0, "disputed", "2/5"), row(1, "disputed", "2/5"), row(2, "unparsed", "0/0"),
+                               row(3, E, "5/5")]
+                 and sorted(set(text for text, _, _ in fake.asked())) == sorted([texts[0], texts[2]])
+                 and summary["replaced"] == 1 and not list(folder.glob(".*.tmp")),
+                 "level pre-labels: --retry-unparsed asks only the unparsed rows (never disputed ones); a new result "
+                 "that is not unparsed (disputed too) replaces its row in place, unparsed again leaves it; same row "
+                 "count and order, no temporary file left", f"before {before}; after {after}")
+
+    # Files that must stop the run before anything is asked or written.
+    wrong = []
+    for what, column, value in (("prompt version", 4, "v0"), ("model", 3, "another:1b")):
+        mixed = folder / "mixed.csv"
+        changed = [item[:column] + [value] + item[column + 1:] for item in level_probe_rows(first_file)]
+        mixed.write_bytes(levels.csv_bytes([LEVEL_COLUMNS] + changed))
+        before_bytes = mixed.read_bytes()
+        fake = LevelFake({})
+        message = level_stops(levels.label_posts, posts, mixed, fake, settings_path=record("mixed"), **common)
+        if message is None or mixed.read_bytes() != before_bytes or fake.requests:
+            wrong.append(what)
+        record("mixed").unlink(missing_ok=True)
+    report.check(not wrong, "level pre-labels: an existing file from another prompt version or another model stops "
+                 "the run before anything is asked or written", f"not stopped: {wrong}")
+
+    # The settings record.
+    problems = []
+    settings_file = folder / "settings.csv"
+    levels.label_posts(posts[:2], settings_file, LevelFake(alike), settings_path=record("settings"), samples=3,
+                       min_votes=2, **common)
+    stored = json.loads(record("settings").read_text(encoding="utf-8"))
+    if stored.get("samples") != 3 or stored.get("seed") != 100 or stored.get("min_votes") != 2:
+        problems.append(f"the record holds {stored}")
+    seeded = {**common, "seed": 7}
+    for what, options, word in (("seed", {**seeded, "samples": 3, "min_votes": 2}, "seed"),
+                                ("samples", {**common, "samples": 5, "min_votes": 3}, "samples")):
+        before_bytes = settings_file.read_bytes()
+        fake = LevelFake(alike)
+        message = level_stops(levels.label_posts, posts, settings_file, fake, settings_path=record("settings"),
+                              **options)
+        if message is None or word not in message or fake.requests or settings_file.read_bytes() != before_bytes:
+            problems.append(f"another {what} did not stop the run naming it ({message!r})")
+    record("five").unlink(missing_ok=True)
+    five_file = folder / "five.csv"
+    levels.label_posts(posts[:2], five_file, LevelFake(alike), settings_path=record("five"), **common)
+    record("five").unlink()
+    fake = LevelFake(alike)
+    message = level_stops(levels.label_posts, posts, five_file, fake, settings_path=record("five"), samples=3,
+                          min_votes=2, **common)
+    if message is None or "samples" not in message or fake.requests:
+        problems.append(f"rows with more votes than --samples did not stop the run without a record ({message!r})")
+    logged.clear()
+    fake = LevelFake(alike)
+    levels.label_posts(posts[:3], five_file, fake, settings_path=record("five"), **common)
+    if not any(text.startswith("warning") for text in logged) or not record("five").is_file() \
+            or [text for text, _, _ in fake.asked()] != [texts[2]] * 5:
+        problems.append("rows without a settings record must give a warning, go on and write the record")
+    fresh = folder / "fresh.csv"
+    levels.label_posts(posts[:1], fresh, LevelFake(alike), settings_path=record("settings"), samples=5, min_votes=3,
+                       **common)
+    if json.loads(record("settings").read_text(encoding="utf-8")).get("samples") != 5:
+        problems.append("a new, empty output file must take this run's settings")
+    paths = {"a": levels.settings_record_path(LEVEL_PROBE_DIR / "a" / "out.csv"),
+             "b": levels.settings_record_path(LEVEL_PROBE_DIR / "b" / "out.csv"),
+             "full": levels.settings_record_path(REPO_DIR / LEVEL_FULL_FILE),
+             "outside": levels.settings_record_path(REPO_DIR.parent / "elsewhere" / "out.csv")}
+    if paths["a"] == paths["b"] or paths["full"] != REPO_DIR / levels.SETTINGS_DIR / \
+            "labels__levels-prelabel-v1.csv.settings.json" \
+            or not re.fullmatch(r"[0-9a-f]{16}\.settings\.json", paths["outside"].name) \
+            or any(path.parent != REPO_DIR / levels.SETTINGS_DIR for path in paths.values()):
+        problems.append(f"settings record paths {paths}")
+    for samples, min_votes in ((5, 2), (5, 6), (3, 1), (0, 0), (4, 2), (2, 1)):
+        target = folder / "never.csv"
+        if level_stops(levels.label_posts, posts, target, LevelFake(alike), settings_path=record("never"),
+                       samples=samples, min_votes=min_votes, **common) is None or target.exists():
+            problems.append(f"--samples {samples} with --min-votes {min_votes} was accepted")
+    for samples, min_votes in ((5, 3), (5, 5), (3, 2), (1, 1), (4, 3)):
+        if level_stops(levels.check_votes, samples, min_votes) is not None:
+            problems.append(f"--samples {samples} with --min-votes {min_votes} was refused")
+    records_after = sorted(path.name for path in records.glob("*")) if records.is_dir() else []
+    if records_after != records_before:
+        problems.append(f"{levels.SETTINGS_DIR} changed: {sorted(set(records_after) ^ set(records_before))}")
+    report.check(not problems, "level pre-labels: the settings record of a file holds the seed, the samples and the "
+                 "votes; another seed or number of samples on a file with rows stops the run and names it; rows with "
+                 "more votes than --samples stop the run even without a record; rows without a record give a warning "
+                 "and a new record; an empty file takes the new settings; two files with the same name in two folders "
+                 "have two records, under data/prelabel/ (outside the repository: a hash of the path); --min-votes must "
+                 "be more than half of --samples and at most --samples; the probes leave data/prelabel/ unchanged",
+                 "; ".join(problems))
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def run_level_check_file(*args):
+    """check-file in this process: (exit code, standard output, standard error)."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = levels.main(["check-file", *[str(arg) for arg in args]])
+    return code, out.getvalue(), err.getvalue()
+
+
+LEVEL_GOOD_ROWS = [  # a label file that passes check-file with --samples 5 --min-votes 3
+    ["tim:10", "assets_dividends", "5/5", "qwen2.5:7b", "v1", "0a1b2c3d"],
+    ["tim:11", "earnings", "4/5", "qwen2.5:7b", "v1", "1a1b2c3d"],
+    ["tim:12", "revenue_business", "3/4", "qwen2.5:7b", "v1", "2a1b2c3d"],
+    ["tim:13", "price_chart", "3/5", "qwen2.5:7b", "v1", "3a1b2c3d"],
+    ["tim:14", "story_macro", "5/5", "qwen2.5:7b", "v1", "4a1b2c3d"],
+    ["tim:15", "emotion_only", "5/5", "qwen2.5:7b", "v1", "5a1b2c3d"],
+    ["tim:16", "none", "5/5", "qwen2.5:7b", "v1", "6a1b2c3d"],
+    ["tim:17", "disputed", "2/5", "qwen2.5:7b", "v1", "7a1b2c3d"],
+    ["tim:18", "unparsed", "0/0", "qwen2.5:7b", "v1", "8a1b2c3d"],
+    ["tim:19", "earnings", "5/5", "qwen2.5:7b", "v1", "9a1b2c3d"],
+]
+LEVEL_THREE_ROWS = [  # labelled with 3 samples, except the last row, which counts 4 valid votes
+    ["tim:20", "earnings", "3/3", "qwen2.5:7b", "v1", "aa1b2c3d"],
+    ["tim:21", "story_macro", "2/3", "qwen2.5:7b", "v1", "ab1b2c3d"],
+    ["tim:22", "disputed", "1/3", "qwen2.5:7b", "v1", "ac1b2c3d"],
+    ["tim:23", "unparsed", "0/0", "qwen2.5:7b", "v1", "ad1b2c3d"],
+    ["tim:24", "earnings", "3/4", "qwen2.5:7b", "v1", "ae1b2c3d"],
+]
+LEVEL_GOOD_REVIEW = [["tim:10", "assets_dividends", "assets_dividends"], ["tim:11", "earnings", ""],
+                     ["tim:12", "revenue_business", "none"], ["tim:13", "price_chart", ""],
+                     ["tim:14", "story_macro", "emotion_only"], ["tim:15", "emotion_only", ""]]
+
+
+def changed_rows(rows, line, column, value):
+    """A copy of the rows with one cell changed; line counts as in the file (the first row is line 2)."""
+    copy_rows = [list(item) for item in rows]
+    copy_rows[line - 2][column] = value
+    return copy_rows
+
+
+def check_levels_check_file(report):
+    """check-file on the sample, on good files and on one broken file per way of breaking; and that nothing written
+    under labels/ or samples/ can get a carriage return."""
+    folder = LEVEL_PROBE_DIR / "check-file"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    script = REPO_DIR / "scripts" / "prelabel_levels.py"
+    result = subprocess.run([sys.executable, str(script), "check-file", LEVEL_SAMPLE_FILE, "--samples",
+                             str(LEVEL_SAMPLE_SAMPLES), "--min-votes", str(LEVEL_SAMPLE_MIN_VOTES)],
+                            capture_output=True, text=True, timeout=120, cwd=REPO_DIR)
+    report.check(result.returncode == 0 and result.stdout.startswith("ok: ") and "rows; per label" in result.stdout,
+                 f"level pre-labels: check-file {LEVEL_SAMPLE_FILE} --samples {LEVEL_SAMPLE_SAMPLES} --min-votes "
+                 f"{LEVEL_SAMPLE_MIN_VOTES} (in its own process) passes and prints the summary",
+                 f"exit {result.returncode}, {result.stdout.strip()[:300]!r} {result.stderr.strip()[:300]!r}")
+    if result.returncode == 0:
+        report.info(result.stdout.strip())
+
+    good_labels = folder / "labels.csv"
+    good_labels.write_bytes(levels.csv_bytes([LEVEL_COLUMNS] + LEVEL_GOOD_ROWS))
+    good_review = folder / "review.csv"
+    good_review.write_bytes(levels.csv_bytes([LEVEL_REVIEW_COLUMNS] + LEVEL_GOOD_REVIEW))
+    plain = run_level_check_file(good_labels, "--samples", 5, "--min-votes", 3)
+    review_alone = subprocess.run([sys.executable, str(script), "check-file", str(good_review)], capture_output=True,
+                                  text=True, timeout=120)
+    review_with = run_level_check_file(good_review, "--labels", good_labels)
+    report.check(plain[0] == 0 and review_alone.returncode == 0 and "human_label filled in 3" in review_alone.stdout
+                 and review_with[0] == 0,
+                 "level pre-labels: check-file passes a good label file (every label, disputed and unparsed) with "
+                 "--samples 5 --min-votes 3, and a good review table (filled and empty human_label) alone and with "
+                 "--labels", f"{plain}; {review_alone.returncode} {review_alone.stdout.strip()!r} "
+                 f"{review_alone.stderr.strip()!r}; {review_with}")
+
+    header = LEVEL_COLUMNS
+    good_bytes = levels.csv_bytes([header] + LEVEL_GOOD_ROWS)
+    broken_labels = [  # (what, file bytes, options, text the error must contain)
+        ("a column missing", levels.csv_bytes([header[:-1]] + [item[:-1] for item in LEVEL_GOOD_ROWS]), [], "line 1"),
+        ("columns in another order", levels.csv_bytes([header[1:2] + header[:1] + header[2:]] + LEVEL_GOOD_ROWS), [],
+         "line 1"),
+        ("a label that is not one of the nine values",
+         levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 4, 1, "growth")), [], "line 4, column level"),
+        ("votes 5", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 5, 2, "5")), [], "line 5, column votes"),
+        ("votes 6/5", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 6, 2, "6/5")), [], "line 6, column votes"),
+        ("0/0 with a label", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 7, 2, "0/0")), [],
+         "line 7, column votes"),
+        ("2/5 with a label", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 3, 2, "2/5")), [],
+         "line 3, column votes"),
+        ("1/0", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 8, 2, "1/0")), [], "line 8, column votes"),
+        ("unparsed with 1/3", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 10, 2, "1/3")), [],
+         "line 10, column votes"),
+        ("disputed with 0/3", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 9, 2, "0/3")), [],
+         "line 9, column votes"),
+        ("an id that is not tim:<number>", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 2, 0, "tim:x1")),
+         [], "line 2, column post_id"),
+        ("an id twice", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 11, 0, "tim:12")), [],
+         "line 11, column post_id"),
+        ("a fingerprint of 7 digits", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 5, 5, "0a1b2c3")), [],
+         "line 5, column text_hash"),
+        ("a fingerprint in upper case", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 6, 5, "0A1B2C3D")),
+         [], "line 6, column text_hash"),
+        ("two model names", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 7, 3, "llama3:8b")), [],
+         "line 7, column model"),
+        ("two prompt versions", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 8, 4, "v2")), [],
+         "line 8, column prompt_version"),
+        ("no newline at the end", good_bytes[:-1], [], f"line {len(LEVEL_GOOD_ROWS) + 1}"),
+        ("a carriage return", good_bytes.replace(b"\n", b"\r\n"), [], "carriage return"),
+        ("a BOM at the start", levels.BOM + good_bytes, [], "BOM"),
+        ("4 valid votes with --samples 3", levels.csv_bytes([header] + LEVEL_THREE_ROWS), ["--samples", 3],
+         "line 6, column votes"),
+        ("earnings 2/3 with --min-votes 3", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 3, 2, "2/3")),
+         ["--min-votes", 3], "line 3, column votes"),
+        ("disputed 3/5 with --min-votes 3", levels.csv_bytes([header] + changed_rows(LEVEL_GOOD_ROWS, 9, 2, "3/5")),
+         ["--min-votes", 3], "line 9, column votes"),
+    ]
+    review_header = LEVEL_REVIEW_COLUMNS
+    broken_reviews = [
+        ("prelabel none", levels.csv_bytes([review_header] + changed_rows(LEVEL_GOOD_REVIEW, 3, 1, "none")), [],
+         "line 3, column prelabel"),
+        ("human_label not one of the seven",
+         levels.csv_bytes([review_header] + changed_rows(LEVEL_GOOD_REVIEW, 4, 2, "disputed")), [],
+         "line 4, column human_label"),
+        ("an id twice", levels.csv_bytes([review_header] + changed_rows(LEVEL_GOOD_REVIEW, 5, 0, "tim:10")), [],
+         "line 5, column post_id"),
+        ("with --labels, an id not in the label file",
+         levels.csv_bytes([review_header] + changed_rows(LEVEL_GOOD_REVIEW, 6, 0, "tim:99")), ["--labels", good_labels],
+         "line 6, column post_id"),
+        ("with --labels, another prelabel than the label file",
+         levels.csv_bytes([review_header] + changed_rows(LEVEL_GOOD_REVIEW, 7, 1, "story_macro")),
+         ["--labels", good_labels], "line 7, column prelabel"),
+        ("a header that is neither",
+         levels.csv_bytes([review_header + ["text"]] + [item + ["x"] for item in LEVEL_GOOD_REVIEW]), [],
+         "cannot tell what kind of file"),
+    ]
+    missed = []
+    for what, data, options, expected in broken_labels + broken_reviews:
+        path = folder / "broken.csv"
+        path.write_bytes(data)
+        code, out, err = run_level_check_file(path, *options)
+        if code == 0 or expected not in err:
+            missed.append(f"{what} (exit {code}, {err.strip()[:200]!r})")
+        else:
+            report.info(f"check-file, {what}: {[line.strip() for line in err.splitlines() if expected in line][0]}")
+        path.unlink()
+    report.check(not missed, f"level pre-labels: check-file refuses each of {len(broken_labels)} broken label files "
+                 "(header, label, votes 5, 6/5, 0/0 and 2/5 with a label, 1/0, unparsed 1/3, disputed 0/3, id, repeated "
+                 "id, fingerprint of 7 digits or in upper case, two models, two prompt versions, no newline at the end, "
+                 "carriage returns, a BOM, --samples, --min-votes) and "
+                 f"{len(broken_reviews)} broken review tables (prelabel none, human_label, repeated id, --labels twice, "
+                 "an unknown header), each with a non-zero exit and the line", "; ".join(missed))
+
+    source = (REPO_DIR / "scripts" / "prelabel_levels.py").read_text(encoding="utf-8")
+    saved = os.linesep
+    carriage = []
+    try:
+        os.linesep = "\r\n"  # as on Windows; files written by the script must still have LF only
+        output = folder / "linesep.csv"
+        posts = [{"post_id": f"tim:{row}", "text": f"line ending probe {row}"} for row in range(6)]
+        levels.label_posts(posts, output, LevelFake({}), settings_path=folder / "linesep.settings.json",
+                           log=lambda text: None, sleep=lambda seconds: None)
+        review = folder / "linesep-review.csv"
+        labels_file = folder / "linesep-labels.csv"
+        labels_file.write_bytes(good_bytes)
+        levels.write_review_template(labels_file, review, size=4)
+        carriage = [path.name for path in (output, review, folder / "linesep.settings.json")
+                    if b"\r" in path.read_bytes()]
+    finally:
+        os.linesep = saved
+    report.check("to_csv(" not in source and not carriage,
+                 "level pre-labels: the script never writes a CSV with pandas (no to_csv( in its source), and with "
+                 "os.linesep set to CRLF the label file, the review table and the settings record are written with "
+                 "LF only", f"to_csv in the source {'to_csv(' in source}; files with a carriage return {carriage}")
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def check_levels_sample_file(report):
+    """The committed sample label file (static)."""
+    path = REPO_DIR / LEVEL_SAMPLE_FILE
+    if not report.check(path.is_file(), f"level pre-labels: {LEVEL_SAMPLE_FILE} exists"):
+        return
+    kind, rows, problems, summary = levels.file_report(path, LEVEL_SAMPLE_SAMPLES, LEVEL_SAMPLE_MIN_VOTES)
+    models = sorted({item[3] for item in rows if len(item) == len(LEVEL_COLUMNS)})
+    versions = sorted({item[4] for item in rows if len(item) == len(LEVEL_COLUMNS)})
+    report.check(kind == "label file" and not problems and len(rows) > 0 and models == [LEVEL_DEFAULT_MODEL]
+                 and versions == [levels.PROMPT_VERSION],
+                 f"level pre-labels: {LEVEL_SAMPLE_FILE} passes check-file with --samples {LEVEL_SAMPLE_SAMPLES} "
+                 f"--min-votes {LEVEL_SAMPLE_MIN_VOTES}, has rows, the model {LEVEL_DEFAULT_MODEL} and prompt "
+                 f"{levels.PROMPT_VERSION} only (so no text of any post can be in it)",
+                 f"kind {kind}; problems {problems[:3]}; {len(rows)} rows; models {models}; versions {versions}")
+    report.info(f"{LEVEL_SAMPLE_FILE}: {summary}")
+
+
+def check_levels_env(report):
+    """scripts/env.sh finds the virtual environment's Python on macOS and Linux, and in Git Bash on Windows."""
+    folder = ENV_PROBE_DIR
+    shutil.rmtree(folder, ignore_errors=True)
+    fake_repo = folder / "repo"
+    (fake_repo / "scripts").mkdir(parents=True)
+    shutil.copyfile(REPO_DIR / "scripts" / "env.sh", fake_repo / "scripts" / "env.sh")
+    environment = {key: value for key, value in os.environ.items() if key != "EYES_PYTHON"}
+
+    def found(preset=None):
+        extra = {} if preset is None else {"EYES_PYTHON": preset}
+        result = subprocess.run(["bash", "-c", 'source "$1" && printf "%s" "$EYES_PYTHON"', "probe",
+                                 str(fake_repo / "scripts" / "env.sh")], capture_output=True, text=True, timeout=60,
+                                env={**environment, **extra})
+        return result.stdout if result.returncode == 0 else f"exit {result.returncode}: {result.stderr.strip()}"
+
+    def touch(relative):
+        path = fake_repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+        path.chmod(0o755)
+
+    windows, unix = fake_repo / ".venv" / "Scripts" / "python.exe", fake_repo / ".venv" / "bin" / "python"
+    touch(".venv/Scripts/python.exe")
+    only_windows = found()
+    touch(".venv/bin/python")
+    both = found()
+    preset = found("/somewhere/else/python")
+    report.check(only_windows == str(windows) and both == str(unix) and preset == "/somewhere/else/python",
+                 "level pre-labels: scripts/env.sh uses .venv/Scripts/python.exe when only that exists (Git Bash on "
+                 "Windows), .venv/bin/python when both exist, and an EYES_PYTHON set beforehand as it is",
+                 f"only Scripts {only_windows!r}; both {both!r}; preset {preset!r}")
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def check_levels_requirements(report):
+    """requirements-prelabel.txt pins exactly the five packages with the pins of requirements.txt; .gitattributes keeps
+    LF line endings (static)."""
+    short = REPO_DIR / "requirements-prelabel.txt"
+    full_lines = {line.strip() for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines()}
+    lines = [line.strip() for line in short.read_text(encoding="utf-8").splitlines()
+             if line.strip() and not line.strip().startswith("#")] if short.is_file() else []
+    names = sorted(normalise(line.split("==")[0]) for line in lines)
+    not_in_full = [line for line in lines if line not in full_lines or "==" not in line]
+    report.check(short.is_file() and not not_in_full and names == sorted(LEVEL_PRELABEL_PACKAGES),
+                 "level pre-labels: requirements-prelabel.txt pins exactly pandas, numpy, pyarrow, huggingface_hub and "
+                 "fsspec, each line exactly as in requirements.txt",
+                 f"packages {names}; lines not in requirements.txt {not_in_full}")
+    attributes = REPO_DIR / ".gitattributes"
+    rules = {line.split("#")[0].strip() for line in attributes.read_text(encoding="utf-8").splitlines()} \
+        if attributes.is_file() else set()
+    missing = [pattern for pattern in LEVEL_LF_PATTERNS if f"{pattern} text eol=lf" not in rules]
+    report.check(attributes.is_file() and not missing,
+                 "level pre-labels: .gitattributes checks out " + ", ".join(LEVEL_LF_PATTERNS) + " with LF line endings",
+                 f"missing {missing}")
+
+
+def level_review_draw(rows, size, seed):
+    """The documented review draw, written here apart from the script: for every level (ladder order) its ids in file
+    order shuffled with random.Random(seed); then the levels in turn, one id each per round, a level with none left
+    skipped, until size ids are drawn or none are left. none, unparsed and disputed rows never take part."""
+    queues = []
+    for label in LEVEL_SIX:
+        ids = [item[0] for item in rows if item[1] == label]
+        random.Random(seed).shuffle(ids)
+        queues.append([(post_id, label) for post_id in ids])
+    in_turn = [pair for round_ in itertools.zip_longest(*queues) for pair in round_ if pair is not None]
+    return in_turn[:size]
+
+
+def check_levels_full(report):
+    """The level pre-label files against the dataset (full check): the sample, and the full file and the review table
+    when they are there; prints the numbers."""
+    try:
+        table, where = levels.load_table()
+    except levels.Stop as exc:
+        report.check(False, "level pre-labels: the dataset is available to compare the label files with", str(exc))
+        return
+    posts = levels.posts_from_table(table)
+    text_by_id = {post["post_id"]: post["text"] for post in posts}
+    selection, summary, steps = levels.select_posts(posts)
+    order = [post["post_id"] for post in selection]
+    print(f"\nLevel pre-labels (compared with {where})")
+    print(f"  dataset rows: {len(table)}   columns {list(table.columns)}   empty texts left out "
+          f"{summary['empty_texts_left_out']}   repeated texts left out {summary['repeated_texts_left_out']}")
+    print(f"  default draw: {summary['selected']} posts, per step {json.dumps(summary['taken_per_step'])}, "
+          f"fingerprint {summary['fingerprint']}")
+    found = levels.examples_in_dataset(post["text"] for post in posts)
+    report.check(not found, "level pre-labels: none of the prompt's hand-written examples is a post of the dataset "
+                 "(stripped, lower case)", f"found {found}")
+
+    def compare(relative, rows):
+        missing = [item[0] for item in rows if item[0] not in text_by_id]
+        changed = [item[0] for item in rows if item[0] in text_by_id and own_text_hash(text_by_id[item[0]]) != item[5]]
+        return missing, changed
+
+    sample_rows = levels.file_report(REPO_DIR / LEVEL_SAMPLE_FILE)[1] if (REPO_DIR / LEVEL_SAMPLE_FILE).is_file() else []
+    missing, changed = compare(LEVEL_SAMPLE_FILE, sample_rows)
+    ids = [item[0] for item in sample_rows]
+    report.check(bool(sample_rows) and not missing and not changed and set(ids) == set(order[:len(ids)]),
+                 f"level pre-labels: every id of {LEVEL_SAMPLE_FILE} is a post of the dataset with that post's "
+                 "fingerprint, and its ids are exactly the first posts of the default processing order",
+                 f"{len(ids)} rows; {len(missing)} ids missing {missing[:3]}; {len(changed)} other texts {changed[:3]}; "
+                 f"not among the first {len(ids)}: {sorted(set(ids) - set(order[:len(ids)]))[:3]}")
+
+    full_path = REPO_DIR / LEVEL_FULL_FILE
+    if not full_path.is_file():
+        print(LEVEL_FULL_SKIPPED)
+    else:
+        kind, rows, problems, file_summary = levels.file_report(full_path)
+        missing, changed = compare(LEVEL_FULL_FILE, rows)
+        outside = [item[0] for item in rows if item[0] not in steps]
+        report.check(kind == "label file" and not problems and not missing and not changed and not outside,
+                     f"level pre-labels: {LEVEL_FULL_FILE} passes check-file, every id is a post of the dataset in the "
+                     "default draw and every fingerprint that of its text",
+                     f"problems {problems[:3]}; {len(missing)} ids missing {missing[:3]}; {len(changed)} other texts "
+                     f"{changed[:3]}; {len(outside)} not in the default draw {outside[:3]}")
+        print(f"  {LEVEL_FULL_FILE}: {file_summary}")
+        print("  label              rows   share   " + "   ".join(f"{name[:9]:>9s}" for name in LEVEL_SIX[:3] + ["random"]))
+        by_step = Counter((item[1], steps.get(item[0])) for item in rows)
+        for label in LEVEL_LABELS + LEVEL_FAILURES:
+            count = sum(item[1] == label for item in rows)
+            print(f"  {label:17s} {count:5d}   {count / len(rows) if rows else 0:5.1%}   "
+                  + "   ".join(f"{by_step[(label, step)]:9d}" for step in LEVEL_SIX[:3] + ["random"]))
+        per_step = Counter(steps.get(item[0]) for item in rows)
+        print("  rows per step of the draw: " + json.dumps({step: per_step.get(step, 0)
+                                                            for step in LEVEL_SIX[:3] + ["random"]}))
+        natural = Counter(item[1] for item in rows if steps.get(item[0]) == "random")
+        print("  random part only (the natural shares): "
+              + json.dumps({label: natural.get(label, 0) for label in LEVEL_LABELS + LEVEL_FAILURES}))
+        print("  votes: " + json.dumps(dict(sorted(Counter(item[2] for item in rows).items(),
+                                                   key=lambda pair: (-pair[1], pair[0])))))
+    review_path = REPO_DIR / LEVEL_REVIEW_FILE
+    if not review_path.is_file() or not full_path.is_file():
+        print(LEVEL_REVIEW_SKIPPED if not review_path.is_file() else
+              f"level pre-labels: {LEVEL_REVIEW_FILE} found without {LEVEL_FULL_FILE}")
+        if review_path.is_file():
+            report.check(False, f"level pre-labels: {LEVEL_REVIEW_FILE} comes with {LEVEL_FULL_FILE}")
+        return
+    kind, review_rows, problems, review_summary = levels.file_report(review_path, labels_path=full_path)
+    expected = level_review_draw(levels.file_report(full_path)[1], LEVEL_DEFAULTS["DEFAULT_REVIEW_SIZE"],
+                                 LEVEL_DEFAULTS["DEFAULT_SEED"])
+    same = [(item[0], item[1]) for item in review_rows] == expected
+    report.check(kind == "review table" and not problems and same,
+                 f"level pre-labels: {LEVEL_REVIEW_FILE} passes check-file with --labels {LEVEL_FULL_FILE} and is "
+                 "exactly the documented draw (six levels in turn, seed 42), row by row",
+                 f"problems {problems[:3]}; same draw {same}")
+    print(f"  {LEVEL_REVIEW_FILE}: {review_summary}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -6747,6 +7658,7 @@ def quick(report, defaults, others, overrides, rules=None, built_in=None):
 
 
 def full(report, defaults, overrides, rules=None, built_in=None):
+    check_levels_full(report)
     parameters = {"DATA_SOURCE": FULL_SOURCE, "EMOTION_LABELS_SOURCE": PRELABEL_FULL_FILE, **DATED_FULL_SETTINGS,
                   **overrides}
     parameters = panel_settings(report, "full run", parameters, overrides)
@@ -6854,6 +7766,15 @@ def main():
     check_prelabel_reading(report)
     check_prelabel_fake_model(report)
     check_prelabel_files(report)
+    check_levels_interface(report)
+    check_levels_prompt(report)
+    check_levels_hosts(report)
+    check_levels_draw(report)
+    check_levels_fake_model(report)
+    check_levels_check_file(report)
+    check_levels_sample_file(report)
+    check_levels_env(report)
+    check_levels_requirements(report)
     check_emotion_switches(report, defaults, others)
     check_emotion_epochs_switch(report, defaults, others)
     check_emotion_chapter(report)
