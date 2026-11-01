@@ -6674,7 +6674,7 @@ LEVEL_FAILURES = ["unparsed", "disputed"]  # no vote at all; too few votes for t
 LEVEL_COLUMNS = ["post_id", "level", "votes", "model", "prompt_version", "text_hash"]  # label files, in order
 LEVEL_REVIEW_COLUMNS = ["post_id", "prelabel", "human_label"]  # review table, in order
 LEVEL_DEFAULT_MODEL = "qwen2.5:7b"
-LEVEL_FULL_FILE = "labels/levels-prelabel-v1.csv"
+LEVEL_FULL_FILE = "labels/levels-prelabel-v2.csv"  # the prompt version is part of the name
 LEVEL_SAMPLE_FILE = "samples/levels-prelabel-sample.csv"
 LEVEL_REVIEW_FILE = "labels/levels-review-template.csv"
 LEVEL_DEFAULTS = {"DEFAULT_REVIEW_SIZE": 200, "DEFAULT_SEED": 42, "DEFAULT_SAMPLES": 5, "DEFAULT_TEMPERATURE": 0.7,
@@ -6685,8 +6685,10 @@ LEVEL_DATASET_REVISION = "bba602698fd6f18226f6404fd8fb637ef67fa1eb"
 LEVEL_CORE_KEYWORDS = {"assets_dividends": ["dividend", "p/b", "book value"], "earnings": ["p/e", "pe ratio"],
                        "revenue_business": ["revenue"]}  # may never be removed from the keyword pools
 # SHA-256 of everything fixed that is sent to the model, per released prompt version (see level_fingerprint_of).
+# v1 (the reason the writer gives) was never used for a committed file; v2 (what the post pays attention to) is
+# the first released version.
 LEVEL_PROMPT_FINGERPRINTS = {
-    "v1": "bb2c509ade3a7caa5f688044db300c61f16e71a17bcf498dde2770a300fc4a59",
+    "v2": "3f8c06a7371553ff57b3894fbfabf2308743542c5089b226d0a40ab8ea0ce7fa",
 }
 LEVEL_SAMPLE_SAMPLES = 3  # the committed sample was labelled with 3 samples and 2 votes
 LEVEL_SAMPLE_MIN_VOTES = 2
@@ -6694,7 +6696,7 @@ LEVEL_PRELABEL_PACKAGES = ["pandas", "numpy", "pyarrow", "huggingface-hub", "fss
 LEVEL_LF_PATTERNS = ["*.sh", "*.csv", "*.py", "*.json", "*.txt", "*.md"]  # .gitattributes: text eol=lf
 LEVEL_PROBE_DIR = REPO_DIR / "data" / "checks" / "levels-probe"
 ENV_PROBE_DIR = REPO_DIR / "data" / "checks" / "env-probe"
-LEVEL_FULL_SKIPPED = ("level pre-labels: labels/levels-prelabel-v1.csv not obtained (labelled on another machine); "
+LEVEL_FULL_SKIPPED = ("level pre-labels: labels/levels-prelabel-v2.csv not obtained (labelled on another machine); "
                       "skipped")
 LEVEL_REVIEW_SKIPPED = ("level pre-labels: labels/levels-review-template.csv not obtained (labelled on another "
                         "machine); skipped")
@@ -6796,7 +6798,7 @@ def check_levels_prompt(report):
             if payload.get("format") != answer_rules:
                 problems.append(f"{name}: format {payload.get('format')}")
             messages = payload["messages"]
-            examples = [{"role": role, "content": content} for item in levels.EXAMPLES_V1
+            examples = [{"role": role, "content": content} for item in levels.EXAMPLES_V2
                         for role, content in (("user", levels.USER_PREFIX + item["post"]),
                                               ("assistant", level_answer(item["level"])))]
             if messages[0]["role"] != "system" or not messages[0]["content"].startswith(levels.system_prompt()):
@@ -6814,13 +6816,14 @@ def check_levels_prompt(report):
                             "message")
     system = levels.system_prompt()
     missing = [label for label in LEVEL_LABELS if label not in system]
-    covered = {item["level"] for item in levels.EXAMPLES_V1}
+    covered = {item["level"] for item in levels.EXAMPLES_V2}
     if missing or set(LEVEL_LABELS) - covered or covered - set(LEVEL_LABELS):
         problems.append(f"labels missing from the system message {missing}; labels without an example "
                         f"{sorted(set(LEVEL_LABELS) - covered)}; unknown example labels {sorted(covered - set(LEVEL_LABELS))}")
-    if [system.index(label) for label in LEVEL_LABELS if label in system] != sorted(
-            system.index(label) for label in LEVEL_LABELS if label in system):
-        problems.append("the system message does not list the labels in ladder order")
+    entries = [f"\n{number}. {label}: " for number, label in enumerate(LEVEL_SIX, start=1)] + [f"\n{LEVEL_LABELS[6]}: "]
+    places = [system.find(entry) for entry in entries]
+    if -1 in places or places != sorted(places):
+        problems.append("the system message does not list the labels in ladder order (1. to 6., then none)")
     report.check(not problems, "level pre-labels: a request is not streamed and has the model, the seed and the "
                  "temperature it is given, room for the longest answer and an answer format that allows only the "
                  "seven labels; the system message lists the seven labels in ladder order, then come the hand-written "
@@ -7196,7 +7199,7 @@ def check_levels_fake_model(report):
              "full": levels.settings_record_path(REPO_DIR / LEVEL_FULL_FILE),
              "outside": levels.settings_record_path(REPO_DIR.parent / "elsewhere" / "out.csv")}
     if paths["a"] == paths["b"] or paths["full"] != REPO_DIR / levels.SETTINGS_DIR / \
-            "labels__levels-prelabel-v1.csv.settings.json" \
+            "labels__levels-prelabel-v2.csv.settings.json" \
             or not re.fullmatch(r"[0-9a-f]{16}\.settings\.json", paths["outside"].name) \
             or any(path.parent != REPO_DIR / levels.SETTINGS_DIR for path in paths.values()):
         problems.append(f"settings record paths {paths}")

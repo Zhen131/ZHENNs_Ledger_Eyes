@@ -1,8 +1,8 @@
-"""Pre-label stock tweets with the level of the reason they give, through the local Ollama server.
+"""Pre-label stock tweets with the level of what they look at, through the local Ollama server.
 
-The ladder goes from the reason closest to cash to the one farthest from it: assets_dividends, earnings,
-revenue_business, price_chart, story_macro, emotion_only; none is for posts that give no investment reason. It
-measures the appetite for risk, not whether a post is bullish or bearish.
+The ladder goes from what is closest to cash to what is farthest from it: assets_dividends, earnings,
+revenue_business, price_chart, story_macro, emotion_only; none is for posts that do not talk about stocks or markets
+at all. It measures the appetite for risk, not whether a post is bullish or bearish.
 
 Run it through scripts/prelabel_levels.sh, which sets up the environment from scripts/env.sh and uses the virtual
 environment's Python:
@@ -92,7 +92,7 @@ COLUMNS = ["post_id", "level", "votes", "model", "prompt_version", "text_hash"] 
 REVIEW_COLUMNS = ["post_id", "prelabel", "human_label"]  # columns of the review table, in order
 UNPARSED = "unparsed"  # no sample gave one of the labels; means "failed", not a level
 DISPUTED = "disputed"  # the most frequent label has fewer votes than --min-votes; not a level
-NONE = "none"  # no investment reason; a label, but not a level
+NONE = "none"  # not about stocks or markets at all; a label, but not a level
 POST_ID_PATTERN = re.compile(r"tim:(0|[1-9][0-9]*)")
 VOTES_PATTERN = re.compile(r"(0|[1-9][0-9]*)/(0|[1-9][0-9]*)")
 HASH_PATTERN = re.compile(r"[0-9a-f]{8}")
@@ -127,14 +127,15 @@ def keywords_fingerprint():
     return hashlib.sha256(text.encode("ascii")).hexdigest()[:16]
 
 
-# ---------------------------------------------------------------- prompt, version v1
+# ---------------------------------------------------------------- prompt, version v2
 # Everything sent to the model except the post itself is fixed by the prompt version. The checks pin the
-# fingerprint of version v1 (prompt_fingerprint); changing one character of the texts below, the examples or the
+# fingerprint of version v2 (prompt_fingerprint); changing one character of the texts below, the examples or the
 # answer format needs a new version, a new label file and a new pinned fingerprint. The prompt lives only here,
-# never in a separate file, so that line endings cannot change it.
+# never in a separate file, so that line endings cannot change it. Version v1 asked for the reason the writer gives;
+# it was never used for a committed file and is gone. Version v2 asks what the post pays attention to.
 
-PROMPT_VERSION = "v1"
-LEVELS_V1 = [
+PROMPT_VERSION = "v2"
+LEVELS_V2 = [
     {"name": "assets_dividends",
      "meaning": "net assets and dividends: price to book (P/B), book value, trading below book value, net assets, "
                 "the balance sheet, dividends, dividend yield, payouts"},
@@ -145,22 +146,23 @@ LEVELS_V1 = [
      "meaning": "revenue and the business: price to sales (P/S), revenue, revenue growth, sales, deliveries, units "
                 "sold, users or subscribers, orders, products, how the business is going"},
     {"name": "price_chart",
-     "meaning": "the chart: the price itself, its trend, breakouts, support, resistance, moving averages, RSI, "
-                "volume, turnover, candlestick patterns"},
+     "meaning": "the chart: the price itself or a price level, its trend, breakouts, support, resistance, moving "
+                "averages, RSI, volume, turnover, candlestick patterns"},
     {"name": "story_macro",
      "meaning": "a story: news, analyst ratings and price targets, policy, interest rates, inflation, big industry "
                 "trends, narratives such as a new technology that will change the world"},
     {"name": "emotion_only",
-     "meaning": "emotion only: a position or a feeling without any reason, such as to the moon, it is over, "
-                "just buy"},
+     "meaning": "emotion only: the post talks about a stock or the market but only takes a position, shows a "
+                "feeling or waits, without anything of levels 1 to 5, such as to the moon, it is over, just buy, "
+                "holding on"},
     {"name": "none",
-     "meaning": "no investment reason: only a link, only a mention of someone, chat that has nothing to do with "
-                "investing, or a post that cannot be read"},
+     "meaning": "not about stocks or markets at all: small talk, adverts for airdrops or giveaways, only mentions "
+                "of people and links, or a post that cannot be read"},
 ]
-LEVEL_NAMES = [item["name"] for item in LEVELS_V1]  # the seven labels, closest to cash first, none last
+LEVEL_NAMES = [item["name"] for item in LEVELS_V2]  # the seven labels, closest to cash first, none last
 SIX_LEVELS = LEVEL_NAMES[:6]  # the levels of the ladder (none is not a level)
 # Hand-written examples, at least one per label; none of them is a post of the dataset (checked before labelling).
-EXAMPLES_V1 = [
+EXAMPLES_V2 = [
     {"post": "$KLMN pays a 5% dividend and trades below book value, I keep adding on dips", "level": "assets_dividends"},
     {"post": "balance sheet has more cash than the whole market cap, net assets alone justify the price",
      "level": "assets_dividends"},
@@ -178,6 +180,9 @@ EXAMPLES_V1 = [
     {"post": "sold everything, this market is finished, never again", "level": "emotion_only"},
     {"post": "@marketfriend haha see you at lunch", "level": "none"},
     {"post": "who is watching the game tonight?", "level": "none"},
+    {"post": "$HJKL q3 earnings call tomorrow after the close", "level": "earnings"},
+    {"post": "$NBVC patience, just waiting for it to get back to .15", "level": "price_chart"},
+    {"post": "free airdrop for the first 500 wallets, follow and retweet to join #giveaway", "level": "none"},
 ]
 USER_PREFIX = "Post:\n"  # put in front of every post (and every example post) in the user message
 POST_PLACEHOLDER = "<post>"  # stands for the post when the fingerprint is computed
@@ -186,23 +191,27 @@ POST_PLACEHOLDER = "<post>"  # stands for the post when the fingerprint is compu
 def system_prompt():
     """The system message: what the posts are, the ladder with its labels and meanings, and the rules."""
     ladder = "\n".join(f"{number}. {item['name']}: {item['meaning']}."
-                       for number, item in enumerate(LEVELS_V1[:6], start=1))
-    other = LEVELS_V1[6]
+                       for number, item in enumerate(LEVELS_V2[:6], start=1))
+    other = LEVELS_V2[6]
     return (
         "You read short posts from Twitter about stocks and markets. Each user message is one post.\n\n"
-        "Find the reason the writer gives for an investment view, and decide how close to cash that reason is. "
-        "You judge the kind of reason, not whether the writer is bullish or bearish: a bullish post and a bearish "
-        "post can stand on the same level.\n\n"
-        "The levels, from the reason closest to cash (1) to the one farthest from it (6):\n\n"
+        "Decide what the post pays attention to when it talks about stocks or markets, and how close to cash that "
+        "is. The post does not need to take a position or give a reason: a headline, an earnings calendar or an "
+        "analyst rating is labelled by what it talks about (an earnings call or an earnings date is earnings, a "
+        "rating or a price target is story_macro, a net asset value announcement is assets_dividends). You do not "
+        "judge whether the writer is bullish or bearish: a bullish post and a bearish post can stand on the same "
+        "level.\n\n"
+        "The levels, from what is closest to cash (1) to what is farthest from it (6):\n\n"
         f"{ladder}\n\n"
         "And one label that is not a level:\n\n"
         f"{other['name']}: {other['meaning']}.\n\n"
         "Rules:\n"
         "1. Choose exactly one label.\n"
-        "2. If the post gives reasons from two or more levels, choose the level closest to cash, the one with the "
+        "2. If the post touches two or more levels, choose the level closest to cash, the one with the "
         "lowest number. For example, a post about revenue and about a story is revenue_business.\n"
-        "3. If the post only takes a position or shows a feeling and gives no reason, choose emotion_only.\n"
-        f"4. If the post gives no investment reason at all, or cannot be read, choose {NONE}.\n"
+        "3. If the post talks about a stock or the market but only takes a position, shows a feeling or waits, "
+        "without anything of levels 1 to 5, choose emotion_only.\n"
+        f"4. If the post does not talk about stocks or markets at all, or cannot be read, choose {NONE}.\n"
         '5. Answer with JSON only, in this form: {"level": "<label>"}'
     )
 
@@ -226,7 +235,7 @@ def build_payload(text, *, retry, model, seed, temperature):
     if retry:
         system += "\n\n" + retry_reminder()
     messages = [{"role": "system", "content": system}]
-    for example in EXAMPLES_V1:
+    for example in EXAMPLES_V2:
         messages.append({"role": "user", "content": USER_PREFIX + example["post"]})
         messages.append({"role": "assistant", "content": json.dumps({"level": example["level"]})})
     messages.append({"role": "user", "content": USER_PREFIX + text})
@@ -434,7 +443,7 @@ def select_posts(posts, count=DEFAULT_COUNT, pool_cap=DEFAULT_POOL_CAP, seed=DEF
 def examples_in_dataset(texts):
     """The hand-written examples whose text (stripped, lower case) is also a post of the dataset."""
     known = {text.strip().lower() for text in texts}
-    return sorted(example["post"] for example in EXAMPLES_V1 if example["post"].strip().lower() in known)
+    return sorted(example["post"] for example in EXAMPLES_V2 if example["post"].strip().lower() in known)
 
 
 # ---------------------------------------------------------------- talking to Ollama
@@ -1215,7 +1224,7 @@ def command_show_prompt(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Pre-label stock tweets with the level of their reason through the "
+    parser = argparse.ArgumentParser(description="Pre-label stock tweets with the level of what they look at through the "
                                                  "local Ollama server.")
     commands = parser.add_subparsers(dest="command", required=True)
 
