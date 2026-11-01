@@ -1,0 +1,8 @@
+# Check out these files with LF line endings on every machine. Git on Windows would otherwise turn them into
+# CRLF: bash stops at a carriage return in a script, and the label files must hold LF only.
+*.sh text eol=lf
+*.csv text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.md text eol=lf

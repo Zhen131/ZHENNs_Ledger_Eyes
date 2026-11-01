@@ -1,0 +1,6 @@
+# Only what scripts/prelabel_levels.py needs (for a machine that only pre-labels, without the notebook's packages); every pin equals requirements.txt.
+pandas==2.2.3
+numpy==2.2.6
+pyarrow==25.0.1
+huggingface_hub==0.36.2
+fsspec==2026.9.0

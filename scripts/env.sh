@@ -9,7 +9,17 @@ if [ -z "${BASH_SOURCE[0]:-}" ]; then
 fi
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_DIR
-export EYES_PYTHON="${EYES_PYTHON:-$REPO_DIR/.venv/bin/python}"
+if [ -z "${EYES_PYTHON:-}" ]; then
+    # .venv/bin/python on macOS and Linux; .venv/Scripts/python.exe in Git Bash on Windows
+    if [ -e "$REPO_DIR/.venv/bin/python" ]; then
+        EYES_PYTHON="$REPO_DIR/.venv/bin/python"
+    elif [ -e "$REPO_DIR/.venv/Scripts/python.exe" ]; then
+        EYES_PYTHON="$REPO_DIR/.venv/Scripts/python.exe"
+    else
+        EYES_PYTHON="$REPO_DIR/.venv/bin/python"
+    fi
+fi
+export EYES_PYTHON
 
 mkdir -p "$REPO_DIR/data/hf_home" "$REPO_DIR/data/nltk_data" "$REPO_DIR/data/pip-cache" "$REPO_DIR/data/mpl-config"
 
