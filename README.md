@@ -24,7 +24,7 @@ Besides the notebook, `scripts/prelabel_emotions.sh` gives StockTwits posts one 
 | `labels/emotions-prelabel-v1.csv` | Emotion pre-labels of posts drawn from the full dataset, same columns, no text. Chapter 11 learns from it (by default from its copy on GitHub). |
 | `labels/emotions-review-template.csv` | 200 of those labels with an empty column for a person's label (see [The review table](#the-review-table)). |
 | `samples/levels-prelabel-sample.csv` | Level pre-labels of the first 40 posts of the processing order: ids, levels, votes, model, prompt version and text fingerprints, no text (see [Level pre-labels](#level-pre-labels)). |
-| `labels/levels-prelabel-v2.csv`, `labels/levels-review-template.csv` | Not in the repository yet: the level pre-labels of about 8,000 stock tweets and their review table, labelled on another machine (see [Level pre-labels](#level-pre-labels)). |
+| `labels/levels-prelabel-v2.csv`, `labels/levels-review-template.csv` | The level pre-labels of 8,000 stock tweets (`gemma3:12b`, five samples, three votes, labelled on a Windows machine on 2 and 3 November 2026) and their 200-row review table (see [Level pre-labels](#level-pre-labels)). |
 | `scripts/check.sh` | The two checks: `quick` and `full`. |
 | `scripts/build_notebook.sh` | Regenerates the `.ipynb` from the source. |
 | `scripts/download_data.sh` | Downloads the full StockTwits dataset into `data/raw/`; with `--dated`, the two dated datasets into `data/raw/dlt-tweets/` and `data/raw/dlt-news/` instead. Never overwrites a file that is already there. |
@@ -635,8 +635,8 @@ scripts/prelabel_levels.sh export-review           # the review rows with their 
 
 | File | Rows |
 | --- | --- |
-| `labels/levels-prelabel-v2.csv` | the posts of the default draw, 8,000 once the run is complete (labelled on another machine; not in the repository yet) |
-| `samples/levels-prelabel-sample.csv` | the first 40 posts of the same processing order, labelled with **three samples and two votes** (the full file: five samples and three votes by default) |
+| `labels/levels-prelabel-v2.csv` | the 8,000 posts of the default draw, labelled on a Windows machine (RTX 4060 Ti) with **`gemma3:12b`, five samples and three votes**, 13.5 hours without a break: 7,292 rows with 5/5 votes, 353 with 4/5, 337 with 3/5, 18 `disputed` (2/5), 0 `unparsed`; per label 695 `assets_dividends`, 991 `earnings`, 682 `revenue_business`, 1,186 `price_chart`, 2,506 `story_macro`, 1,157 `emotion_only`, 765 `none`. A run that adds to this file (resuming, `--retry-unparsed`) must pass `--model gemma3:12b --samples 5 --min-votes 3`, or the script stops |
+| `samples/levels-prelabel-sample.csv` | the first 40 posts of the same processing order, labelled on a laptop with **`qwen2.5:7b`, three samples and two votes**: not the model of the full file |
 | `labels/levels-review-template.csv` | the review table, 200 rows (made from the full file) |
 
 Both label files have the same six columns, in this order, one row per post in processing order:
@@ -646,8 +646,8 @@ Both label files have the same six columns, in this order, one row per post in p
 | `post_id` | The post's id, `tim:<row>` (see [The data](#the-data)). |
 | `level` | One of the seven labels, `unparsed` or `disputed`. |
 | `votes` | Votes of the recorded (or most frequent) label / valid votes, for example `4/5`. |
-| `model` | The Ollama model that gave the label (`qwen2.5:7b`). |
-| `prompt_version` | The prompt version (`v1`). |
+| `model` | The Ollama model that gave the label (`gemma3:12b` in the full file, `qwen2.5:7b` in the sample). |
+| `prompt_version` | The prompt version (`v2`). |
 | `text_hash` | The text fingerprint (see [The data](#the-data)). |
 
 Unlike the emotion files, the sample and the full file number their posts the same way (both come from the same parquet file); they are still two files, because they were labelled with different settings. A label file never mixes models, prompt versions or settings; the script stops instead. **Do not open and save these files with Excel**: it adds a BOM and CRLF line endings, which `check-file` refuses.
