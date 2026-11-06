@@ -2562,6 +2562,56 @@ def check_levels_full(report):
     print(f"  {LEVEL_REVIEW_FILE}: {review_summary}")
 
 
+# ---------------------------------------------------------------- the levels chapter and reading the crowd (chapters 9 and 10)
+
+LEVEL_SECOND_REVIEW_FILE = "labels/levels-review-second-model.csv"  # the review by a second, larger language model
+LEVEL_SECOND_REVIEW_COLUMNS = ["post_id", "prelabel", "review_label"]  # in order
+
+
+def check_levels_second_review_file(report):
+    """The second review file (static): UTF-8 without BOM, LF only, ending with a newline, exactly three columns, the
+    ids and pre-labels of the review table row by row, and review labels among the six levels and none."""
+    path, template = REPO_DIR / LEVEL_SECOND_REVIEW_FILE, REPO_DIR / LEVEL_REVIEW_FILE
+    if not report.check(path.is_file() and template.is_file(), f"{LEVEL_SECOND_REVIEW_FILE} and {LEVEL_REVIEW_FILE} exist"):
+        return
+    data = path.read_bytes()
+    problems = []
+    if data.startswith(b"\xef\xbb\xbf"):
+        problems.append("starts with a byte order mark")
+    if b"\r" in data:
+        problems.append("has carriage returns (CRLF or CR line endings)")
+    if not data.endswith(b"\n"):
+        problems.append("does not end with a newline")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        text = ""
+        problems.append(f"not UTF-8: {exc}")
+    rows = list(csv.reader(io.StringIO(text)))
+    header, body = (rows[0], rows[1:]) if rows else ([], [])
+    if header != LEVEL_SECOND_REVIEW_COLUMNS:
+        problems.append(f"header {header}, expected {LEVEL_SECOND_REVIEW_COLUMNS}")
+    wrong_width = [number for number, row in enumerate(body, start=2) if len(row) != len(LEVEL_SECOND_REVIEW_COLUMNS)]
+    if wrong_width:
+        problems.append(f"lines with another number of cells: {wrong_width[:5]}")
+    with template.open(encoding="utf-8", newline="") as handle:
+        template_rows = [(row["post_id"], row["prelabel"]) for row in csv.DictReader(handle)]
+    pairs = [tuple(row[:2]) for row in body]
+    if len(body) != LEVEL_DEFAULTS["DEFAULT_REVIEW_SIZE"] or pairs != template_rows:
+        problems.append(f"{len(body)} rows; ids and pre-labels equal to {LEVEL_REVIEW_FILE} row by row: "
+                        f"{pairs == template_rows}")
+    unknown = sorted({row[2] for row in body if len(row) > 2 and row[2] not in LEVEL_LABELS})
+    if unknown:
+        problems.append(f"review labels outside the six levels and none: {unknown}")
+    report.check(not problems,
+                 f"levels: {LEVEL_SECOND_REVIEW_FILE} is UTF-8 without BOM with LF line endings and a final newline, has "
+                 f"exactly the columns {LEVEL_SECOND_REVIEW_COLUMNS}, {LEVEL_DEFAULTS['DEFAULT_REVIEW_SIZE']} rows with "
+                 f"the ids and pre-labels of {LEVEL_REVIEW_FILE} row by row, and review labels among the six levels and "
+                 "none", "; ".join(problems))
+    counts = Counter(row[2] for row in body if len(row) > 2)
+    report.info(f"{LEVEL_SECOND_REVIEW_FILE}: {len(body)} rows; review labels {dict(sorted(counts.items()))}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -2728,6 +2778,7 @@ def main():
     check_levels_sample_file(report)
     check_levels_env(report)
     check_levels_requirements(report)
+    check_levels_second_review_file(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
