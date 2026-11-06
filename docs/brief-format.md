@@ -1,6 +1,6 @@
 # The brief: format reference
 
-This document describes format **2.1** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **2.2** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
 - **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
@@ -28,12 +28,13 @@ The rules allow no other fields: a writer that adds a field without changing the
 
 ## What each section covers
 
-The top-level `scope` describes the brief as a whole: where the posts come from, the granularity, how many classes the models use, and whether the **working sample** keeps only posts that name a ticker. The two sections do not use the same posts, so **each section's coverage is given by its own fields, not by `scope`**:
+The top-level `scope` describes the brief as a whole: where the posts come from, the granularity, how many classes the models use, and whether the **working sample** keeps only posts that name a ticker. The sections do not use the same posts, so **each section's coverage is given by its own fields, not by `scope`**:
 
 | Section | Posts it uses | Fields that say so |
 | --- | --- | --- |
 | `dataset` | Every post of the data source; then the working sample drawn from them. | `dataset.n_posts`; `dataset.sample` |
 | `sentiment` | The working sample (with the default switches: posts with or without a ticker, the classes in use, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that name a ticker. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
+| `replay` | Not the data source: the posts of the replay file (`REPLAY_SOURCE`) that name the ticker `replay.ticker` in the period from `replay.start` to `replay.end`; for `monthly_by_ticker`, those of each of its three tickers in the same period. | `replay.source`; `replay.n_posts`; `replay.monthly_by_ticker[].n_posts` |
 | `levels` | The posts of the data source that the level label file (`LEVEL_LABELS_SOURCE`) labels with one of the six levels or `none`, whatever `scope.tickers` and `scope.n_classes` say; with the default switches the same number from each of the seven classes; split into training, validation and test sets. | `levels.matching`; `levels.balance`; `levels.split` |
 
 For example, `dataset.n_posts` counts every post of the data source, while `sentiment.split.n_posts` counts only the posts of the working sample.
@@ -514,13 +515,66 @@ Chapter 9: what a post pays attention to, on a ladder of six levels from close t
 | `levels.review.second_model.confusion.counts[]` | array | — | no | One count per pre-label. |
 | `levels.review.second_model.confusion.counts[][]` | integer | — | no | Rows with this review label and this pre-label. |
 
+### replay
+
+Chapter 11: the replay of dated tweets about one ticker from the replay file (`REPLAY_SOURCE`, by default the repository's `samples/replay-tweets.parquet`), read with both models in one call and counted per week or per month exactly as chapter 10's `crowd_from_calls` counts a batch; then the three tickers of the file side by side, always per month. It describes the past posts of this file only: the levels measure what the posts pay attention to (appetite for risk), not where a stock went. No text of any post is in the brief. A week runs from Monday to Sunday (UTC); a month is a calendar month (UTC); the period runs from `start` at 00:00 UTC to the end of `end` (the day is included). Sentiment classes are written as their names here (`"bearish"`, `"neutral"`, `"bullish"`, as `read_the_crowd` gives them), not as labels; `<class>` stands for each class in use and `<level>` for each of the six levels (`none` is not a level).
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `replay` | object | yes | no | The replay. |
+| `replay.source` | object | yes | no | The replay file that was read. |
+| `replay.source.dataset` | string | yes | no | The Hugging Face dataset the file was drawn from, `"StephanAkkerman/financial-tweets"`. |
+| `replay.source.revision` | string | yes | no | The dataset's pinned revision (40 hexadecimal digits). |
+| `replay.source.license` | string | yes | no | The dataset's license, `"MIT"`. |
+| `replay.source.file` | string | yes | no | The replay file as given by the switch `REPLAY_SOURCE`: a path or a web address. |
+| `replay.source.sha256` | string | yes | no | SHA-256 of the bytes read (64 lower-case hexadecimal digits), the same for a path and an address. |
+| `replay.source.n_rows` | integer | yes | no | Posts in the file. |
+| `replay.ticker` | string | yes | no | The ticker replayed (`REPLAY_TICKER`), upper case without `$`, one of the file's three. |
+| `replay.start` | string | yes | no | First day of the period (`REPLAY_START`), `"YYYY-MM-DD"`. |
+| `replay.end` | string | yes | no | Last day of the period (`REPLAY_END`), `"YYYY-MM-DD"`; the day is included. |
+| `replay.bucket` | string | yes | no | `"W"` (weeks) or `"M"` (months): how `buckets` cuts the period (`REPLAY_BUCKET`). The format allows no other value. |
+| `replay.min_bucket_posts` | integer | yes | no | The threshold (`REPLAY_MIN_BUCKET_POSTS`, 1 or more): a week or month with fewer posts has `null` sentiment shares, one with fewer posts on the ladder `null` level shares. |
+| `replay.n_posts` | integer | yes | no | Posts of the ticker in the period. A post that names several tickers counts for each one. |
+| `replay.n_none` | integer | yes | no | Of them, posts called `none` (not about stocks); they are left out of the level shares. `n_none` and the `n_with_level` of every bucket add up to `n_posts`. |
+| `replay.buckets` | array | yes | no | Every week or month of the period, in order, without a gap: from the one holding `start` to the one holding `end`, empty ones included. Their `n_posts` add up to `n_posts`. |
+| `replay.buckets[]` | object | — | no | One week or month, in order. |
+| `replay.buckets[].start` | string | yes | no | The week or month's first day, `"YYYY-MM-DD"` (UTC): a Monday for a week, the 1st for a month. When the period does not start on it, the first week or month holds only the days from the replay's `start` on (and the last week or month only the days up to its `end`), but keeps this name. |
+| `replay.buckets[].n_posts` | integer | yes | no | Posts of the ticker in the week or month (and in the period). |
+| `replay.buckets[].n_with_level` | integer | yes | no | Of them, posts on the ladder: posts not called `none`. |
+| `replay.buckets[].level_counts` | object | yes | no | Posts on the ladder per level, always all six levels (also below the threshold). |
+| `replay.buckets[].level_counts.<level>` | integer | — | no | Posts called that level. They add up to `n_with_level`. |
+| `replay.buckets[].sentiment_counts` | object | yes | no | Posts per sentiment class in use (keys `"bearish"`, `"neutral"` and `"bullish"`, or only `"bearish"` and `"bullish"` with two classes), also below the threshold; a class without posts is there with 0. |
+| `replay.buckets[].sentiment_counts.<class>` | integer | — | no | Posts called that class. They add up to `n_posts`. |
+| `replay.buckets[].level_shares` | object | yes | no | Dashboard 2 for the week or month: the share of each level among the posts on the ladder. |
+| `replay.buckets[].level_shares.<level>` | number | — | yes | `level_counts` of the level divided by `n_with_level`; `null` for every level when `n_with_level` is below `min_bucket_posts` (also when it is 0). |
+| `replay.buckets[].sentiment_shares` | object | yes | no | Dashboard 1 for the week or month: the share of each sentiment class in use among all its posts. |
+| `replay.buckets[].sentiment_shares.<class>` | number | — | yes | `sentiment_counts` of the class divided by `n_posts`; `null` for every class when `n_posts` is below `min_bucket_posts` (also when it is 0). |
+| `replay.monthly_by_ticker` | array | yes | no | The three tickers of the replay file in their fixed order (NVDA, IBM, SPY), each counted per month over the same period, whatever `bucket` says. |
+| `replay.monthly_by_ticker[]` | object | — | no | One ticker. |
+| `replay.monthly_by_ticker[].ticker` | string | yes | no | The ticker. |
+| `replay.monthly_by_ticker[].n_posts` | integer | yes | no | Posts of the ticker in the period. |
+| `replay.monthly_by_ticker[].n_none` | integer | yes | no | Of them, posts called `none`. |
+| `replay.monthly_by_ticker[].months` | array | yes | no | Every month of the period, in order, without a gap, empty ones included; the same fields as `replay.buckets[]`. |
+| `replay.monthly_by_ticker[].months[]` | object | — | no | One month, in order. |
+| `replay.monthly_by_ticker[].months[].start` | string | yes | no | The month's first day, `"YYYY-MM-DD"` (UTC): the 1st. When the period does not start on it, the first month holds only the days from the replay's `start` on (and the last month only the days up to its `end`), but keeps this name. |
+| `replay.monthly_by_ticker[].months[].n_posts` | integer | yes | no | Posts of the ticker in the month (and in the period). |
+| `replay.monthly_by_ticker[].months[].n_with_level` | integer | yes | no | Of them, posts on the ladder: posts not called `none`. |
+| `replay.monthly_by_ticker[].months[].level_counts` | object | yes | no | Posts on the ladder per level, always all six levels (also below the threshold). |
+| `replay.monthly_by_ticker[].months[].level_counts.<level>` | integer | — | no | Posts called that level. They add up to `n_with_level`. |
+| `replay.monthly_by_ticker[].months[].sentiment_counts` | object | yes | no | Posts per sentiment class in use (keys `"bearish"`, `"neutral"` and `"bullish"`, or only `"bearish"` and `"bullish"` with two classes), also below the threshold; a class without posts is there with 0. |
+| `replay.monthly_by_ticker[].months[].sentiment_counts.<class>` | integer | — | no | Posts called that class. They add up to `n_posts`. |
+| `replay.monthly_by_ticker[].months[].level_shares` | object | yes | no | Dashboard 2 for the month: the share of each level among the posts on the ladder. |
+| `replay.monthly_by_ticker[].months[].level_shares.<level>` | number | — | yes | `level_counts` of the level divided by `n_with_level`; `null` for every level when `n_with_level` is below `min_bucket_posts` (also when it is 0). |
+| `replay.monthly_by_ticker[].months[].sentiment_shares` | object | yes | no | Dashboard 1 for the month: the share of each sentiment class in use among all its posts. |
+| `replay.monthly_by_ticker[].months[].sentiment_shares.<class>` | number | — | yes | `sentiment_counts` of the class divided by `n_posts`; `null` for every class when `n_posts` is below `min_bucket_posts` (also when it is 0). |
+
 ## Versions
 
 `format_version` is `"MAJOR.MINOR"`. It describes the format (which fields exist, their types, units and meanings), not the results: more topics, another model in the evaluation table or different numbers do not change it.
 
 - **MINOR goes up** (1.0 → 1.1) for a change that cannot break a program written for the old version, as long as that program ignores fields it does not know: a new field or a new section; a new list; a new allowed value of a field with a fixed list of values; a field that may be `null` becoming one that is never `null`.
 - **MAJOR goes up** (1.x → 2.0) for a change that could make such a program read something wrong: a field removed or renamed; a field's type, unit or meaning changed; a field that is never `null` becoming one that may be `null`; a change to the label coding or to the keys of an object whose keys are fixed.
-- **Every change to the rules changes the version**, and in the same commit: the `const` of `format_version` in [`brief.schema.json`](brief.schema.json), the identical copy of that file in the notebook's last chapter (chapter 11), the value the notebook writes into `format_version`, the tables of this document and the list below. The checks fail until the two copies of the rules are identical, this document lists exactly the fields they allow, and the notebook's briefs pass them.
+- **Every change to the rules changes the version**, and in the same commit: the `const` of `format_version` in [`brief.schema.json`](brief.schema.json), the identical copy of that file in the notebook's last chapter (chapter 13), the value the notebook writes into `format_version`, the tables of this document and the list below. The checks fail until the two copies of the rules are identical, this document lists exactly the fields they allow, and the notebook's briefs pass them.
 - **Readers** should check the MAJOR number, accept any MINOR number of the same MAJOR, and ignore fields they do not know. The rules file describes one exact version; validate a brief with it only when `format_version` matches.
 
 | Version | Change |
@@ -528,6 +582,7 @@ Chapter 9: what a post pays attention to, on a ladder of six levels from close t
 | 1.0 to 1.7 | The formats of the notebook's earlier, longer version, which had nine more sections. Their rules and tables are in the repository's history. |
 | 2.0 | The notebook keeps chapters 0 to 8 and a short last chapter that checks and saves the brief; the later chapters were removed, and their sections with them. Removed: every top-level section except `format_version`, `generated_at`, `scope`, `dataset` and `sentiment` (nine sections), and the format check's rule that compared a list of days with its period. Renamed: `scope.coins` became `scope.tickers` (values `"all"` and `"has_ticker_only"`); the coin-mention fields became the ticker fields: `dataset.ticker_mentions`, `dataset.sample.ticker_only`, `dataset.sample.n_has_ticker` and `sentiment.split.n_has_ticker`; the evaluation subset of those posts became `test_has_ticker` (in `sentiment.evaluation.subsets` and `rows[].subset`). Removed with the old data file: `dataset.sheets`. Added: `dataset.revision`, `dataset.label_from_sentiment`, `dataset.sentiment_counts`, `sentiment.vectorizers.word2vec` and `sentiment.scoring.score_texts`. Removing and renaming fields makes this a MAJOR change. 2.0 covers every change made on the way to this version; the commits in between carry no number of their own. |
 | 2.1 | A new top-level section, `levels` (chapter 9: the six levels and `none`, learned from the level label file), and the definitions it uses (`level`, `level_class`, `level_class_counts`, `level_class_shares`, `level_group`, `class_scores` and `level_review`). Nothing else changed: the fields of `levels` that share a name with a field of `sentiment` (`split`, `vectorizers`, `models`, `training`, `selection`, `evaluation`, `confusion_matrices`) keep its structure, keyed by the seven classes instead of the labels, and only add fields (`evaluation.rows[].macro_f1_seven`). Adding a section makes this a MINOR change. 2.1 covers every change made on the way to this version; the commits in between carry no number of their own. |
+| 2.2 | A new top-level section, `replay` (chapter 11: the replay of dated tweets about one ticker, per week or month, and the three tickers of the replay file per month), and the definitions it uses (`day`, `sentiment_name`, `level_counts`, `level_shares`, `sentiment_name_counts`, `sentiment_name_shares` and `replay_bucket`). Nothing else changed. The top level is complete with this section: no further top-level section is planned. Adding a section makes this a MINOR change. 2.2 covers every change made on the way to this version (the replay file, the replay chapter and the paste box chapter, which adds nothing to the brief); the commits in between carry no number of their own. |
 
 ## Reading a brief
 

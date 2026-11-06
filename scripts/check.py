@@ -101,7 +101,8 @@ SAMPLE_SOURCE = "samples/tim-financial-tweets-sample.parquet"  # relative to the
 FULL_SOURCE = "data/raw/tim-financial-tweets-bba60269.parquet"  # the local copy (scripts/download_data.sh)
 DEFAULT_DATA_SOURCE = ("hf://datasets/TimKoornstra/financial-tweets-sentiment@bba602698fd6f18226f6404fd8fb637ef67fa1eb/"
                        "data/train-00000-of-00001.parquet")  # the pinned file on Hugging Face
-TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"]
+START_TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"]  # format 2.1
+TOP_LEVEL_FIELDS = START_TOP_LEVEL_FIELDS + ["replay"]  # format 2.2 adds the replay; the top level ends here
 SCOPE_FIELDS = ["source", "granularity", "tickers", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -1179,6 +1180,17 @@ BROKEN_BRIEFS = [
     ("7 value the format does not allow", ("scope", "n_classes"), lambda old: 4, "scope.n_classes", "4"),
     ("7 value the format does not allow", ("levels", "classes"), lambda old: [value for value in old if value != "none"],
      "levels.classes", "expected"),
+    # The replay section (format 2.2): one case of every kind there (kind 1 is the replay missing, above).
+    ("2 required field missing in a section", ("replay", "buckets", 0, "level_counts"), DELETE, "replay.buckets[0]",
+     "level_counts"),
+    ("3 wrong type", ("replay", "n_posts"), str, "replay.n_posts", "integer"),
+    ("4 granularity not allowed", ("replay", "bucket"), lambda old: "weekly", "replay.bucket", "weekly"),
+    ("5 NaN or infinity", ("replay", "buckets", 0, "level_shares", "assets_dividends"), lambda old: NAN,
+     "replay.buckets[0].level_shares.assets_dividends", "nan"),
+    ("6 null not allowed, or an unknown field", ("replay", "buckets", 0, "n_posts"), lambda old: None,
+     "replay.buckets[0].n_posts", "None"),
+    ("6 null not allowed, or an unknown field", ("replay", "extra_field"), lambda old: 1, "replay", "extra_field"),
+    ("7 value the format does not allow", ("replay", "bucket"), lambda old: "D", "replay.bucket", "'D'"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -1187,6 +1199,7 @@ NULL_ALLOWED = [
     ("sentiment", "evaluation", "rows", 0, "macro_f1"),
     ("dataset", "cleaning", "avg_words_after"),
     ("sentiment", "selection", "validation_macro_f1", "count_network"),
+    ("replay", "buckets", 0, "level_shares", "assets_dividends"),
 ]
 
 
@@ -3502,7 +3515,6 @@ REPLAY_SWITCH_DEFAULTS = {  # the replay chapter's switches and their defaults
 }
 REPLAY_TWO_STATE = {"REPLAY_TICKER": "SPY", "REPLAY_BUCKET": "M"}  # the only two-state switches of the replay chapter
 REPLAY_PROBE_DIR = REPO_DIR / "data" / "checks" / "replay-probe"
-REPLAY_RESULT_LINE = "replay result: "  # the line the replay chapter prints with its numbers
 REPLAY_WHOLE_LINE = "replay check: whole period "  # the line with the whole period's counts
 SHARE_TOLERANCE = 1e-9
 
@@ -3707,13 +3719,27 @@ def check_replay_section(report, label, section, switches, executed):
                 + ", ".join(f"{as_dict(entry).get('ticker')} {as_dict(entry).get('n_posts')}" for entry in monthly or []))
 
 
-def replay_printed(report, label, executed):
-    """The replay's numbers as the notebook printed them (one line), or None."""
-    lines = [line for line in executed_lines(executed) if line.startswith(REPLAY_RESULT_LINE)]
-    try:
-        return json.loads(lines[0][len(REPLAY_RESULT_LINE):]) if len(lines) == 1 else None
-    except ValueError:
-        return None
+REPLAY_START_FORMAT_VERSION = "2.1"  # the format before the replay section
+FORMAT_VERSION = "2.2"  # the format with the replay section: the MINOR of 2.1 raised by one
+
+
+def check_replay_format(report):
+    """Format 2.2: the rules, the notebook and the document name it, one MINOR above 2.1, and the top level is the
+    fields of 2.1 plus replay."""
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    version = as_dict(as_dict(schema.get("properties")).get("format_version")).get("const")
+    written = re.search(r'"format_version": "([^"]*)"', SOURCE.read_text(encoding="utf-8"))
+    documented = re.search(r"describes format \*\*([^*]+)\*\*", FORMAT_DOC.read_text(encoding="utf-8"))
+    versions = [version, written.group(1) if written else None, documented.group(1) if documented else None]
+    start_major, start_minor = REPLAY_START_FORMAT_VERSION.split(".")
+    major, minor = FORMAT_VERSION.split(".")
+    report.check(versions == [FORMAT_VERSION] * 3 and major == start_major and int(minor) == int(start_minor) + 1
+                 and schema.get("required") == TOP_LEVEL_FIELDS == START_TOP_LEVEL_FIELDS + ["replay"]
+                 and list(as_dict(schema.get("properties"))) == TOP_LEVEL_FIELDS,
+                 f"format {FORMAT_VERSION} in the rules, the notebook and the document, the MINOR of "
+                 f"{REPLAY_START_FORMAT_VERSION} raised by one; the top level is the fields of "
+                 f"{REPLAY_START_FORMAT_VERSION} plus replay",
+                 f"versions {versions}; required {schema.get('required')}")
 
 
 # ---------------------------------------------------------------- modes
@@ -3761,6 +3787,21 @@ def stable_numbers(brief):
                                                             "classes", "balance")},
         "levels_split": {key: as_dict(levels_section.get("split")).get(key) for key in ("n_posts", "class_counts")},
         "levels_review": levels_section.get("review"),
+        # The replay: the file, the choice and the posts per bucket (calls and shares depend on training).
+        "replay": replay_stable(brief.get("replay")),
+    }
+
+
+def replay_stable(section):
+    """The numbers of the replay section that do not depend on training."""
+    section = as_dict(section)
+    return {
+        **{key: section.get(key) for key in ("ticker", "start", "end", "bucket", "n_posts", "source")},
+        "buckets": [(as_dict(row).get("start"), as_dict(row).get("n_posts")) for row in section.get("buckets") or []],
+        "monthly_by_ticker": [(as_dict(entry).get("ticker"), as_dict(entry).get("n_posts"),
+                               [(as_dict(row).get("start"), as_dict(row).get("n_posts"))
+                                for row in as_dict(entry).get("months") or []])
+                              for entry in section.get("monthly_by_ticker") or []],
     }
 
 
@@ -3775,7 +3816,8 @@ def compare_stable(report, first, again):
     report.check(left is not None and bool(left["dataset"]) and left == right,
                  "default switches run twice: the two briefs agree on the dataset section, the posts per class in "
                  "every part of the split and the posts in every test subset, and on the numbers of the levels section "
-                 "that do not depend on training", detail)
+                 "that do not depend on training, and on those of the replay section (ticker, period, bucket, posts, "
+                 "source, and the posts of every bucket and of every month of the three tickers)", detail)
 
 
 # ---------------------------------------------------------------- the paste box (chapter 12)
@@ -3902,7 +3944,7 @@ def quick(report, defaults, others, overrides, rules=None):
             check_levels_texts_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
             check_crowd_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb", switches)
             executed = REPO_DIR / switches["WORK_DIR"] / "executed.ipynb"
-            check_replay_section(report, label, replay_printed(report, label, executed), switches, executed)
+            check_replay_section(report, label, brief.get("replay"), switches, executed)
             buckets.add(switches["REPLAY_BUCKET"])
             check_paste_output(report, label, executed)
         if brief is not None:
@@ -3946,7 +3988,7 @@ def full(report, defaults, overrides, rules=None):
     check_levels_texts_output(report, "full run", executed)
     check_crowd_output(report, "full run", executed, switches)
     check_replay_source(report, "full run", switches)
-    check_replay_section(report, "full run", replay_printed(report, "full run", executed), switches, executed)
+    check_replay_section(report, "full run", brief.get("replay"), switches, executed)
     check_paste_output(report, "full run", executed)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
@@ -4023,6 +4065,7 @@ def main():
     check_replay_switches(report, defaults, others)
     check_replay_reading(report)
     check_paste_box(report)
+    check_replay_format(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:

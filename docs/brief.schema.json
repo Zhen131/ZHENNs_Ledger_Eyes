@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 2.1",
+  "title": "Ledger Eyes brief, format 2.2",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels", "replay"],
   "properties": {
-    "format_version": {"type": "string", "const": "2.1"},
+    "format_version": {"type": "string", "const": "2.2"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -702,6 +702,49 @@
           "properties": {"human": {"$ref": "#/$defs/level_review"}, "second_model": {"$ref": "#/$defs/level_review"}}
         }
       }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "ticker", "start", "end", "bucket", "min_bucket_posts", "n_posts", "n_none", "buckets",
+                   "monthly_by_ticker"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dataset", "revision", "license", "file", "sha256", "n_rows"],
+          "properties": {
+            "dataset": {"type": "string"},
+            "revision": {"type": "string"},
+            "license": {"type": "string"},
+            "file": {"type": "string"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "n_rows": {"$ref": "#/$defs/count"}
+          }
+        },
+        "ticker": {"type": "string"},
+        "start": {"$ref": "#/$defs/day"},
+        "end": {"$ref": "#/$defs/day"},
+        "bucket": {"type": "string", "enum": ["W", "M"]},
+        "min_bucket_posts": {"$ref": "#/$defs/positive"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_none": {"$ref": "#/$defs/count"},
+        "buckets": {"type": "array", "items": {"$ref": "#/$defs/replay_bucket"}},
+        "monthly_by_ticker": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ticker", "n_posts", "n_none", "months"],
+            "properties": {
+              "ticker": {"type": "string"},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "n_none": {"$ref": "#/$defs/count"},
+              "months": {"type": "array", "items": {"$ref": "#/$defs/replay_bucket"}}
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -807,6 +850,47 @@
       "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
       "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
       "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "sentiment_name": {"type": "string", "enum": ["bearish", "neutral", "bullish"]},
+    "level_counts": {
+      "type": "object",
+      "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "level_shares": {
+      "type": "object",
+      "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "sentiment_name_counts": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/sentiment_name"},
+      "required": ["bearish", "bullish"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "sentiment_name_shares": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/sentiment_name"},
+      "required": ["bearish", "bullish"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "replay_bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "n_posts", "n_with_level", "level_counts", "sentiment_counts", "level_shares",
+                   "sentiment_shares"],
+      "properties": {
+        "start": {"$ref": "#/$defs/day"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_with_level": {"$ref": "#/$defs/count"},
+        "level_counts": {"$ref": "#/$defs/level_counts"},
+        "sentiment_counts": {"$ref": "#/$defs/sentiment_name_counts"},
+        "level_shares": {"$ref": "#/$defs/level_shares"},
+        "sentiment_shares": {"$ref": "#/$defs/sentiment_name_shares"}
+      }
     }
   }
 }

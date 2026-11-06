@@ -178,18 +178,18 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and the last chapter saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment` and `levels`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), whether the working sample keeps only posts that name a ticker, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); the last chapter checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and the last chapter saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment`, `levels` and `replay`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), whether the working sample keeps only posts that name a ticker, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); the last chapter checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，最后一章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`levels`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本是不是只留带股票代码的帖子；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；最后一章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，最后一章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`levels`、`replay`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本是不是只留带股票代码的帖子；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；最后一章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "2.1",  # the format of the last chapter's rules (docs/brief-format.md in the repository)
+    "format_version": "2.2",  # the format of the last chapter's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -200,6 +200,7 @@ brief = {
     "dataset": None,  # chapters 0 to 3
     "sentiment": None,  # chapters 4 to 8
     "levels": None,  # chapter 9 (chapter 10 adds nothing: its demonstration is not a result)
+    "replay": None,  # chapter 11 (chapter 12, the paste box, adds nothing)
 }
 list(brief)  # show the top-level fields
 
@@ -2964,16 +2965,16 @@ pd.DataFrame([{"ticker": entry["ticker"], "posts": entry["n_posts"], "none": ent
 # %% [markdown]
 # ### The replay's numbers
 #
-# The numbers of this chapter are gathered into one dictionary, `replay_result`: where the file came from (dataset, revision, license, the source read, the SHA-256 of its bytes and its rows), the ticker, the period, the kind of bucket and the threshold, and for every week (or month) its posts, its posts on the ladder, its counts per level and per sentiment class and its shares (`None` below the threshold); then the same per month for each of the three tickers. No text of any post is kept in it.
+# The numbers of this chapter are gathered into one dictionary, `replay_result`, which becomes the brief's `replay` section: where the file came from (dataset, revision, license, the source read, the SHA-256 of its bytes and its rows), the ticker, the period, the kind of bucket and the threshold, and for every week (or month) its posts, its posts on the ladder, its counts per level and per sentiment class and its shares (`None` below the threshold); then the same per month for each of the three tickers. No text of any post is kept in it.
 #
 # ***
 #
 # ### 回放的数
 #
-# 这一章的数收进一个字典 `replay_result`：文件从哪来（数据集、修订号、许可证、读的是哪里、读到的字节的 SHA-256 和行数），选的股票、日期段、按周还是按月、门槛；每一周（或每个月）的帖子数、站上梯子的条数、每一级和每个多空类的条数、占比（低于门槛是 `None`）；然后是三只股票各自按月的同样这些数。里面不放任何帖子的原文。
+# 这一章的数收进一个字典 `replay_result`，它就是简报的 `replay` 节：文件从哪来（数据集、修订号、许可证、读的是哪里、读到的字节的 SHA-256 和行数），选的股票、日期段、按周还是按月、门槛；每一周（或每个月）的帖子数、站上梯子的条数、每一级和每个多空类的条数、占比（低于门槛是 `None`）；然后是三只股票各自按月的同样这些数。里面不放任何帖子的原文。
 
 # %%
-# Gather the replay's numbers (no text of any post).
+# Gather the replay's numbers into the brief (no text of any post).
 replay_result = {
     "source": {"dataset": "StephanAkkerman/financial-tweets", "revision": "ad27fe2d13415186a552a332cbff917530c69a29",
                "license": "MIT", "file": REPLAY_SOURCE, "sha256": replay_sha256, "n_rows": len(replay_table)},
@@ -2988,7 +2989,9 @@ replay_result = {
     "monthly_by_ticker": [{"ticker": entry["ticker"], "n_posts": entry["n_posts"], "n_none": entry["n_none"],
                            "months": entry["months"]} for entry in replay_monthly],
 }
-print("replay result: " + json.dumps(replay_result))
+brief["replay"] = replay_result
+print(f"[replay] the brief's replay section: {replay_result['n_posts']} posts of {REPLAY_TICKER} in "
+      f"{len(replay_buckets)} {replay_unit}s, and {len(replay_monthly)} tickers by month")
 
 # %% [markdown]
 # ## 12. Paste box: read your own posts
@@ -3075,13 +3078,13 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 2.1",
+  "title": "Ledger Eyes brief, format 2.2",
   "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels", "replay"],
   "properties": {
-    "format_version": {"type": "string", "const": "2.1"},
+    "format_version": {"type": "string", "const": "2.2"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -3777,6 +3780,49 @@ BRIEF_SCHEMA_TEXT = r"""{
           "properties": {"human": {"$ref": "#/$defs/level_review"}, "second_model": {"$ref": "#/$defs/level_review"}}
         }
       }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "ticker", "start", "end", "bucket", "min_bucket_posts", "n_posts", "n_none", "buckets",
+                   "monthly_by_ticker"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dataset", "revision", "license", "file", "sha256", "n_rows"],
+          "properties": {
+            "dataset": {"type": "string"},
+            "revision": {"type": "string"},
+            "license": {"type": "string"},
+            "file": {"type": "string"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "n_rows": {"$ref": "#/$defs/count"}
+          }
+        },
+        "ticker": {"type": "string"},
+        "start": {"$ref": "#/$defs/day"},
+        "end": {"$ref": "#/$defs/day"},
+        "bucket": {"type": "string", "enum": ["W", "M"]},
+        "min_bucket_posts": {"$ref": "#/$defs/positive"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_none": {"$ref": "#/$defs/count"},
+        "buckets": {"type": "array", "items": {"$ref": "#/$defs/replay_bucket"}},
+        "monthly_by_ticker": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ticker", "n_posts", "n_none", "months"],
+            "properties": {
+              "ticker": {"type": "string"},
+              "n_posts": {"$ref": "#/$defs/count"},
+              "n_none": {"$ref": "#/$defs/count"},
+              "months": {"type": "array", "items": {"$ref": "#/$defs/replay_bucket"}}
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -3882,6 +3928,47 @@ BRIEF_SCHEMA_TEXT = r"""{
       "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
       "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
       "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "sentiment_name": {"type": "string", "enum": ["bearish", "neutral", "bullish"]},
+    "level_counts": {
+      "type": "object",
+      "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "level_shares": {
+      "type": "object",
+      "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "sentiment_name_counts": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/sentiment_name"},
+      "required": ["bearish", "bullish"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "sentiment_name_shares": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/sentiment_name"},
+      "required": ["bearish", "bullish"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
+    },
+    "replay_bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "n_posts", "n_with_level", "level_counts", "sentiment_counts", "level_shares",
+                   "sentiment_shares"],
+      "properties": {
+        "start": {"$ref": "#/$defs/day"},
+        "n_posts": {"$ref": "#/$defs/count"},
+        "n_with_level": {"$ref": "#/$defs/count"},
+        "level_counts": {"$ref": "#/$defs/level_counts"},
+        "sentiment_counts": {"$ref": "#/$defs/sentiment_name_counts"},
+        "level_shares": {"$ref": "#/$defs/level_shares"},
+        "sentiment_shares": {"$ref": "#/$defs/sentiment_name_shares"}
+      }
     }
   }
 }
