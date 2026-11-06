@@ -18,8 +18,9 @@ quick: static checks, then the notebook runs three times on the bundled
        the switch cell (defaults, other values, and the switch check cell run
        from the source on good and bad values), the text scan, the format
        rules with their notebook copy and their document, and the chapter
-       headings (0 to 11: 9 the levels, 10 reading the crowd, neither with
-       Gradio; the brief last, with no network package in its cells). Chapter 1's reading cells run from the source on small
+       headings (0 to 13: 9 the levels, 10 reading the crowd, 11 the replay,
+       12 the paste box, none with Gradio; the brief last, with no network
+       package in its cells). Chapter 1's reading cells run from the source on small
        hand-written parquet files (ids, empty texts, the label conversion,
        missing columns, an unknown label, a sample with its row column), and
        its ticker cell on sentences that must and must not count. The bundled
@@ -46,6 +47,12 @@ quick: static checks, then the notebook runs three times on the bundled
        source on hand-written tables), the interface of both chapters, and
        the levels section of the first two briefs against the files the run
        read (every run reads the level files from the repository).
+       Chapters 11 and 12: the replay file (columns, ids recomputed from the
+       texts, masking, range), the replay switches, the replay's reading cell
+       on hand-written files, the paste box's examples (8 to 12, nothing
+       private, no run of 6 words shared with the sample or the replay file),
+       format 2.2, and the replay section of the first two briefs against the
+       replay file (every run reads it from the repository).
 full:  static checks, then one run on the full dataset (the local copy in
        data/raw/, see scripts/download_data.sh) with the default switches;
        prints the key numbers and the evaluation table from the brief, and
@@ -60,6 +67,10 @@ full:  static checks, then one run on the full dataset (the local copy in
        from Hugging Face at the pinned revision the first time): the sample,
        and the full label file and the review table when they are there
        (they are labelled on another machine; when missing, a line says so).
+       The replay file is drawn again from the local copy of
+       StephanAkkerman/financial-tweets and compared post by post, the paste
+       box's examples are compared with both whole datasets, and the replay
+       with the default switches is printed.
 
 -p NAME VALUE overrides a switch of the notebook's parameters cell for every
 run (VALUE is read as a Python literal when possible, otherwise as text).
@@ -154,7 +165,7 @@ INTERFACE_PARAMETERS = {
     "save_brief": [("brief_dict", None), ("path", None)],
 }
 NO_DOWNLOAD_WORDS = ["gensim.downloader", "api.load", "://"]  # chapter 6 must contain none of them
-# The last chapter (11): the brief's format rules and their documentation.
+# The last chapter (13): the brief's format rules and their documentation.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
@@ -924,7 +935,7 @@ def print_levels(brief):
                   f"{as_dict(part.get('confusion')).get('counts')}")
 
 
-# ---------------------------------------------------------------- the brief's format (chapter 11)
+# ---------------------------------------------------------------- the brief's format (the last chapter)
 
 def as_dict(value):
     return value if isinstance(value, dict) else {}
@@ -3915,6 +3926,86 @@ def check_paste_output(report, label, executed):
                  "with a sentiment call and a level or none", " | ".join(lines) or "no [paste] line")
 
 
+def check_replay_full(report):
+    """Full check: the replay file against the local copy of its dataset, drawn again here with the documented rules."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    path = REPO_DIR / REPLAY_COPY
+    if not report.check(path.is_file(), "full: local copy of StephanAkkerman/financial-tweets for the replay file",
+                        "" if path.is_file() else f"{REPLAY_COPY} not found; run scripts/make_replay_sample.sh first"):
+        return
+    report.info(f"replay copy {REPLAY_COPY}: {path.stat().st_size:,} bytes, sha256 {sha256_of(path)}")
+    copy = pq.read_table(path, columns=["created_at", "tickers", "text", "likes", "views"]).to_pandas()
+    latest = copy["created_at"].max()
+    copy = copy[(copy["created_at"] >= latest - pd.Timedelta(days=REPLAY_WINDOW_DAYS)) & (copy["created_at"] <= latest)]
+    copy = copy[copy["tickers"].map(lambda names: names is not None and any(name in REPLAY_TICKERS for name in names))]
+    copy = copy.assign(text=copy["text"].fillna("").map(replay_mask))
+    copy = copy[copy["text"].str.strip() != ""]
+    copy = copy.assign(row=copy.index).sort_values(["created_at", "row"], kind="stable")
+    copy = copy[~copy["text"].duplicated(keep="first")]
+    drawn = {replay_post_id(text): row for text, row in zip(copy["text"], copy.itertuples(index=False))}
+    replay = pd.read_parquet(REPO_DIR / REPLAY_FILE)
+    differ = []
+    for row in replay.itertuples(index=False):
+        found = drawn.get(row.post_id)
+        same = found is not None and found.text == row.text and found.created_at == row.created_at and \
+            [str(name) for name in found.tickers] == [str(name) for name in row.tickers] and \
+            all((pd.isna(getattr(found, column)) and pd.isna(getattr(row, column)))
+                or getattr(found, column) == getattr(row, column) for column in ("likes", "views"))
+        if not same:
+            differ.append(row.post_id)
+    report.check(not differ, f"full: every post of {REPLAY_FILE} is a post of the local copy's last "
+                 f"{REPLAY_WINDOW_DAYS} days naming NVDA, IBM or SPY, masked and kept once per text by the documented "
+                 "rules, with the same id, time, tickers, likes, views and text",
+                 f"{len(replay)} posts of the file, {len(drawn)} drawn here, {len(differ)} differ {differ[:3]}")
+    report.info(f"replay file against the copy: {len(replay)} posts compared, {len(replay) - len(differ)} the same, "
+                f"{len(differ)} differ; the copy gives {len(drawn)} posts by the rules (the cap of 4,000 per ticker "
+                "left none out)")
+
+
+def print_replay(brief):
+    """The replay's numbers of a brief: the chosen ticker per bucket and the three tickers per month."""
+    section = as_dict(brief.get("replay"))
+    if not section:
+        return
+
+    def share(value):
+        return "    -" if value is None else f"{100 * value:5.1f}"
+
+    print(f"\nReplay ({section.get('ticker')}, {section.get('start')} to {section.get('end')}, "
+          f"{'by week' if section.get('bucket') == 'W' else 'by month'}, threshold {section.get('min_bucket_posts')})")
+    buckets = section.get("buckets") or []
+    thin = sum(1 for row in buckets if as_dict(row.get("level_shares")).get(LEVEL_SIX[0]) is None)
+    print(f"  posts {section.get('n_posts')}, judged none {section.get('n_none')}, buckets {len(buckets)}, "
+          f"with too few posts on the ladder {thin}")
+    header = "  " + f"{'start':10} {'posts':>5} {'none':>4} " + " ".join(f"{level[:9]:>9}" for level in LEVEL_SIX)
+    print(header + "   (level shares in %; - : too few posts)")
+    for row in buckets:
+        shares = as_dict(row.get("level_shares"))
+        print(f"  {row.get('start'):10} {row.get('n_posts'):>5} {row.get('n_posts') - row.get('n_with_level'):>4} "
+              + " ".join(f"{share(shares.get(level)):>9}" for level in LEVEL_SIX))
+    print("\nReplay, three tickers by month")
+    print("  " + f"{'ticker':6} {'start':10} {'posts':>5} {'none':>4} " + " ".join(f"{level[:9]:>9}" for level in LEVEL_SIX))
+    for entry in section.get("monthly_by_ticker") or []:
+        for row in entry.get("months") or []:
+            shares = as_dict(row.get("level_shares"))
+            print(f"  {entry.get('ticker'):6} {row.get('start'):10} {row.get('n_posts'):>5} "
+                  f"{row.get('n_posts') - row.get('n_with_level'):>4} "
+                  + " ".join(f"{share(shares.get(level)):>9}" for level in LEVEL_SIX))
+    for entry in section.get("monthly_by_ticker") or []:
+        months = entry.get("months") or []
+        on_ladder = sum(row.get("n_with_level") or 0 for row in months)
+        counts = {level: sum(as_dict(row.get("level_counts")).get(level, 0) for row in months) for level in LEVEL_SIX}
+        sentiment = {}
+        for row in months:
+            for name, count in as_dict(row.get("sentiment_counts")).items():
+                sentiment[name] = sentiment.get(name, 0) + count
+        print(f"  {entry.get('ticker'):6} whole period: {entry.get('n_posts')} posts, none {entry.get('n_none')}; levels % "
+              + ", ".join(f"{level} {share(counts[level] / on_ladder if on_ladder else None).strip()}" for level in LEVEL_SIX)
+              + "; sentiment % " + ", ".join(f"{name} {share(count / entry['n_posts'] if entry.get('n_posts') else None).strip()}"
+                                             for name, count in sentiment.items()))
+
+
 def check_replay_source(report, label, switches):
     """Every check run reads the replay file from the repository, never from a web address."""
     source = switches.get("REPLAY_SOURCE")
@@ -3962,6 +4053,7 @@ def quick(report, defaults, others, overrides, rules=None):
 
 def full(report, defaults, overrides, rules=None):
     check_levels_full(report)
+    check_replay_full(report)
     check_paste_full(report)
     parameters = {"DATA_SOURCE": FULL_SOURCE, **LOCAL_LEVEL_SOURCES, "REPLAY_SOURCE": REPLAY_FILE, **overrides}
     switches = {**defaults, **parameters}
@@ -4013,6 +4105,7 @@ def full(report, defaults, overrides, rules=None):
     print(f"  run time:                      {seconds:.1f} s")
     print_sentiment(brief)
     print_levels(brief)
+    print_replay(brief)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  format check of the brief:     {format_seconds:.1f} s (the check the notebook runs before saving)")
