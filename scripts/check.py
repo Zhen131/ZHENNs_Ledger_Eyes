@@ -92,7 +92,7 @@ SAMPLE_SOURCE = "samples/tim-financial-tweets-sample.parquet"  # relative to the
 FULL_SOURCE = "data/raw/tim-financial-tweets-bba60269.parquet"  # the local copy (scripts/download_data.sh)
 DEFAULT_DATA_SOURCE = ("hf://datasets/TimKoornstra/financial-tweets-sentiment@bba602698fd6f18226f6404fd8fb637ef67fa1eb/"
                        "data/train-00000-of-00001.parquet")  # the pinned file on Hugging Face
-TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment"]
+TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"]
 SCOPE_FIELDS = ["source", "granularity", "tickers", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
@@ -105,7 +105,8 @@ SPLIT_PARTS = ["train", "validation", "test"]
 # Every switch of the notebook, in order: the switch cell holds exactly these (so no switch of a removed chapter is left).
 ALL_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS", "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS",
                 "KEEP_NEGATIONS", "BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE", "WORD2VEC_DIM", "WORD2VEC_WINDOW",
-                "WORD2VEC_MIN_COUNT", "WORD2VEC_EPOCHS"]
+                "WORD2VEC_MIN_COUNT", "WORD2VEC_EPOCHS", "LEVEL_LABELS_SOURCE", "LEVEL_REVIEW_SOURCE",
+                "LEVEL_SECOND_REVIEW_SOURCE", "LEVEL_BALANCE", "LEVEL_EPOCHS"]
 # Chapter 1: what a ticker is. Locked (only add): texts that must count and texts that must not.
 TICKER_MUST_MATCH = ["$TSLA", "$tsla", "$F", "$BRK.B", "($AAPL)", "$NVDA's", "buying more $SPY."]
 TICKER_MUST_NOT_MATCH = ["$100", "$5.20", "$TOOLONG", "abc$TSLA", "a lone $ sign", "$"]
@@ -147,8 +148,9 @@ SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the n
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
 # The chapters, in order; the last one checks and saves the brief and must not use the network.
-CHAPTER_COUNT = 10  # chapters 0 to 9
-BRIEF_CHAPTER = 9
+CHAPTER_COUNT = 11  # chapters 0 to 10
+BRIEF_CHAPTER = 10
+LEVEL_CHAPTERS = {9: "Levels: what does a post pay attention to?"}  # chapter -> title; they import no Gradio
 BRIEF_CHAPTER_TITLE = "The brief: check and save"
 BRIEF_CHAPTER_IMPORTS = {"json", "math", "pathlib", "datetime", "numpy", "pandas", "jsonschema"}  # all it may import
 
@@ -1078,6 +1080,7 @@ BROKEN_BRIEFS = [
     ("3 wrong type", ("scope",), lambda old: [], "scope", "object"),  # an object written as a list
     ("3 wrong type", ("dataset", "cleaning", "keep_negations"), lambda old: "true", "dataset.cleaning.keep_negations",
      "boolean"),
+    ("3 wrong type", ("levels", "labels_file", "n_rows"), str, "levels.labels_file.n_rows", "integer"),
     ("4 granularity not allowed", ("scope", "granularity"), lambda old: "weekly", "scope.granularity", "weekly"),
     ("4 granularity not allowed", ("scope", "granularity"), lambda old: "Batch", "scope.granularity", "Batch"),
     ("4 granularity not allowed", ("scope", "granularity"), lambda old: "", "scope.granularity", "''"),
@@ -1090,7 +1093,12 @@ BROKEN_BRIEFS = [
     ("6 null not allowed, or an unknown field", ("dataset", "n_posts"), lambda old: None, "dataset.n_posts", "None"),
     ("6 null not allowed, or an unknown field", ("sentiment", "extra_field"), lambda old: 1, "sentiment", "extra_field"),
     ("6 null not allowed, or an unknown field", ("scope", "extra_field"), lambda old: 1, "scope", "extra_field"),
+    ("6 null not allowed, or an unknown field", ("levels", "matching", "n_matched"), lambda old: None,
+     "levels.matching.n_matched", "None"),
+    ("6 null not allowed, or an unknown field", ("levels", "extra_field"), lambda old: 1, "levels", "extra_field"),
     ("7 value the format does not allow", ("scope", "n_classes"), lambda old: 4, "scope.n_classes", "4"),
+    ("7 value the format does not allow", ("levels", "classes"), lambda old: [value for value in old if value != "none"],
+     "levels.classes", "expected"),
 ]
 # Locked: fields the format allows to be null. Set to null one at a time, the brief must still pass.
 NULL_ALLOWED = [
@@ -1299,6 +1307,14 @@ def check_chapters(report):
                  f"chapter {BRIEF_CHAPTER} imports no network package and nothing outside "
                  f"{sorted(BRIEF_CHAPTER_IMPORTS)} (no web page, no panel)",
                  f"imports {sorted(modules)}; not allowed {outside}")
+    gradio = sorted(number for number in LEVEL_CHAPTERS for cell in chapters.get(number, [])
+                    if cell.cell_type == "code" and "gradio" in {name.split(".")[0] for name in
+                                                                 imported_modules(ast.parse(cell.source))})
+    wrong_titles = {number: titles.get(number) for number, title in LEVEL_CHAPTERS.items() if titles.get(number) != title}
+    report.check(not gradio and not wrong_titles,
+                 "the level chapters are there with their titles ("
+                 + ", ".join(f"{number}. {title}" for number, title in LEVEL_CHAPTERS.items())
+                 + ") and import no Gradio (no panel)", f"titles differing {wrong_titles}; chapters importing gradio {gradio}")
 
 
 # ---------------------------------------------------------------- switches, reading, tickers and the sample (chapters 1 and 2)
@@ -1347,7 +1363,9 @@ def check_switch_cell(report, defaults, others):
 
 
 SWITCH_PROBES = [("N_CLASSES", 4), ("TICKER_ONLY", "yes"), ("EMOJI_TO_WORDS", 1), ("VOCAB_SIZE", 0), ("WORD2VEC_DIM", 0),
-                 ("WORD2VEC_WINDOW", -1), ("WORD2VEC_MIN_COUNT", 0), ("WORD2VEC_EPOCHS", -3)]
+                 ("WORD2VEC_WINDOW", -1), ("WORD2VEC_MIN_COUNT", 0), ("WORD2VEC_EPOCHS", -3),
+                 ("LEVEL_LABELS_SOURCE", ""), ("LEVEL_LABELS_SOURCE", 5), ("LEVEL_REVIEW_SOURCE", None),
+                 ("LEVEL_SECOND_REVIEW_SOURCE", 1.5), ("LEVEL_BALANCE", "yes"), ("LEVEL_EPOCHS", 0), ("LEVEL_EPOCHS", -2)]
 
 
 def cell_defining_text(marker):
@@ -2626,6 +2644,214 @@ def check_levels_second_review_file(report):
     report.info(f"{LEVEL_SECOND_REVIEW_FILE}: {len(body)} rows; review labels {dict(sorted(counts.items()))}")
 
 
+LEVEL_RAW_BASE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/"  # this repository on GitHub
+LEVEL_SWITCH_DEFAULTS = {  # chapter 9's switches and their defaults
+    "LEVEL_LABELS_SOURCE": LEVEL_RAW_BASE + LEVEL_FULL_FILE,
+    "LEVEL_REVIEW_SOURCE": LEVEL_RAW_BASE + LEVEL_REVIEW_FILE,
+    "LEVEL_SECOND_REVIEW_SOURCE": LEVEL_RAW_BASE + LEVEL_SECOND_REVIEW_FILE,
+    "LEVEL_BALANCE": True,
+}
+START_FORMAT_VERSION = "2.0"  # the format before the levels section; the new version keeps its MAJOR and raises its MINOR
+LEVEL_PROBE_READING_DIR = REPO_DIR / "data" / "checks" / "levels-reading-probe"
+
+
+def check_levels_switches(report, defaults, others):
+    """Chapter 9's switches: defaults, LEVEL_BALANCE two-state with False as its other value, LEVEL_EPOCHS a positive
+    integer and not two-state, the three sources not two-state."""
+    wrong = [f"{name}={defaults.get(name)!r} (expected {value!r})" for name, value in LEVEL_SWITCH_DEFAULTS.items()
+             if defaults.get(name) != value or type(defaults.get(name)) is not type(value)]
+    epochs = defaults.get("LEVEL_EPOCHS")
+    if isinstance(epochs, bool) or not isinstance(epochs, int) or epochs < 1:
+        wrong.append(f"LEVEL_EPOCHS={epochs!r} (expected a positive integer)")
+    two_state = sorted(name for name in ("LEVEL_LABELS_SOURCE", "LEVEL_REVIEW_SOURCE", "LEVEL_SECOND_REVIEW_SOURCE",
+                                         "LEVEL_EPOCHS") if name in others)
+    report.check(not wrong and others.get("LEVEL_BALANCE") is False and not two_state,
+                 "switch cell: LEVEL_LABELS_SOURCE, LEVEL_REVIEW_SOURCE and LEVEL_SECOND_REVIEW_SOURCE default to the "
+                 "repository's files on GitHub, LEVEL_BALANCE defaults to True with False as its other value, and "
+                 "LEVEL_EPOCHS is a positive integer; only LEVEL_BALANCE is two-state",
+                 f"{'; '.join(wrong)}; LEVEL_BALANCE other {others.get('LEVEL_BALANCE')!r}; two-state {two_state}")
+
+
+def level_reading_namespace():
+    """Chapter 9's class cell and reading cell, executed from the source; returns (namespace, problems)."""
+    import pandas as pd
+    namespace = {"__name__": "notebook_cells", "pd": pd, "Path": Path}
+    return namespace, run_cells(["LEVEL_CLASSES", "match_level_labels"], namespace)
+
+
+def stops_at_all(function, *args, words=()):
+    """The message when function(*args) raises any exception, or None when it does not stop."""
+    try:
+        function(*args)
+    except Exception as exc:  # the reading functions stop with ValueError or FileNotFoundError
+        message = str(exc)
+        return message if all(word in message for word in words) else f"(without {words}) {message}"
+    return None
+
+
+def check_levels_reading(report):
+    """Chapter 9's reading and joining, run from the source on hand-written label tables and posts."""
+    import pandas as pd
+    shutil.rmtree(LEVEL_PROBE_READING_DIR, ignore_errors=True)
+    namespace, problems = level_reading_namespace()
+    if not report.check(not problems, "chapter 9: the class cell and the reading cell run from the source",
+                        "; ".join(problems)):
+        return
+    read, check_file, match = (namespace["read_level_table"], namespace["check_level_file"],
+                               namespace["match_level_labels"])
+    texts = ["dividend yield 6%", "EPS beat", "revenue up", "breakout above 200", "Fed cuts rates", "to the moon",
+             "happy friday", "who knows"]
+    full = pd.DataFrame({"post_id": [f"tim:{row}" for row in range(len(texts))], "text": texts,
+                         "has_ticker": [False] * len(texts)})
+    levels_written = ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only",
+                      "none", "disputed"]
+    good = pd.DataFrame({"post_id": list(full["post_id"]), "level": levels_written, "votes": ["5/5"] * 7 + ["2/5"],
+                         "model": ["m"] * 8, "prompt_version": ["v2"] * 8,
+                         "text_hash": [own_text_hash(text) for text in texts]})
+    LEVEL_PROBE_READING_DIR.mkdir(parents=True, exist_ok=True)
+    good_path = LEVEL_PROBE_READING_DIR / "good.csv"
+    good.to_csv(good_path, index=False, lineterminator="\n")
+    table, digest = read(str(good_path), "LEVEL_LABELS_SOURCE", "labels/levels-prelabel-v2.csv")
+    check_file(table)
+    matched, counts = match(table, full, False)
+    sample = full.iloc[[1, 3, 6]]  # a part of the posts, as the repository's sample is
+    sample_matched, sample_counts = match(table, sample, True)
+    report.check(digest == sha256_of(good_path) and list(table.columns) == LEVEL_COLUMNS and len(table) == 8
+                 and counts == {"n_matched": 8, "n_not_in_data": 0, "n_other_text": 0}
+                 and list(matched["post_id"]) == list(full["post_id"]) and list(matched["text"]) == texts
+                 and sample_counts == {"n_matched": 3, "n_not_in_data": 5, "n_other_text": 0}
+                 and list(sample_matched["post_id"]) == ["tim:1", "tim:3", "tim:6"],
+                 "chapter 9 on a good label table: every cell read as text, the SHA-256 of the file's bytes, all 8 rows "
+                 "matched to the full posts; on a part of the posts 3 matched and 5 not in the data, without stopping",
+                 f"counts {counts}; on the part {sample_counts}; sha256 equal {digest == sha256_of(good_path)}")
+    other_text = good.copy()
+    other_text.loc[2, "text_hash"] = "00000000"
+    missing_id = good.copy()
+    missing_id.loc[5, "post_id"] = "tim:999"
+    stops = {
+        "a fingerprint differs (full)": stops_at_all(match, other_text, full, False, words=("tim:2",)),
+        "a fingerprint differs (part)": stops_at_all(match, other_text, full.iloc[[2, 4]], True, words=("tim:2",)),
+        "an id not in the full data": stops_at_all(match, missing_id, full, False, words=("tim:999",)),
+        "no row matched": stops_at_all(match, good, pd.DataFrame({"post_id": ["tim:50"], "text": ["x"],
+                                                                  "has_ticker": [False]}), True, words=("No row",)),
+        "other columns": stops_at_all(check_file, good.drop(columns=["votes"]), words=("columns",)),
+        "a repeated id": stops_at_all(check_file, pd.concat([good, good.iloc[[0]]]), words=("tim:0",)),
+        "an unknown level": stops_at_all(check_file, good.replace({"level": {"earnings": "profits"}}),
+                                         words=("profits",)),
+        "a source that cannot be read": stops_at_all(read, str(LEVEL_PROBE_READING_DIR / "absent.csv"),
+                                                     "LEVEL_LABELS_SOURCE", "labels/levels-prelabel-v2.csv",
+                                                     words=("LEVEL_LABELS_SOURCE", "absent.csv")),
+    }
+    part_with_missing = stops_at_all(match, missing_id, full.iloc[[0, 1]], True)
+    report.check(all(message is not None and not message.startswith("(without") for message in stops.values())
+                 and part_with_missing is None,
+                 "chapter 9 stops on a text fingerprint that differs (full data and part), on an id missing from the "
+                 "full data (not from a part), when no row matches, on other columns, a repeated id or an unknown "
+                 "level, and on a source it cannot read (naming the switch and the path)",
+                 "; ".join(f"{case}: {message}" for case, message in stops.items())
+                 + f"; id missing from a part: {part_with_missing or 'did not stop'}")
+    shutil.rmtree(LEVEL_PROBE_READING_DIR, ignore_errors=True)
+
+
+def level_file_expectations(switches):
+    """What chapter 9 must report about the label file, computed here from the files the run read."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    label_path = REPO_DIR / switches["LEVEL_LABELS_SOURCE"]
+    with label_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    data_path = REPO_DIR / switches["DATA_SOURCE"]
+    columns = pq.ParquetFile(data_path).schema_arrow.names
+    from_sample = "row" in columns
+    if from_sample:
+        ids = {f"tim:{row}" for row in pd.read_parquet(data_path, columns=["row"])["row"]}
+    else:
+        ids = {f"tim:{row}" for row in range(pq.ParquetFile(data_path).metadata.num_rows)}
+    matched = [row for row in rows if row["post_id"] in ids]
+    return {
+        "sha256": sha256_of(label_path),
+        "n_rows": len(rows),
+        "label_counts": {value: sum(row["level"] == value for row in rows) for value in LEVEL_LABELS + ["disputed", "unparsed"]},
+        "models": sorted({row["model"] for row in rows}),
+        "prompt_versions": sorted({row["prompt_version"] for row in rows}),
+        "data_is_sample": from_sample,
+        "n_matched": len(matched),
+        "n_not_in_data": len(rows) - len(matched),
+        "dropped": {value: sum(row["level"] == value for row in matched) for value in ("disputed", "unparsed")},
+        "counts_before": {value: sum(row["level"] == value for row in matched) for value in LEVEL_LABELS},
+    }
+
+
+def check_levels_brief(report, label, brief, switches, full_run):
+    """The levels section of a brief against the files the run read and against itself."""
+    levels_section = brief.get("levels")
+    if not report.check(isinstance(levels_section, dict) and bool(levels_section), f"{label}: levels section has content"):
+        return
+    version = str(brief.get("format_version"))
+    start_major, start_minor = START_FORMAT_VERSION.split(".")
+    major, _, minor = version.partition(".")
+    report.check(list(brief) == TOP_LEVEL_FIELDS and major == start_major and minor.isdigit()
+                 and int(minor) > int(start_minor),
+                 f"{label}: the brief has exactly the top-level fields {TOP_LEVEL_FIELDS}, and its format version keeps "
+                 f"the MAJOR of {START_FORMAT_VERSION} with a higher MINOR", f"fields {list(brief)}, version {version}")
+    sources = {name: switches.get(name) for name in LOCAL_LEVEL_SOURCES}
+    report.check(all(isinstance(value, str) and "://" not in value for value in sources.values())
+                 and levels_section.get("labels_source") == switches.get("LEVEL_LABELS_SOURCE"),
+                 f"{label}: the run read the three level files from local paths (no web address), and the brief names "
+                 "the label source", f"{sources}; brief {levels_section.get('labels_source')!r}")
+    expected = level_file_expectations(switches)
+    labels_file, matching = as_dict(levels_section.get("labels_file")), as_dict(levels_section.get("matching"))
+    found = {"sha256": labels_file.get("sha256"), "n_rows": labels_file.get("n_rows"),
+             "label_counts": labels_file.get("label_counts"), "models": labels_file.get("models"),
+             "prompt_versions": labels_file.get("prompt_versions"), "data_is_sample": matching.get("data_is_sample"),
+             "n_matched": matching.get("n_matched"), "n_not_in_data": matching.get("n_not_in_data"),
+             "dropped": levels_section.get("dropped"),
+             "counts_before": as_dict(levels_section.get("balance")).get("counts_before")}
+    differ = [f"{key}: brief {found[key]!r}, files {expected[key]!r}" for key in expected if found[key] != expected[key]]
+    report.check(not differ and matching.get("n_other_text") == 0 and levels_section.get("classes") == LEVEL_LABELS,
+                 f"{label}: the label file's fingerprint, rows and counts, the rows matched and not in the data, the "
+                 "rows left out (disputed, unparsed) and the posts per class before the draw are those of the files "
+                 "the run read; no text fingerprint differs; the classes are the six levels and none",
+                 "; ".join(differ) + f"; other text {matching.get('n_other_text')!r}; classes {levels_section.get('classes')}")
+    before = as_dict(as_dict(levels_section.get("balance")).get("counts_before"))
+    if full_run:
+        report.check(matching.get("n_matched") == labels_file.get("n_rows") and matching.get("n_not_in_data") == 0
+                     and matching.get("n_other_text") == 0 and matching.get("data_is_sample") is False,
+                     f"{label}: every row of the label file is matched to a post of the full data with the same text "
+                     "fingerprint", f"{matching}, rows {labels_file.get('n_rows')}")
+    else:
+        report.check(matching.get("data_is_sample") is True and matching.get("n_other_text") == 0
+                     and all(is_count(before.get(value)) and before[value] >= 10 for value in LEVEL_LABELS),
+                     f"{label}: on the sample no text fingerprint differs, and each of the seven classes has at least "
+                     "MIN_POSTS_PER_CLASS (10) matched posts", f"{matching}; per class {before}")
+    balance = as_dict(levels_section.get("balance"))
+    after = as_dict(balance.get("counts_after"))
+    if switches.get("LEVEL_BALANCE"):
+        balance_ok = (sorted(after) == sorted(LEVEL_LABELS) and len(set(after.values())) == 1
+                      and after.get("none") == min(before.values() or [-1]))
+    else:
+        balance_ok = after == before
+    report.check(balance.get("enabled") is switches.get("LEVEL_BALANCE") and balance_ok
+                 and is_count(after.get("none")) and after["none"] > 0,
+                 f"{label}: with LEVEL_BALANCE={switches.get('LEVEL_BALANCE')} the drawn posts are "
+                 + ("the same number in every class, as many as the smallest class had" if switches.get("LEVEL_BALANCE")
+                    else "every labelled post") + "; none is among them, disputed and unparsed are not",
+                 f"before {before}, after {after}")
+    split = as_dict(levels_section.get("split"))
+    sizes, class_counts = as_dict(split.get("n_posts")), as_dict(split.get("class_counts"))
+    split_ok = sorted(sizes) == sorted(SPLIT_PARTS) and all(is_count(sizes[part]) for part in SPLIT_PARTS) \
+        and sum(sizes.values()) == sum(after.values())
+    for part in SPLIT_PARTS if split_ok else []:
+        counts = as_dict(class_counts.get(part))
+        split_ok = split_ok and sorted(counts) == sorted(LEVEL_LABELS) and all(
+            is_count(count) and count > 0 for count in counts.values()) and sum(counts.values()) == sizes[part]
+    if split_ok:
+        split_ok = all(sum(class_counts[part][value] for part in SPLIT_PARTS) == after[value] for value in LEVEL_LABELS)
+    report.check(split_ok and split.get("stratified_by") == "level",
+                 f"{label}: chapter 9's training, validation and test sets add up to the drawn posts, with every one of "
+                 "the seven classes in every part", f"{sizes} {class_counts}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -2647,6 +2873,8 @@ def sha256_of(path):
 
 
 REPEAT_LABEL = "default switches again"  # third quick run: same switches as the first
+LOCAL_LEVEL_SOURCES = {"LEVEL_LABELS_SOURCE": LEVEL_FULL_FILE, "LEVEL_REVIEW_SOURCE": LEVEL_REVIEW_FILE,
+                       "LEVEL_SECOND_REVIEW_SOURCE": LEVEL_SECOND_REVIEW_FILE}  # every check run reads the local copies
 
 
 def stable_numbers(brief):
@@ -2657,12 +2885,17 @@ def stable_numbers(brief):
     sentiment = as_dict(brief.get("sentiment"))
     split = as_dict(sentiment.get("split"))
     rows = as_dict(sentiment.get("evaluation")).get("rows") or []
+    levels_section = as_dict(brief.get("levels"))
     return {
         "dataset": brief.get("dataset"),
         "split_class_counts": split.get("class_counts"),
         "split_n_posts": split.get("n_posts"),
         "subset_posts": sorted({(row.get("subset"), row.get("n")) for row in rows if isinstance(row, dict)},
                                key=str),
+        # The levels section: the label file, the matching, the rows left out, the draw and the split.
+        "levels": {key: levels_section.get(key) for key in ("labels_source", "labels_file", "matching", "dropped",
+                                                            "classes", "balance")},
+        "levels_split": {key: as_dict(levels_section.get("split")).get(key) for key in ("n_posts", "class_counts")},
     }
 
 
@@ -2676,7 +2909,8 @@ def compare_stable(report, first, again):
         detail = "differing: " + ", ".join(key for key in left if left[key] != right[key])
     report.check(left is not None and bool(left["dataset"]) and left == right,
                  "default switches run twice: the two briefs agree on the dataset section, the posts per class in "
-                 "every part of the split and the posts in every test subset", detail)
+                 "every part of the split and the posts in every test subset, and on the numbers of the levels section "
+                 "that do not depend on training", detail)
 
 
 def quick(report, defaults, others, overrides, rules=None):
@@ -2685,7 +2919,8 @@ def quick(report, defaults, others, overrides, rules=None):
             (REPEAT_LABEL, {}, "quick-default-again")]
     briefs = {}
     for label, flipped, folder in runs:
-        parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **flipped, **overrides}
+        parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **LOCAL_LEVEL_SOURCES,
+                      **flipped, **overrides}
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
         brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
@@ -2696,6 +2931,7 @@ def quick(report, defaults, others, overrides, rules=None):
         if brief is not None and label != REPEAT_LABEL:
             check_brief(report, label, brief, switches)
             check_sentiment(report, label, brief, switches, full_run=False)
+            check_levels_brief(report, label, brief, switches, full_run=False)
         if brief is not None:
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -2708,7 +2944,7 @@ def quick(report, defaults, others, overrides, rules=None):
 
 def full(report, defaults, overrides, rules=None):
     check_levels_full(report)
-    parameters = {"DATA_SOURCE": FULL_SOURCE, **overrides}
+    parameters = {"DATA_SOURCE": FULL_SOURCE, **LOCAL_LEVEL_SOURCES, **overrides}
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
     if "://" not in source:
@@ -2729,6 +2965,7 @@ def full(report, defaults, overrides, rules=None):
         return
     check_brief(report, "full run", brief, switches)
     check_sentiment(report, "full run", brief, switches, full_run=True)
+    check_levels_brief(report, "full run", brief, switches, full_run=True)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -2793,6 +3030,8 @@ def main():
     check_levels_env(report)
     check_levels_requirements(report)
     check_levels_second_review_file(report)
+    check_levels_switches(report, defaults, others)
+    check_levels_reading(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:

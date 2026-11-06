@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of short English posts about stocks and markets, each labelled bullish, neutral or bearish, and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 The brief: check and save.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Levels: what does a post pay attention to? · 10 The brief: check and save.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的英文股票短帖，每条帖子都标好了看多、中性或看空，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 简报：校验与保存。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 六级：帖子在关注哪一层？ · 10 简报：校验与保存。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -45,6 +45,11 @@ WORD2VEC_DIM = 100  # default: 100 (gensim's own default); or any positive integ
 WORD2VEC_WINDOW = 5  # default: 5 (gensim's own default); or any positive integer (words on each side that count as a word's neighbours in chapter 6)
 WORD2VEC_MIN_COUNT = 5  # default: 5 (gensim's own default); or any positive integer (uses in the training set a word needs to get a vector in chapter 6)
 WORD2VEC_EPOCHS = 5  # default: 5 (gensim's own default); or any positive integer (passes of Word2Vec over the training set in chapter 6)
+LEVEL_LABELS_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/labels/levels-prelabel-v2.csv"  # default: the level label file of this project's repository on GitHub (readable once the repository is pushed); or a local path such as "labels/levels-prelabel-v2.csv", or another address with the same columns (chapter 9)
+LEVEL_REVIEW_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/labels/levels-review-template.csv"  # default: the level review table of this project's repository on GitHub (column human_label, filled in by a person); or a local path, another address with the same columns, or "" (not read) (chapter 9)
+LEVEL_SECOND_REVIEW_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/labels/levels-review-second-model.csv"  # default: the review of the same rows by a second, larger language model, in this project's repository on GitHub; or a local path, another address with the same columns, or "" (not read) (chapter 9)
+LEVEL_BALANCE = True  # default: True (the same number of posts from each of the seven classes of chapter 9); two-state, other: False (every labelled post)
+LEVEL_EPOCHS = 20  # default: 20; or any positive integer (passes over the training set of chapter 9)
 
 # %% [markdown]
 # ## Setup
@@ -129,26 +134,35 @@ for name, value in [("TICKER_ONLY", TICKER_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WO
         raise ValueError(f"{name} must be True or False, got {value!r}")
 for name, value in [("BPE_VOCAB_SIZE", BPE_VOCAB_SIZE), ("VOCAB_SIZE", VOCAB_SIZE), ("EPOCHS", EPOCHS),
                     ("BATCH_SIZE", BATCH_SIZE), ("WORD2VEC_DIM", WORD2VEC_DIM), ("WORD2VEC_WINDOW", WORD2VEC_WINDOW),
-                    ("WORD2VEC_MIN_COUNT", WORD2VEC_MIN_COUNT), ("WORD2VEC_EPOCHS", WORD2VEC_EPOCHS)]:
+                    ("WORD2VEC_MIN_COUNT", WORD2VEC_MIN_COUNT), ("WORD2VEC_EPOCHS", WORD2VEC_EPOCHS),
+                    ("LEVEL_EPOCHS", LEVEL_EPOCHS)]:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
+for name, value in [("LEVEL_LABELS_SOURCE", LEVEL_LABELS_SOURCE), ("LEVEL_REVIEW_SOURCE", LEVEL_REVIEW_SOURCE),
+                    ("LEVEL_SECOND_REVIEW_SOURCE", LEVEL_SECOND_REVIEW_SOURCE)]:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be text (a path or a web address), got {value!r}")
+if not LEVEL_LABELS_SOURCE.strip():
+    raise ValueError("LEVEL_LABELS_SOURCE must not be empty: chapter 9 needs the level label file")
+if not isinstance(LEVEL_BALANCE, bool):
+    raise ValueError(f"LEVEL_BALANCE must be True or False, got {LEVEL_BALANCE!r}")
 print("Switches look fine.")
 
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 9 saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset` and `sentiment`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), whether the working sample keeps only posts that name a ticker, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 9 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and the last chapter saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset`, `sentiment` and `levels`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), whether the working sample keeps only posts that name a ticker, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); the last chapter checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 9 章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本是不是只留带股票代码的帖子；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 9 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，最后一章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`、`levels`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本是不是只留带股票代码的帖子；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；最后一章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
 brief = {
-    "format_version": "2.0",  # the format of chapter 9's rules (docs/brief-format.md in the repository)
+    "format_version": "2.1",  # the format of the last chapter's rules (docs/brief-format.md in the repository)
     "generated_at": None,  # UTC time, set when the brief is saved
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
@@ -158,6 +172,7 @@ brief = {
     },
     "dataset": None,  # chapters 0 to 3
     "sentiment": None,  # chapters 4 to 8
+    "levels": None,  # chapter 9
 }
 list(brief)  # show the top-level fields
 
@@ -318,6 +333,7 @@ def load_posts(source, work_dir):
 df_all = load_posts(DATA_SOURCE, WORK_DIR)  # every post; kept unchanged until the end of the notebook
 if not df_all["post_id"].is_unique:
     raise ValueError("post_id is not unique")
+df_all_is_sample = df_all["post_id"].tolist() != [f"{ID_PREFIX}:{row}" for row in range(len(df_all))]  # True for a part of the full file (ids from a row column, as in the repository's sample); chapter 9 needs it
 print(f"{len(df_all):,} posts")
 df_all.head()
 
@@ -1844,7 +1860,273 @@ brief["sentiment"]["scoring"]["check"] = scoring_check
 scoring_check
 
 # %% [markdown]
-# ## 9. The brief: check and save
+# ## 9. Levels: what does a post pay attention to?
+#
+# **Without this chapter**, the notebook can say that 40% of the crowd is bullish, but not *why*. A post that is bullish because the dividend yield is 6% and a post that is bullish because "it's going to the moon" count the same, yet they are very different crowds. This chapter asks a second question about the same kind of posts: **what does a post pay attention to, and how far from cash is it?** The answer is one rung of a ladder of six **levels**, from close to cash to far from it:
+#
+# | # | Label | The post pays attention to |
+# | --- | --- | --- |
+# | 1 | `assets_dividends` | net assets and dividends (book value, P/B, dividend yield) |
+# | 2 | `earnings` | profits (P/E, earnings per share, margins, guidance) |
+# | 3 | `revenue_business` | revenue and how the business is going (sales, deliveries, users) |
+# | 4 | `price_chart` | the price and the chart (levels, trends, breakouts, volume) |
+# | 5 | `story_macro` | a story: news, ratings, rates, inflation, big trends |
+# | 6 | `emotion_only` | only a position or a feeling, nothing of levels 1 to 5 ("to the moon") |
+#
+# **The ladder measures appetite for risk, not direction.** The closer a crowd stands to levels 1 and 2, the calmer its attention; the closer to 5 and 6, the more heated. A bullish post and a bearish post can stand on the same level, so the levels are never checked against price moves: price moves are not the answer to this question.
+#
+# **A seventh class, `none`.** Some posts do not talk about stocks or markets at all (small talk, adverts, only names and links). They are not a level, but without a class of their own they would be pushed into one, most often level 6, and make the crowd look more emotional than it is. So the networks learn `none` as a seventh class, only to set such posts aside: `none` is never counted as a level.
+#
+# **Silver labels.** Nobody has labelled 38,091 posts by hand. A language model running on the project's own computer labelled about 8,000 of them (each post asked five times; a label needs three votes), and the repository keeps the result as `labels/levels-prelabel-v2.csv` (ids and labels only, no text; how it was made is described in the repository's README). These are **silver labels**: a model gave them, not a person. The networks below learn to imitate them, so their scores say how well they learned the labels, not how well they recognise the levels. Two reviews at the end of the chapter measure how often the labels can be trusted.
+#
+# **Which posts.** This chapter takes every post of `df_all` that the label file labels, whatever `TICKER_ONLY` and `N_CLASSES` say: the levels and the sentiment are two different questions, and keeping only posts with a ticker would make the rare levels rarer still. The posts are cleaned with the same `clean_texts`, so `EMOJI_TO_WORDS` and `KEEP_NEGATIONS` apply here too.
+#
+# ***
+#
+# ## 9. 六级：帖子在关注哪一层？
+#
+# **没有这一章时**，笔记本能说出人群里四成看多，却说不出为什么。一条因为「股息率 6%」看多的帖子，和一条因为「要上天了」看多的帖子，算的是同一票，可这是两群完全不同的人。这一章对同类帖子问第二个问题：**帖子在关注什么，离现金有多远？** 答案是一把梯子上的某一级，共六级，从离现金近到离现金远：
+#
+# | # | 标签 | 帖子关注的是 |
+# | --- | --- | --- |
+# | 1 | `assets_dividends` | 净资产和股息（账面价值、市净率、股息率） |
+# | 2 | `earnings` | 利润（市盈率、每股收益、利润率、业绩指引） |
+# | 3 | `revenue_business` | 营收和生意本身（销售额、交付量、用户数） |
+# | 4 | `price_chart` | 价格和走势图（价位、趋势、突破、成交量） |
+# | 5 | `story_macro` | 故事：新闻、评级、利率、通胀、大趋势 |
+# | 6 | `emotion_only` | 只有立场或情绪，没有第 1～5 级的任何东西（「上天」） |
+#
+# **梯子量的是风险偏好，不是方向。** 人群越靠近第 1、2 级，注意力越冷静；越靠近第 5、6 级，越狂热。看多和看空的帖子可以站在同一级，所以六级从不拿价格涨跌来核对：价格涨跌不是这个问题的答案。
+#
+# **第七类 `none`。** 有些帖子根本不谈股票和市场（闲聊、广告、只有人名和链接）。它们不算哪一级；可要是没有自己的一类，就会被硬塞进某一级，多半是第 6 级，让人群看起来比实际更情绪化。所以网络把 `none` 当第七类一起学，只为把这类帖子挑出来：`none` 永远不算一级。
+#
+# **银标签。** 没有人手工标过 38,091 条帖子。项目自己电脑上的一个语言模型标了其中约 8,000 条（每条问五次，三票才算数），结果存在仓库的 `labels/levels-prelabel-v2.csv`（只有编号和标签，没有原文；怎么做的写在仓库的 README 里）。这是**银标签**：是模型贴的，不是人。下面的网络学着模仿这些标签，所以它们的分数说明学得像不像这些标签，不说明认六级认得准不准。本章最后用两份复核量一量这些标签有多可信。
+#
+# **用哪些帖子。** 这一章取 `df_all` 里标签文件标过的全部帖子，不管 `TICKER_ONLY` 和 `N_CLASSES` 怎么设：六级和多空是两个问题，只留带股票代码的帖子会让本来就少的级更少。帖子用同一个 `clean_texts` 清洗，所以 `EMOJI_TO_WORDS` 和 `KEEP_NEGATIONS` 在这里同样起作用。
+
+# %%
+# The six levels, the seven classes the networks learn, and short names for charts.
+LEVEL_LABELS = ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro",
+                "emotion_only"]  # the six levels, closest to cash first
+LEVEL_CLASSES = LEVEL_LABELS + ["none"]  # the seven classes of the networks: the six levels, then none (not a level)
+LEVEL_DISPLAY_NAMES = {  # level -> short English name for charts
+    "assets_dividends": "1 assets & dividends",
+    "earnings": "2 earnings",
+    "revenue_business": "3 revenue & business",
+    "price_chart": "4 price & chart",
+    "story_macro": "5 story & macro",
+    "emotion_only": "6 emotion only",
+}
+LEVEL_CLASSES
+
+# %% [markdown]
+# ### Reading the label file and joining it to the posts
+#
+# The label file has six columns: `post_id`, `level` (one of the six levels, `none`, `disputed` when the votes did not agree, or `unparsed` when the model gave no usable answer), `votes`, `model`, `prompt_version` and `text_hash`. The switch `LEVEL_LABELS_SOURCE` says where to read it: by default the file in this project's repository on GitHub, so that Colab can read it without uploading anything; a local path works the same way. The cell after next stops with a clear message when the file cannot be read, when its columns are not those six, when an id appears twice, or when `level` holds any other value.
+#
+# **Joining by id, checked by fingerprint.** Every row is joined to the post of `df_all` with the same `post_id`. The file also carries `text_hash`, the first 8 hexadecimal digits of the SHA-256 of the post's text: if the text behind an id is not the text that was labelled, the label would land on the wrong post. So:
+#
+# 1. an id that is a post of `df_all` but whose text has another fingerprint stops the notebook (with the number of rows and the first ids);
+# 2. an id that is not a post of `df_all` stops the notebook when `df_all` is the full file; when `df_all` is a part of it (the repository's sample, whose ids come from its `row` column), such rows are expected and simply left out, and their number is recorded;
+# 3. when no row is left, the notebook stops.
+#
+# The next cell only defines these steps; the cell after it runs them.
+#
+# ***
+#
+# ### 读标签文件，接到帖子上
+#
+# 标签文件有六列：`post_id`、`level`（六级之一、`none`；投票没过半是 `disputed`；模型没给出能用的答案是 `unparsed`）、`votes`、`model`、`prompt_version`、`text_hash`。开关 `LEVEL_LABELS_SOURCE` 决定从哪里读：默认是本项目在 GitHub 上的仓库里的那份，Colab 不用上传任何东西就能读到；填本地路径也一样。读不出来、列不是这六列、某个编号出现两次、`level` 里有别的值，下下格都会停下并说清原因。
+#
+# **按编号接，用指纹核对。** 每一行接到 `df_all` 里 `post_id` 相同的那条帖子上。文件里还带着 `text_hash`，即帖子原文 SHA-256 的前 8 位十六进制数：编号背后的原文如果不是当初标的那段，标签就贴错了帖子。所以：
+#
+# 1. 编号在 `df_all` 里、但原文的指纹对不上：停下（报条数和前几个编号）；
+# 2. 编号不在 `df_all` 里：`df_all` 是整份文件时停下；`df_all` 只是其中一部分时（仓库里的小样本，编号来自它的 `row` 列），这种行本来就有，直接不用，条数记下来；
+# 3. 一行都对不上：停下。
+#
+# 下一格只定义这些步骤，再下一格才执行。
+
+# %%
+# Read a label table (local path or web address) and join it to the posts by id, checking the text fingerprints.
+import hashlib  # standard library: SHA-256
+import io  # standard library: bytes as a file
+import urllib.request  # standard library: reads a web address
+
+LEVEL_FILE_COLUMNS = ["post_id", "level", "votes", "model", "prompt_version", "text_hash"]  # the label file, in order
+LEVEL_FAILURE_VALUES = ["disputed", "unparsed"]  # values of the column level that are not labels
+LEVEL_SOURCE_HINT = ("The default addresses are files of this project's repository on GitHub; they can be read only "
+                     "after the repository has been pushed there, and only with a network connection. Without a "
+                     "network, set the switch to the repository's copy of the file, {local!r} (on Colab, upload that "
+                     "file first and give its path).")
+
+
+def read_level_table(source, switch, local):
+    """Read a CSV table from a local path or a web address, every cell as text (an empty cell as "").
+
+    Returns (table, SHA-256 of the bytes read). Stops with a message that names the switch, the path or address and
+    what to do when the table cannot be read.
+    """
+    try:
+        if "://" in source:
+            with urllib.request.urlopen(source, timeout=60) as response:
+                data = response.read()
+        else:
+            data = Path(source).read_bytes()
+        table = pd.read_csv(io.BytesIO(data), dtype=str, keep_default_na=False)
+    except (OSError, ValueError) as error:  # no such file, address not found, no network, empty or broken file
+        raise FileNotFoundError(f"{switch} could not be read from {source!r} ({type(error).__name__}: {error}). "
+                                + LEVEL_SOURCE_HINT.format(local=local)) from None
+    return table, hashlib.sha256(data).hexdigest()
+
+
+def text_fingerprint(text):
+    """The text_hash of the label files: the first 8 hexadecimal digits of the SHA-256 of the text (UTF-8)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def check_level_file(table):
+    """Stop, listing the problems, when a label table is not in the format of the label files."""
+    if list(table.columns) != LEVEL_FILE_COLUMNS:
+        raise ValueError(f"The level label file has the columns {list(table.columns)}, not {LEVEL_FILE_COLUMNS}")
+    problems = []
+    repeated = table.loc[table["post_id"].duplicated(), "post_id"]
+    if len(repeated):
+        problems.append(f"{repeated.nunique():,} ids appear more than once, for example {repeated.iloc[0]!r}")
+    unknown = table.loc[~table["level"].isin(LEVEL_CLASSES + LEVEL_FAILURE_VALUES), "level"]
+    if len(unknown):
+        problems.append(f"{len(unknown):,} rows have a level that is none of {LEVEL_CLASSES + LEVEL_FAILURE_VALUES}, "
+                        f"for example {unknown.iloc[0]!r}")
+    if problems:
+        raise ValueError("The level label file is not in the expected format:\n"
+                         + "\n".join(f"  - {problem}" for problem in problems))
+
+
+def match_level_labels(labels, posts, from_sample):
+    """Join a label table to the posts (post_id, text, has_ticker) by id and compare the text fingerprints.
+
+    from_sample: True when posts is a part of the full file, so that ids missing from it are expected.
+    Returns (matched, counts): matched has post_id, level, text and has_ticker for every row whose id is a post, in
+    the order of the label table; counts has n_matched, n_not_in_data and n_other_text. Stops when a fingerprint is
+    not that of the post's text, when an id is missing from the full file, or when no row is matched.
+    """
+    text_of = posts.set_index("post_id")["text"]
+    texts = labels["post_id"].map(text_of)  # missing where the id is not a post
+    in_data = texts.notna()
+    other_text = in_data & (labels["text_hash"] != texts.where(in_data, "").map(text_fingerprint))
+    if other_text.any():
+        raise ValueError(f"{int(other_text.sum()):,} rows of the level label file carry a text fingerprint that is not "
+                         f"that of their post's text, for example {labels.loc[other_text, 'post_id'].head(3).tolist()}; "
+                         "the label file and the data source do not describe the same posts")
+    n_not_in_data = int((~in_data).sum())
+    if n_not_in_data and not from_sample:
+        raise ValueError(f"{n_not_in_data:,} ids of the level label file are not posts of the data source, for example "
+                         f"{labels.loc[~in_data, 'post_id'].head(3).tolist()}; with the full data every id must be found")
+    matched = labels.loc[in_data, ["post_id", "level"]].merge(posts[["post_id", "text", "has_ticker"]], on="post_id",
+                                                               how="left")
+    if matched.empty:
+        raise ValueError("No row of the level label file is a post of the data source")
+    counts = {"n_matched": int(len(matched)), "n_not_in_data": n_not_in_data, "n_other_text": 0}
+    return matched.reset_index(drop=True), counts
+
+# %%
+# Read the label file, check it, join it to df_all, and set aside the rows without a label.
+level_label_table, level_file_sha256 = read_level_table(LEVEL_LABELS_SOURCE, "LEVEL_LABELS_SOURCE",
+                                                        "labels/levels-prelabel-v2.csv")
+check_level_file(level_label_table)
+level_matched, level_matching = match_level_labels(level_label_table, df_all, df_all_is_sample)
+level_dropped = {value: int((level_matched["level"] == value).sum()) for value in LEVEL_FAILURE_VALUES}
+level_posts = level_matched[level_matched["level"].isin(LEVEL_CLASSES)].reset_index(drop=True)  # disputed and unparsed out
+brief["levels"] = {
+    "silver_labels": ("silver labels: given by a language model on the project's own computer (see labels_file.models), "
+                      "not by a person; the scores below show how well the networks learned these labels, not how well "
+                      "they recognise the levels"),
+    "labels_source": LEVEL_LABELS_SOURCE,
+    "labels_file": {
+        "sha256": level_file_sha256,
+        "n_rows": int(len(level_label_table)),
+        "label_counts": {value: int((level_label_table["level"] == value).sum())
+                         for value in LEVEL_CLASSES + LEVEL_FAILURE_VALUES},
+        "models": sorted(level_label_table["model"].unique().tolist()),
+        "prompt_versions": sorted(level_label_table["prompt_version"].unique().tolist()),
+    },
+    "matching": {"data_is_sample": bool(df_all_is_sample), **level_matching},
+    "dropped": level_dropped,
+    "classes": list(LEVEL_CLASSES),
+}
+print(f"Label file: {len(level_label_table):,} rows, SHA-256 {level_file_sha256[:16]}...; "
+      f"matched {level_matching['n_matched']:,}, not in this data {level_matching['n_not_in_data']:,}, "
+      f"other text {level_matching['n_other_text']}; left out: {level_dropped}")
+pd.DataFrame({"label file": brief["levels"]["labels_file"]["label_counts"],
+              "matched": level_matched["level"].value_counts().reindex(LEVEL_CLASSES + LEVEL_FAILURE_VALUES,
+                                                                       fill_value=0)})
+
+# %% [markdown]
+# ### The same number of posts in every class
+#
+# The levels are far from equally common: in the label file, `story_macro` has more than three times as many posts as `revenue_business`. A network trained on such posts learns that guessing `story_macro` is usually right and neglects the rare levels, and the baseline "always guess the most frequent class" looks better than it is. So, with `LEVEL_BALANCE = True` (the default), we draw **the same number of posts from each of the seven classes**, as many as the smallest class has, with `RANDOM_SEED`, exactly as the working sample of chapter 2 does for the sentiment. The price: many posts of the frequent levels are not used. With `LEVEL_BALANCE = False`, every labelled post is used. The counts before and after go into the brief.
+#
+# ***
+#
+# ### 每一类一样多
+#
+# 各级的帖子差得很远：标签文件里 `story_macro` 的帖子是 `revenue_business` 的三倍多。用这样的帖子训练，网络会学到「猜 `story_macro` 多半没错」，把少的级晾在一边；「永远猜最多那一类」这条对照线也会显得比实际好。所以 `LEVEL_BALANCE = True`（默认）时，**七类每类抽一样多**，条数等于最少那一类，用 `RANDOM_SEED` 抽，和第 2 章给多空抽工作样本的做法一样。代价：多的级有很多帖子用不上。`LEVEL_BALANCE = False` 时用全部标过的帖子。抽之前、抽之后每类的条数都写进简报。
+
+# %%
+# Draw the posts of chapter 9: the same number from every class (LEVEL_BALANCE), or all of them.
+level_counts_before = level_posts["level"].value_counts().reindex(LEVEL_CLASSES, fill_value=0)
+if LEVEL_BALANCE:
+    level_per_class = int(level_counts_before.min())
+    if level_per_class == 0:
+        raise ValueError(f"No labelled posts of at least one class: {level_counts_before.to_dict()}")
+    level_sample = pd.concat([level_posts[level_posts["level"] == level].sample(n=level_per_class,
+                                                                               random_state=RANDOM_SEED)
+                              for level in LEVEL_CLASSES])
+else:
+    level_sample = level_posts
+level_sample = level_sample.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)  # shuffle the classes together
+level_counts_after = level_sample["level"].value_counts().reindex(LEVEL_CLASSES, fill_value=0)
+brief["levels"]["balance"] = {
+    "enabled": LEVEL_BALANCE,
+    "seed": RANDOM_SEED,
+    "counts_before": {level: int(count) for level, count in level_counts_before.items()},
+    "counts_after": {level: int(count) for level, count in level_counts_after.items()},
+}
+pd.DataFrame({"before": level_counts_before, "after": level_counts_after})
+
+# %% [markdown]
+# ### Cleaning, and training, validation and test sets
+#
+# The drawn posts are cleaned with `clean_texts` and split with chapter 5's `split_train_val_test`, by the column `level` and the seven classes: about 80% for training, 10% for validation and 10% for testing, every part keeping the class shares, with `RANDOM_SEED`.
+#
+# ***
+#
+# ### 清洗，切训练集、验证集和测试集
+#
+# 抽出的帖子用 `clean_texts` 清洗，再用第 5 章的 `split_train_val_test` 按 `level` 这一列、七个类别切分：约 80% 训练、10% 验证、10% 测试，每一份保持类别占比，用 `RANDOM_SEED`。
+
+# %%
+# Clean the drawn posts and split them, stratified by level.
+level_sample["clean_text"] = clean_texts(level_sample["text"])
+level_train_df, level_val_df, level_test_df = split_train_val_test(level_sample, RANDOM_SEED, label_column="level",
+                                                                   labels=LEVEL_CLASSES)
+level_parts = {"train": level_train_df, "validation": level_val_df, "test": level_test_df}
+level_split_counts = pd.DataFrame({name: part["level"].value_counts().reindex(LEVEL_CLASSES, fill_value=0)
+                                   for name, part in level_parts.items()}).T  # one row per part, one column per class
+brief["levels"]["split"] = {
+    "seed": RANDOM_SEED,
+    "fractions": SPLIT_FRACTIONS,
+    "stratified_by": "level",
+    "n_posts": {name: int(len(part)) for name, part in level_parts.items()},
+    "class_counts": {name: {level: int(level_split_counts.loc[name, level]) for level in LEVEL_CLASSES}
+                     for name in level_parts},
+    "class_shares": {name: {level: safe_ratio(int(level_split_counts.loc[name, level]), len(part))
+                            for level in LEVEL_CLASSES} for name, part in level_parts.items()},
+    "n_has_ticker": {name: int(part["has_ticker"].sum()) for name, part in level_parts.items()},
+}
+level_split_counts.assign(posts=[len(part) for part in level_parts.values()])
+
+# %% [markdown]
+# ## 10. The brief: check and save
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, the file other programs read, in three steps:
 #
@@ -1856,7 +2138,7 @@ scoring_check
 #
 # ***
 #
-# ## 9. 简报：校验与保存
+# ## 10. 简报：校验与保存
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，也就是别的程序要读的那个文件，分三步：
 #
@@ -1883,13 +2165,13 @@ import json  # standard library: JSON
 
 BRIEF_SCHEMA_TEXT = r"""{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 2.0",
-  "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter (9) holds an identical copy of this text and checks every brief against it before saving.",
+  "title": "Ledger Eyes brief, format 2.1",
+  "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"],
   "properties": {
-    "format_version": {"type": "string", "const": "2.0"},
+    "format_version": {"type": "string", "const": "2.1"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -2295,6 +2577,98 @@ BRIEF_SCHEMA_TEXT = r"""{
           }
         }
       }
+    },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split"],
+      "properties": {
+        "silver_labels": {"type": "string"},
+        "labels_source": {"type": "string"},
+        "labels_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sha256", "n_rows", "label_counts", "models", "prompt_versions"],
+          "properties": {
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "n_rows": {"$ref": "#/$defs/count"},
+            "label_counts": {
+              "type": "object",
+              "propertyNames": {"title": "value", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none", "disputed", "unparsed"]},
+              "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none", "disputed", "unparsed"],
+              "additionalProperties": {"$ref": "#/$defs/count"}
+            },
+            "models": {"type": "array", "items": {"type": "string"}},
+            "prompt_versions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "matching": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_is_sample", "n_matched", "n_not_in_data", "n_other_text"],
+          "properties": {
+            "data_is_sample": {"type": "boolean"},
+            "n_matched": {"$ref": "#/$defs/count"},
+            "n_not_in_data": {"$ref": "#/$defs/count"},
+            "n_other_text": {"$ref": "#/$defs/count"}
+          }
+        },
+        "dropped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disputed", "unparsed"],
+          "properties": {"disputed": {"$ref": "#/$defs/count"}, "unparsed": {"$ref": "#/$defs/count"}}
+        },
+        "classes": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"], "items": {"$ref": "#/$defs/level_class"}},
+        "balance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "seed", "counts_before", "counts_after"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "seed": {"type": "integer"},
+            "counts_before": {"$ref": "#/$defs/level_class_counts"},
+            "counts_after": {"$ref": "#/$defs/level_class_counts"}
+          }
+        },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_has_ticker"],
+          "properties": {
+            "seed": {"type": "integer"},
+            "fractions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {"train": {"$ref": "#/$defs/share"}, "validation": {"$ref": "#/$defs/share"}, "test": {"$ref": "#/$defs/share"}}
+            },
+            "stratified_by": {"type": "string"},
+            "n_posts": {"$ref": "#/$defs/part_counts"},
+            "class_counts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {
+                "train": {"$ref": "#/$defs/level_class_counts"},
+                "validation": {"$ref": "#/$defs/level_class_counts"},
+                "test": {"$ref": "#/$defs/level_class_counts"}
+              }
+            },
+            "class_shares": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {
+                "train": {"$ref": "#/$defs/level_class_shares"},
+                "validation": {"$ref": "#/$defs/level_class_shares"},
+                "test": {"$ref": "#/$defs/level_class_shares"}
+              }
+            },
+            "n_has_ticker": {"$ref": "#/$defs/part_counts"}
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -2335,6 +2709,20 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": false,
       "required": ["train", "validation", "test"],
       "properties": {"train": {"$ref": "#/$defs/count"}, "validation": {"$ref": "#/$defs/count"}, "test": {"$ref": "#/$defs/count"}}
+    },
+    "level": {"type": "string", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"]},
+    "level_class": {"type": "string", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"]},
+    "level_class_counts": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "level_class_shares": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
     }
   }
 }

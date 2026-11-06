@@ -1,8 +1,8 @@
 # The brief: format reference
 
-This document describes format **2.0** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
+This document describes format **2.1** of the brief, the file `brief.json` that the notebook writes at the end of every run. Other programs read the brief, not the notebook, so this document is written for the authors of those programs.
 
-- **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter (chapter 9) holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
+- **The rules in machine-readable form** are in [`brief.schema.json`](brief.schema.json) (JSON Schema, draft 2020-12). The notebook's last chapter holds an identical copy of that file and checks every brief against it before saving; a brief that breaks a rule is not saved.
 - **The checks** (`scripts/check.sh quick` and `full`) make sure that the two copies of the rules are identical, that the tables below list exactly the fields the rules allow (with the same type, the same "required" and the same "null"), and that every brief they produce passes the rules.
 
 ## Conventions
@@ -34,6 +34,7 @@ The top-level `scope` describes the brief as a whole: where the posts come from,
 | --- | --- | --- |
 | `dataset` | Every post of the data source; then the working sample drawn from them. | `dataset.n_posts`; `dataset.sample` |
 | `sentiment` | The working sample (with the default switches: posts with or without a ticker, the classes in use, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that name a ticker. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
+| `levels` | The posts of the data source that the level label file (`LEVEL_LABELS_SOURCE`) labels with one of the six levels or `none`, whatever `scope.tickers` and `scope.n_classes` say; with the default switches the same number from each of the seven classes; split into training, validation and test sets. | `levels.matching`; `levels.balance`; `levels.split` |
 
 For example, `dataset.n_posts` counts every post of the data source, while `sentiment.split.n_posts` counts only the posts of the working sample.
 
@@ -297,6 +298,71 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.confusion_matrices.<model>.counts[][]` | integer | — | no | Posts with this true and this predicted label. |
 | `sentiment.confusion_matrices.<model>.n` | integer | yes | no | All cells added up: the test posts. |
 
+### levels
+
+Chapter 9: the level label file, the posts it labels, the same number from every class, training, validation and test sets. The six levels and `none` are written as their English names (`assets_dividends`, `earnings`, `revenue_business`, `price_chart`, `story_macro`, `emotion_only`, `none`); `<class>` stands for each of the seven.
+
+| Field | Type | Required | Null | Meaning |
+| --- | --- | --- | --- | --- |
+| `levels` | object | yes | no | Chapter 9: what a post pays attention to, on a ladder of six levels from close to cash to far from it, learned from silver labels. |
+| `levels.silver_labels` | string | yes | no | One sentence on where the labels come from: a language model gave them, not a person. |
+| `levels.labels_source` | string | yes | no | The label file as given by the switch `LEVEL_LABELS_SOURCE`: a web address or a local path. |
+| `levels.labels_file` | object | yes | no | The label file as read. |
+| `levels.labels_file.sha256` | string | yes | no | SHA-256 of the file's bytes (64 lower-case hexadecimal digits). |
+| `levels.labels_file.n_rows` | integer | yes | no | Rows of the file. |
+| `levels.labels_file.label_counts` | object | yes | no | Rows per value of the column `level`, over the whole file: the six levels, `none`, `disputed` and `unparsed`, all always present. |
+| `levels.labels_file.label_counts.<value>` | integer | — | no | Rows with that value. |
+| `levels.labels_file.models` | array | yes | no | The models named in the column `model`, sorted. |
+| `levels.labels_file.models[]` | string | — | no | A model name. |
+| `levels.labels_file.prompt_versions` | array | yes | no | The prompt versions named in the column `prompt_version`, sorted. |
+| `levels.labels_file.prompt_versions[]` | string | — | no | A prompt version. |
+| `levels.matching` | object | yes | no | How the rows of the label file were joined to the posts of the data source by `post_id`. |
+| `levels.matching.data_is_sample` | boolean | yes | no | `true` when the data source is a part of the full file (its ids come from a column `row`, as in the repository's sample); then ids of the label file that are not in the data are expected and left out. `false` for the full file, where every id must be found. |
+| `levels.matching.n_matched` | integer | yes | no | Rows whose id is a post of the data source (with the same text fingerprint). |
+| `levels.matching.n_not_in_data` | integer | yes | no | Rows whose id is not a post of the data source; always 0 for the full file. |
+| `levels.matching.n_other_text` | integer | yes | no | Rows whose text fingerprint is not that of the post's text; always 0 (the notebook stops otherwise). |
+| `levels.dropped` | object | yes | no | Rows among the matched ones that carry no label and are not used. |
+| `levels.dropped.disputed` | integer | yes | no | Rows `disputed` (too few votes for the most frequent label). |
+| `levels.dropped.unparsed` | integer | yes | no | Rows `unparsed` (no usable answer). |
+| `levels.classes` | array | yes | no | The seven classes the networks learn, in column order: the six levels (closest to cash first), then `none`. The format allows only this list. |
+| `levels.classes[]` | string | — | no | A class. |
+| `levels.balance` | object | yes | no | The posts used for training and evaluation, drawn from the matched posts with a label. |
+| `levels.balance.enabled` | boolean | yes | no | The switch `LEVEL_BALANCE`: `true` takes the same number of posts from every class (the size of the smallest class), `false` takes them all. |
+| `levels.balance.seed` | integer | yes | no | Random seed of the draw. |
+| `levels.balance.counts_before` | object | yes | no | Posts per class before the draw, keyed by the seven classes. |
+| `levels.balance.counts_before.<class>` | integer | — | no | Posts of that class. |
+| `levels.balance.counts_after` | object | yes | no | Posts per class after the draw, keyed by the seven classes. |
+| `levels.balance.counts_after.<class>` | integer | — | no | Posts of that class. |
+| `levels.split` | object | yes | no | Training, validation and test sets of the drawn posts, as in `sentiment.split`. |
+| `levels.split.seed` | integer | yes | no | Random seed of both splits. |
+| `levels.split.fractions` | object | yes | no | Intended size of each part. |
+| `levels.split.fractions.train` | number | yes | no | 0.8. |
+| `levels.split.fractions.validation` | number | yes | no | 0.1. |
+| `levels.split.fractions.test` | number | yes | no | 0.1. |
+| `levels.split.stratified_by` | string | yes | no | `"level"`: every part keeps the class shares of the drawn posts. |
+| `levels.split.n_posts` | object | yes | no | Posts in each part. |
+| `levels.split.n_posts.train` | integer | yes | no | Training posts. |
+| `levels.split.n_posts.validation` | integer | yes | no | Validation posts. |
+| `levels.split.n_posts.test` | integer | yes | no | Test posts. |
+| `levels.split.class_counts` | object | yes | no | Posts per class in each part. |
+| `levels.split.class_counts.train` | object | yes | no | In the training set, keyed by the seven classes. |
+| `levels.split.class_counts.train.<class>` | integer | — | no | Posts of that class. |
+| `levels.split.class_counts.validation` | object | yes | no | In the validation set, keyed by the seven classes. |
+| `levels.split.class_counts.validation.<class>` | integer | — | no | Posts of that class. |
+| `levels.split.class_counts.test` | object | yes | no | In the test set, keyed by the seven classes. |
+| `levels.split.class_counts.test.<class>` | integer | — | no | Posts of that class. |
+| `levels.split.class_shares` | object | yes | no | Class shares in each part. |
+| `levels.split.class_shares.train` | object | yes | no | In the training set, keyed by the seven classes. |
+| `levels.split.class_shares.train.<class>` | number | — | yes | Share of that class; `null` when the part is empty. |
+| `levels.split.class_shares.validation` | object | yes | no | In the validation set, keyed by the seven classes. |
+| `levels.split.class_shares.validation.<class>` | number | — | yes | Share of that class; `null` when the part is empty. |
+| `levels.split.class_shares.test` | object | yes | no | In the test set, keyed by the seven classes. |
+| `levels.split.class_shares.test.<class>` | number | — | yes | Share of that class; `null` when the part is empty. |
+| `levels.split.n_has_ticker` | object | yes | no | Posts that name a ticker in each part. |
+| `levels.split.n_has_ticker.train` | integer | yes | no | In the training set. |
+| `levels.split.n_has_ticker.validation` | integer | yes | no | In the validation set. |
+| `levels.split.n_has_ticker.test` | integer | yes | no | In the test set. |
+
 ## Versions
 
 `format_version` is `"MAJOR.MINOR"`. It describes the format (which fields exist, their types, units and meanings), not the results: more topics, another model in the evaluation table or different numbers do not change it.
@@ -310,6 +376,7 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | --- | --- |
 | 1.0 to 1.7 | The formats of the notebook's earlier, longer version, which had nine more sections. Their rules and tables are in the repository's history. |
 | 2.0 | The notebook keeps chapters 0 to 8 and a short last chapter that checks and saves the brief; the later chapters were removed, and their sections with them. Removed: every top-level section except `format_version`, `generated_at`, `scope`, `dataset` and `sentiment` (nine sections), and the format check's rule that compared a list of days with its period. Renamed: `scope.coins` became `scope.tickers` (values `"all"` and `"has_ticker_only"`); the coin-mention fields became the ticker fields: `dataset.ticker_mentions`, `dataset.sample.ticker_only`, `dataset.sample.n_has_ticker` and `sentiment.split.n_has_ticker`; the evaluation subset of those posts became `test_has_ticker` (in `sentiment.evaluation.subsets` and `rows[].subset`). Removed with the old data file: `dataset.sheets`. Added: `dataset.revision`, `dataset.label_from_sentiment`, `dataset.sentiment_counts`, `sentiment.vectorizers.word2vec` and `sentiment.scoring.score_texts`. Removing and renaming fields makes this a MAJOR change. 2.0 covers every change made on the way to this version; the commits in between carry no number of their own. |
+| 2.1 | A new top-level section, `levels` (chapter 9: the six levels and `none`, learned from the level label file), and the definitions it uses (`level_class`, `level_class_counts`, `level_class_shares` and `level`). Nothing else changed. Adding a section makes this a MINOR change. 2.1 covers every change made on the way to this version; the commits in between carry no number of their own. |
 
 ## Reading a brief
 

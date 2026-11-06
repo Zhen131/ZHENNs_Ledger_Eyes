@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ledger Eyes brief, format 2.0",
-  "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter (9) holds an identical copy of this text and checks every brief against it before saving.",
+  "title": "Ledger Eyes brief, format 2.1",
+  "description": "The rules for brief.json. The meaning of every field is in docs/brief-format.md. The notebook's last chapter holds an identical copy of this text and checks every brief against it before saving.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment"],
+  "required": ["format_version", "generated_at", "scope", "dataset", "sentiment", "levels"],
   "properties": {
-    "format_version": {"type": "string", "const": "2.0"},
+    "format_version": {"type": "string", "const": "2.1"},
     "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
     "scope": {
       "type": "object",
@@ -412,6 +412,98 @@
           }
         }
       }
+    },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split"],
+      "properties": {
+        "silver_labels": {"type": "string"},
+        "labels_source": {"type": "string"},
+        "labels_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sha256", "n_rows", "label_counts", "models", "prompt_versions"],
+          "properties": {
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "n_rows": {"$ref": "#/$defs/count"},
+            "label_counts": {
+              "type": "object",
+              "propertyNames": {"title": "value", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none", "disputed", "unparsed"]},
+              "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none", "disputed", "unparsed"],
+              "additionalProperties": {"$ref": "#/$defs/count"}
+            },
+            "models": {"type": "array", "items": {"type": "string"}},
+            "prompt_versions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "matching": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_is_sample", "n_matched", "n_not_in_data", "n_other_text"],
+          "properties": {
+            "data_is_sample": {"type": "boolean"},
+            "n_matched": {"$ref": "#/$defs/count"},
+            "n_not_in_data": {"$ref": "#/$defs/count"},
+            "n_other_text": {"$ref": "#/$defs/count"}
+          }
+        },
+        "dropped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disputed", "unparsed"],
+          "properties": {"disputed": {"$ref": "#/$defs/count"}, "unparsed": {"$ref": "#/$defs/count"}}
+        },
+        "classes": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"], "items": {"$ref": "#/$defs/level_class"}},
+        "balance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "seed", "counts_before", "counts_after"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "seed": {"type": "integer"},
+            "counts_before": {"$ref": "#/$defs/level_class_counts"},
+            "counts_after": {"$ref": "#/$defs/level_class_counts"}
+          }
+        },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_has_ticker"],
+          "properties": {
+            "seed": {"type": "integer"},
+            "fractions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {"train": {"$ref": "#/$defs/share"}, "validation": {"$ref": "#/$defs/share"}, "test": {"$ref": "#/$defs/share"}}
+            },
+            "stratified_by": {"type": "string"},
+            "n_posts": {"$ref": "#/$defs/part_counts"},
+            "class_counts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {
+                "train": {"$ref": "#/$defs/level_class_counts"},
+                "validation": {"$ref": "#/$defs/level_class_counts"},
+                "test": {"$ref": "#/$defs/level_class_counts"}
+              }
+            },
+            "class_shares": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["train", "validation", "test"],
+              "properties": {
+                "train": {"$ref": "#/$defs/level_class_shares"},
+                "validation": {"$ref": "#/$defs/level_class_shares"},
+                "test": {"$ref": "#/$defs/level_class_shares"}
+              }
+            },
+            "n_has_ticker": {"$ref": "#/$defs/part_counts"}
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -452,6 +544,20 @@
       "additionalProperties": false,
       "required": ["train", "validation", "test"],
       "properties": {"train": {"$ref": "#/$defs/count"}, "validation": {"$ref": "#/$defs/count"}, "test": {"$ref": "#/$defs/count"}}
+    },
+    "level": {"type": "string", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"]},
+    "level_class": {"type": "string", "enum": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"]},
+    "level_class_counts": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "level_class_shares": {
+      "type": "object",
+      "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
+      "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
+      "additionalProperties": {"$ref": "#/$defs/share_or_null"}
     }
   }
 }
