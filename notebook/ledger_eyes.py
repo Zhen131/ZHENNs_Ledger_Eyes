@@ -33,7 +33,7 @@ DATA_SOURCE = "hf://datasets/TimKoornstra/financial-tweets-sentiment@bba602698fd
 WORK_DIR = "data"  # default: "data"; or any folder for the cache and the saved brief
 RANDOM_SEED = 42  # default: 42; or any integer
 SAMPLE_PER_CLASS = 50000  # default: 50000; or any positive integer (most posts per class in the working sample)
-N_CLASSES = 2  # default: 2 (bearish vs bullish); two-state, other: 3 (adds neutral)
+N_CLASSES = 3  # default: 3 (bearish, neutral, bullish); two-state, other: 2 (neutral left out)
 TICKER_ONLY = False  # default: False (posts with or without a ticker); two-state, other: True (only posts that name a ticker such as $TSLA)
 EMOJI_TO_WORDS = True  # default: True (emoji become English words); two-state, other: False (emoji are deleted with special characters)
 KEEP_NEGATIONS = True  # default: True (not, no, never, nor survive cleaning); two-state, other: False (plain NLTK stop word list)
@@ -148,7 +148,7 @@ brief = {
         "source": DATA_SOURCE,  # where the posts come from
         "granularity": "batch",  # one result for the whole dataset
         "tickers": "has_ticker_only" if TICKER_ONLY else "all",  # which posts the working sample covers
-        "n_classes": N_CLASSES,  # 2 = bearish vs bullish, 3 = with neutral
+        "n_classes": N_CLASSES,  # 3 = bearish, neutral and bullish; 2 = bearish vs bullish
     },
     "dataset": None,  # chapters 0 to 3
     "sentiment": None,  # chapters 4 to 8
@@ -489,7 +489,7 @@ brief["dataset"]["n_posts_with_links"] = int(df_all["text"].str.contains(LINK_PA
 #
 # The full table is too large to clean and model in a classroom session, so we draw a working sample, `df`, following the switches:
 #
-# 1. Keep the classes in use: with `N_CLASSES = 2` the neutral posts are left out; with 3 all classes stay.
+# 1. Keep the classes in use: with `N_CLASSES = 3` (the default) all classes stay; with 2 the neutral posts are left out.
 # 2. With `TICKER_ONLY = True`, keep only posts that name a ticker.
 # 3. Draw the same number of posts from every class: the smaller of `SAMPLE_PER_CLASS` and the size of the smallest remaining class, using `RANDOM_SEED`. Equal class sizes stop the models from simply learning that bullish posts are the most common.
 #
@@ -501,7 +501,7 @@ brief["dataset"]["n_posts_with_links"] = int(df_all["text"].str.contains(LINK_PA
 #
 # 全量表太大，课堂上的时间不够清洗和建模，所以按开关抽出一份工作样本 `df`：
 #
-# 1. 只留用到的类别：`N_CLASSES = 2` 时去掉中性；为 3 时三类都留。
+# 1. 只留用到的类别：`N_CLASSES = 3`（默认）时三类都留；为 2 时去掉中性。
 # 2. `TICKER_ONLY = True` 时，只留带股票代码的帖子。
 # 3. 每一类抽一样多：取 `SAMPLE_PER_CLASS` 和剩下最少那一类的条数中较小的那个，用 `RANDOM_SEED` 抽。每类一样多，模型就不会只学会「看多的帖子最多」。
 #
@@ -1064,25 +1064,25 @@ brief["sentiment"]["tokenization"]
 # %% [markdown]
 # ## 5. Training, validation and test sets
 #
-# From here on we build the bullish-or-bearish models. The working sample is split into three parts, as in the course:
+# From here on we build the models that tell bullish, neutral and bearish posts apart. The working sample is split into three parts, as in the course:
 #
 # - **training set (80%)**: the models learn from it, and the vectorizers of chapter 6 learn their vocabulary from it alone;
 # - **validation set (10%)**: watched during training, and used once at the end of chapter 7 to choose the model that later chapters use;
 # - **test set (10%)**: kept aside until chapter 8 and used only for the final evaluation, so that the scores describe posts the models have never seen.
 #
-# As in the course, the sample is first split 80 / 20, and the 20% part is then split in half. Both splits are **stratified** by label, so every part keeps the class shares of the working sample, and both use `RANDOM_SEED`, so the same switches give the same parts on every run. Every class needs at least 10 posts in the working sample for each part to get at least one post of it; with fewer, the cell stops with a clear message.
+# As in the course, the sample is first split 80 / 20, and the 20% part is then split in half. Both splits are **stratified** by label, so every part keeps the class shares of the working sample, and both use `RANDOM_SEED`, so the same switches give the same parts on every run. Every class needs at least 10 posts in the working sample for each part to get at least one post of it; with fewer, or with a class in use that has no post at all, the cell stops with a clear message. The two splits are one function, `split_train_val_test`, so a later chapter can split other posts the same way, with any number of classes.
 #
 # ***
 #
 # ## 5. 训练集、验证集和测试集
 #
-# 从这里开始做「看多还是看空」的模型。照课堂的做法，把工作样本切成三份：
+# 从这里开始做区分看多、中性、看空的模型。照课堂的做法，把工作样本切成三份：
 #
 # - **训练集（80%）**：模型从它学；第 6 章的向量化器也只在它上面学词表；
 # - **验证集（10%）**：训练时用来盯着看，第 7 章最后再用它一次，选出后面章节要用的模型；
 # - **测试集（10%）**：一直放到第 8 章，只用来做最后的评估，这样分数说的是模型从没见过的帖子。
 #
-# 和课堂一样，先按 80 / 20 切，再把 20% 那份对半切。两次切分都按标签**分层**，每一份保持工作样本里的类别占比；两次都用 `RANDOM_SEED`，开关不变时每次切出来都一样。工作样本里每一类至少要有 10 条，每一份才都能分到这一类的帖子；不够时这一格会停下并说明原因。
+# 和课堂一样，先按 80 / 20 切，再把 20% 那份对半切。两次切分都按标签**分层**，每一份保持工作样本里的类别占比；两次都用 `RANDOM_SEED`，开关不变时每次切出来都一样。工作样本里每一类至少要有 10 条，每一份才都能分到这一类的帖子；不够时，或者用到的某一类一条都没有时，这一格会停下并说明原因。两次切分写成一个函数 `split_train_val_test`，后面的章节可以用它按同样的办法切别的帖子，几类都行。
 
 # %%
 # Split the working sample into training, validation and test sets, stratified by label.
@@ -1092,14 +1092,30 @@ CLASS_LABELS = [0, 2] if N_CLASSES == 2 else [0, 1, 2]  # labels in use; also th
 SPLIT_FRACTIONS = {"train": 0.8, "validation": 0.1, "test": 0.1}
 MIN_POSTS_PER_CLASS = 10  # fewest posts per class that still put every class into every part
 
-smallest_class = int(df["label"].value_counts().reindex(CLASS_LABELS, fill_value=0).min())
-if smallest_class < MIN_POSTS_PER_CLASS:
-    raise ValueError(f"The working sample has only {smallest_class} posts in its smallest class; "
-                     f"at least {MIN_POSTS_PER_CLASS} are needed to split it. Raise SAMPLE_PER_CLASS "
-                     "or use a larger data source.")
-train_df, rest_df = train_test_split(df, test_size=0.2, random_state=RANDOM_SEED, stratify=df["label"])  # 80 / 20
-val_df, test_df = train_test_split(rest_df, test_size=0.5, random_state=RANDOM_SEED,
-                                   stratify=rest_df["label"])  # the 20% part, half and half
+
+def split_train_val_test(posts, seed, label_column="label", labels=None):
+    """Split posts into training, validation and test sets (about 80 / 10 / 10), stratified by label_column.
+
+    labels: the classes that must be there (for example CLASS_LABELS); None takes the classes found. Stops when a
+    class of labels has no post, or when a class has fewer than MIN_POSTS_PER_CLASS posts. Works with any number of
+    classes. Returns (train, validation, test).
+    """
+    counts = posts[label_column].value_counts()
+    wanted = list(labels) if labels is not None else sorted(counts.index)
+    absent = [label for label in wanted if counts.get(label, 0) == 0]
+    if absent:
+        raise ValueError(f"No posts of the class(es) {absent} in column {label_column!r}; every class in use needs posts.")
+    smallest = int(min(counts.get(label, 0) for label in wanted)) if wanted else 0
+    if smallest < MIN_POSTS_PER_CLASS:
+        raise ValueError(f"The smallest class has only {smallest} posts; at least {MIN_POSTS_PER_CLASS} are needed to "
+                         "split it. Raise SAMPLE_PER_CLASS or use a larger data source.")
+    train, rest = train_test_split(posts, test_size=0.2, random_state=seed, stratify=posts[label_column])  # 80 / 20
+    validation, test = train_test_split(rest, test_size=0.5, random_state=seed,
+                                        stratify=rest[label_column])  # the 20% part, half and half
+    return train, validation, test
+
+
+train_df, val_df, test_df = split_train_val_test(df, RANDOM_SEED, labels=CLASS_LABELS)
 print(f"Training set: {len(train_df):,} posts; validation set: {len(val_df):,}; test set: {len(test_df):,}")
 
 # %% [markdown]
@@ -1263,21 +1279,22 @@ pd.DataFrame(vector_rows).set_index("vectors")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # hide TensorFlow's start-up information messages
 import tensorflow as tf  # neural networks (Keras)
 
-MODEL_TARGET = {label: position for position, label in enumerate(CLASS_LABELS)}  # two classes: {0: 0, 2: 1}
+MODEL_TARGET = {label: position for position, label in enumerate(CLASS_LABELS)}  # three classes: {0: 0, 1: 1, 2: 2}
 
 
-def to_targets(labels):
-    """Turn label values into what the network learns: positions in CLASS_LABELS."""
-    targets = np.array([MODEL_TARGET[label] for label in labels])
-    return targets.astype("float32") if N_CLASSES == 2 else targets.astype("int64")
+def to_targets(labels_of_posts, labels=CLASS_LABELS):
+    """Turn label values into what the network learns: positions in labels."""
+    target = {label: position for position, label in enumerate(labels)}
+    targets = np.array([target[label] for label in labels_of_posts])
+    return targets.astype("float32") if len(labels) == 2 else targets.astype("int64")
 
 
-def build_network(n_features):
-    """One dense layer: 1 sigmoid unit for two classes, one softmax unit per class for three."""
-    two_classes = N_CLASSES == 2
+def build_network(n_features, labels=CLASS_LABELS):
+    """One dense layer: 1 sigmoid unit for two classes, one softmax unit per class for more."""
+    two_classes = len(labels) == 2
     model = tf.keras.Sequential([
-        tf.keras.Input(shape=(n_features,)),  # one input per vocabulary word
-        tf.keras.layers.Dense(1 if two_classes else N_CLASSES, activation="sigmoid" if two_classes else "softmax"),
+        tf.keras.Input(shape=(n_features,)),  # one input per vocabulary word (or per vector dimension)
+        tf.keras.layers.Dense(1 if two_classes else len(labels), activation="sigmoid" if two_classes else "softmax"),
     ])
     model.compile(optimizer="adam",
                   loss="binary_crossentropy" if two_classes else "sparse_categorical_crossentropy",
@@ -1285,21 +1302,21 @@ def build_network(n_features):
     return model
 
 
-def predict_proba(model, matrix):
-    """Class probabilities, one column per label in CLASS_LABELS (bearish first, bullish last)."""
+def predict_proba(model, matrix, labels=CLASS_LABELS):
+    """Class probabilities, one column per label in labels (bearish first, bullish last)."""
     if matrix.shape[0] == 0:
-        return np.empty((0, len(CLASS_LABELS)), dtype=np.float32)
+        return np.empty((0, len(labels)), dtype=np.float32)
     if hasattr(matrix, "has_sorted_indices") and not matrix.has_sorted_indices:
         matrix = matrix.sorted_indices()  # TensorFlow needs the non-zero cells of every row in column order
     output = model.predict(matrix, batch_size=1024, verbose=0)
-    if output.shape[1] == 1:  # two classes: the single output is the probability of bullish
+    if output.shape[1] == 1:  # two classes: the single output is the probability of the second label
         output = np.hstack([1.0 - output, output])
     return output
 
 
-def predict_labels(model, matrix):
+def predict_labels(model, matrix, labels=CLASS_LABELS):
     """Predicted label values: the class with the highest probability (a tie goes to the earlier column)."""
-    return np.asarray(CLASS_LABELS)[predict_proba(model, matrix).argmax(axis=1)]
+    return np.asarray(labels)[predict_proba(model, matrix, labels).argmax(axis=1)]
 
 # %% [markdown]
 # ### Network on word counts
@@ -1330,6 +1347,47 @@ history_tfidf = model_tfidf.fit(X_train_tfidf, to_targets(train_df["label"]), ep
                                 validation_data=(X_val_tfidf, to_targets(val_df["label"])), verbose=2)
 
 # %% [markdown]
+# ### Scores for every class
+#
+# The next cell only defines three functions; it trains nothing and reads no result. `class_scores` gives precision, recall, F1 and support for every class, `macro_f1` their average F1, and `evaluate` one row of the evaluation table (chapter 8 explains the measures). All three take the classes as an argument, `labels` (by default the classes in use), so they work with any number of classes: a later chapter with more classes calls them with its own labels.
+#
+# ***
+#
+# ### 每一类的分数
+#
+# 下一格只定义三个函数，不训练、也不读任何结果。`class_scores` 给出每一类的精确率、召回率、F1 和条数，`macro_f1` 是各类 F1 的平均，`evaluate` 算出评估表的一行（这些指标第 8 章解释）。三个函数都把类别当成参数 `labels`（默认是用到的那几类），所以几类都能用：后面类别更多的章节，传自己的类别进来就行。
+
+# %%
+# Score functions for any number of classes: definitions only.
+import numpy as np  # arrays
+from sklearn.metrics import precision_recall_fscore_support  # per-class scores
+
+
+def class_scores(true_labels, predicted_labels, labels=CLASS_LABELS):
+    """Per-class precision, recall, F1 and support for labels; NaN where a score cannot be computed."""
+    return precision_recall_fscore_support(true_labels, predicted_labels, labels=list(labels), zero_division=np.nan)
+
+
+def macro_f1(true_labels, predicted_labels, labels=CLASS_LABELS):
+    """Mean of the per-class F1 scores, leaving out classes whose F1 cannot be computed; NaN when none can."""
+    f1 = class_scores(true_labels, predicted_labels, labels)[2]
+    return float(np.nanmean(f1)) if np.isfinite(f1).any() else float("nan")
+
+
+def evaluate(true_labels, predicted_labels, labels=CLASS_LABELS):
+    """Accuracy, per-class precision / recall / F1 / support and macro-F1; NaN where a score cannot be computed."""
+    true_labels, predicted_labels = np.asarray(true_labels), np.asarray(predicted_labels)
+    precision, recall, f1, support = class_scores(true_labels, predicted_labels, labels)
+    return {
+        "n": int(len(true_labels)),
+        "accuracy": float(np.mean(true_labels == predicted_labels)) if len(true_labels) else float("nan"),
+        "per_class": {str(label): {"precision": float(precision[position]), "recall": float(recall[position]),
+                                   "f1": float(f1[position]), "support": int(support[position])}
+                      for position, label in enumerate(labels)},
+        "macro_f1": macro_f1(true_labels, predicted_labels, labels),
+    }
+
+# %% [markdown]
 # ### Choosing one model with the validation set
 #
 # Later chapters need one model to score posts. We choose it by **macro-F1 on the validation set** (chapter 8 explains the measure); the test set plays no part in the choice. If both scores are equal, the word-count network is chosen. Both validation scores and the choice go into the brief.
@@ -1342,20 +1400,6 @@ history_tfidf = model_tfidf.fit(X_train_tfidf, to_targets(train_df["label"]), ep
 
 # %%
 # Score both networks on the validation set and choose the better one.
-from sklearn.metrics import precision_recall_fscore_support  # per-class scores
-
-
-def class_scores(true_labels, predicted_labels):
-    """Per-class precision, recall, F1 and support for CLASS_LABELS; NaN where a score cannot be computed."""
-    return precision_recall_fscore_support(true_labels, predicted_labels, labels=CLASS_LABELS, zero_division=np.nan)
-
-
-def macro_f1(true_labels, predicted_labels):
-    """Mean of the per-class F1 scores, leaving out classes whose F1 cannot be computed; NaN when none can."""
-    f1 = class_scores(true_labels, predicted_labels)[2]
-    return float(np.nanmean(f1)) if np.isfinite(f1).any() else float("nan")
-
-
 models = {  # model name -> fitted network and the vectors it reads
     "count_network": {"model": model_count, "vectors": "count", "history": history_count},
     "tfidf_network": {"model": model_tfidf, "vectors": "tfidf", "history": history_tfidf},
@@ -1374,8 +1418,8 @@ brief["sentiment"]["training"] = {
     "batch_size": BATCH_SIZE,
     "optimizer": "adam",
     "seed": RANDOM_SEED,
-    "output_layer": "1 unit, sigmoid" if N_CLASSES == 2 else f"{N_CLASSES} units, softmax",
-    "loss": "binary_crossentropy" if N_CLASSES == 2 else "sparse_categorical_crossentropy",
+    "output_layer": "1 unit, sigmoid" if len(CLASS_LABELS) == 2 else f"{len(CLASS_LABELS)} units, softmax",
+    "loss": "binary_crossentropy" if len(CLASS_LABELS) == 2 else "sparse_categorical_crossentropy",
     "target_of_label": {str(label): position for label, position in MODEL_TARGET.items()},
     "history": {name: {key: [float(value) for value in values] for key, values in entry["history"].history.items()}
                 for name, entry in models.items()},
@@ -1556,22 +1600,9 @@ SUBSETS = {"all_test": "all test posts", "test_has_ticker": "test posts that nam
 subset_masks = {"all_test": np.ones(len(test_df), dtype=bool), "test_has_ticker": test_df["has_ticker"].to_numpy()}
 
 
-def evaluate(true_labels, predicted_labels):
-    """Accuracy, per-class precision / recall / F1 / support and macro-F1; NaN where a score cannot be computed."""
-    precision, recall, f1, support = class_scores(true_labels, predicted_labels)
-    return {
-        "n": int(len(true_labels)),
-        "accuracy": float(np.mean(true_labels == predicted_labels)) if len(true_labels) else float("nan"),
-        "per_class": {str(label): {"precision": float(precision[position]), "recall": float(recall[position]),
-                                   "f1": float(f1[position]), "support": int(support[position])}
-                      for position, label in enumerate(CLASS_LABELS)},
-        "macro_f1": macro_f1(true_labels, predicted_labels),
-    }
-
-
 evaluation_rows = [
     {"model": name, "kind": "baseline" if name in BASELINES else "model", "subset": subset,
-     **evaluate(y_test[mask], predicted[mask])}
+     **evaluate(y_test[mask], predicted[mask], labels=CLASS_LABELS)}
     for name, predicted in test_predictions.items() for subset, mask in subset_masks.items()
 ]
 brief["sentiment"]["evaluation"] = {

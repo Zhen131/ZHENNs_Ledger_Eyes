@@ -26,6 +26,9 @@ quick: static checks, then the notebook runs three times on the bundled
        sample is checked: its columns and rows, no empty text, no account name
        and no link, enough posts per class, per level and with a ticker, and
        its texts against the fingerprints of the level pre-label file.
+       Chapter 5's split runs from the source on six hand-written classes,
+       and chapter 7's score functions (a cell of definitions only) on six
+       classes against scikit-learn.
        The level pre-label script (scripts/prelabel_levels.py) is checked
        without Ollama and without the dataset: its interface and pinned
        prompt, its requests, that it only talks to a loopback address, its
@@ -696,6 +699,15 @@ def check_sentiment(report, label, brief, switches, full_run):
     report.check(bool(models) and not problems,
                  f"{label}: one confusion matrix per model, adding up to the number of test posts", "; ".join(problems))
 
+    training = sentiment.get("training") if isinstance(sentiment.get("training"), dict) else {}
+    expected_layer = "1 unit, sigmoid" if len(classes) == 2 else f"{len(classes)} units, softmax"
+    expected_loss = "binary_crossentropy" if len(classes) == 2 else "sparse_categorical_crossentropy"
+    report.check(training.get("output_layer") == expected_layer and training.get("loss") == expected_loss
+                 and training.get("target_of_label") == {label: position for position, label in enumerate(classes)},
+                 f"{label}: the output layer, the loss and the targets follow the classes in use ({expected_layer})",
+                 f"output layer {training.get('output_layer')!r}, loss {training.get('loss')!r}, "
+                 f"targets {training.get('target_of_label')}")
+
     selection = sentiment.get("selection") if isinstance(sentiment.get("selection"), dict) else {}
     validation = selection.get("validation_macro_f1") if isinstance(selection.get("validation_macro_f1"), dict) else {}
     report.check(selection.get("selected") in models and sorted(validation) == sorted(models)
@@ -1253,6 +1265,9 @@ def check_switch_cell(report, defaults, others):
                  "True as its other value, and no switch of a removed chapter is left",
                  f"DATA_SOURCE {defaults.get('DATA_SOURCE')!r}, TICKER_ONLY {defaults.get('TICKER_ONLY')!r} / "
                  f"{others.get('TICKER_ONLY')!r}, removed switches still there {removed}")
+    report.check(defaults.get("N_CLASSES") == 3 and others.get("N_CLASSES") == 2,
+                 "switch cell: N_CLASSES defaults to 3 (bearish, neutral, bullish), with 2 as its other value",
+                 f"default {defaults.get('N_CLASSES')!r}, other {others.get('N_CLASSES')!r}")
     source = cell_defining_text("Switches look fine.")
     problems = []
 
@@ -1375,6 +1390,66 @@ def check_reading(report):
                  "chapter 1: loading and the ticker cell, run from the source, give df_all exactly the columns post_id, "
                  "text, label and has_ticker", f"{'; '.join(problems)} columns {columns}")
     shutil.rmtree(READING_PROBE_DIR, ignore_errors=True)
+
+
+def check_split_function(report):
+    """Chapter 5's split, run from the source: about 80/10/10 per class for any number of classes; stops on a class
+    in use without posts and on a class that is too small."""
+    import pandas as pd
+    posts = pd.DataFrame({"label": [label for label in range(6) for _ in range(30)], "post_id": range(180)})
+    namespace = {"N_CLASSES": 3, "RANDOM_SEED": 42, "df": posts[posts["label"] < 3].copy()}
+    problems = run_cells(["split_train_val_test"], namespace)
+    if not report.check(not problems, "chapter 5: the split cell runs from the source", "; ".join(problems)):
+        return
+    split = namespace["split_train_val_test"]
+    train, validation, test = split(posts, 42, labels=list(range(6)))
+    sizes = {name: part["label"].value_counts().sort_index().tolist()
+             for name, part in (("train", train), ("validation", validation), ("test", test))}
+    stops = {
+        "a class without posts": stops_with(split, posts[posts["label"] != 4], 42, "label", list(range(6)), words=("4",)),
+        "a class of 5 posts": stops_with(split, posts.iloc[list(range(150)) + list(range(150, 155))], 42, words=("5",)),
+    }
+    report.check(sizes == {"train": [24] * 6, "validation": [3] * 6, "test": [3] * 6}
+                 and all(message is not None and not message.startswith("(without") for message in stops.values()),
+                 "chapter 5: split_train_val_test splits six classes of 30 posts into 24 / 3 / 3 each, and stops on a "
+                 "class in use without posts and on a class of fewer than MIN_POSTS_PER_CLASS posts",
+                 f"sizes per class {sizes}; " + "; ".join(f"{case}: {message}" for case, message in stops.items()))
+
+
+def check_score_functions(report):
+    """The cell of class_scores, macro_f1 and evaluate holds definitions only; run from the source on six classes,
+    it gives the scores scikit-learn gives."""
+    import numpy as np
+    from sklearn.metrics import f1_score, precision_recall_fscore_support
+    source = cell_defining("evaluate") or ""
+    tree = ast.parse(source) if source else None
+    kinds = sorted({type(node).__name__ for node in (tree.body if tree else [])})
+    defined = {node.name for node in (tree.body if tree else []) if isinstance(node, ast.FunctionDef)}
+    only_definitions = bool(tree) and set(kinds) <= {"Import", "ImportFrom", "FunctionDef"} \
+        and {"class_scores", "macro_f1", "evaluate"} <= defined
+    report.check(only_definitions, "chapter 7: class_scores, macro_f1 and evaluate sit together in a cell that holds "
+                 "only imports and function definitions", f"statements {kinds}, functions {sorted(defined)}")
+    namespace = {"CLASS_LABELS": [0, 1, 2]}
+    problems = run_cells(["evaluate"], namespace)
+    if problems:
+        report.check(False, "chapter 7: the score functions run from the source", "; ".join(problems))
+        return
+    labels = list(range(6))
+    true = np.array([0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 2])
+    predicted = np.array([0, 1, 2, 3, 4, 5, 1, 1, 2, 4, 4, 5, 0, 2, 2, 3, 5, 5, 0, 0])
+    expected = precision_recall_fscore_support(true, predicted, labels=labels, zero_division=np.nan)
+    found = namespace["class_scores"](true, predicted, labels)
+    row = namespace["evaluate"](true, predicted, labels)
+    macro = namespace["macro_f1"](true, predicted, labels)
+    same = all(np.allclose(np.asarray(left, dtype=float), np.asarray(right, dtype=float)) for left, right in zip(found, expected))
+    reference = f1_score(true, predicted, labels=labels, average="macro")
+    report.check(same and abs(macro - reference) < 1e-12 and abs(row["macro_f1"] - reference) < 1e-12
+                 and sorted(row["per_class"]) == [str(label) for label in labels]
+                 and sum(item["support"] for item in row["per_class"].values()) == len(true)
+                 and abs(row["accuracy"] - float(np.mean(true == predicted))) < 1e-12,
+                 "chapter 7: on six classes (labels 0 to 5) the score functions, run from the source, give "
+                 "scikit-learn's per-class scores and macro-F1, so they do not depend on the number of classes",
+                 f"macro-F1 {macro} (scikit-learn {reference}); per-class keys {sorted(row['per_class'])}")
 
 
 def notebook_ticker(texts):
@@ -2541,6 +2616,8 @@ def main():
     check_reading(report)
     check_ticker_rule(report)
     check_sample_file(report)
+    check_split_function(report)
+    check_score_functions(report)
     check_levels_interface(report)
     check_levels_prompt(report)
     check_levels_hosts(report)

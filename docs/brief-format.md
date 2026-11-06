@@ -10,7 +10,7 @@ This document describes format **2.0** of the brief, the file `brief.json` that 
 - **File.** UTF-8 JSON, indented. Field names are English and never change within a major version (see [Versions](#versions)).
 - **null.** A number that cannot be computed is `null`: a share whose denominator is 0, a score on an empty subset, a summary of an empty table. It is never written as 0, and never as NaN or Infinity, which are not valid JSON. Only the fields marked "Null: yes" below may be `null`. Before saving, the notebook turns every NaN or infinite number into `null`; the check that follows then rejects the brief if that `null` sits in a field that may not be `null`. The check also rejects NaN and Infinity themselves, so a brief that contains them never passes.
 - **Labels.** `0` = bearish, `1` = neutral, `2` = bullish. The dataset codes its classes in another order (0 neutral, 1 bullish, 2 bearish); the notebook converts them while reading, and `dataset.label_from_sentiment` records the conversion. As keys of an object they are strings (`"0"`, `"1"`, `"2"`).
-- **Classes in use.** With two classes (the default) the models know only `"0"` and `"2"`; with three classes also `"1"`. Objects keyed by "classes in use" always have the keys `"0"` and `"2"`, and `"1"` only with three classes.
+- **Classes in use.** With three classes (the default) the models know `"0"`, `"1"` and `"2"`; with two classes only `"0"` and `"2"`. Objects keyed by "classes in use" always have the keys `"0"` and `"2"`, and `"1"` only with three classes.
 - **Shares and percentage points.** A share is a fraction from 0 to 1 (0.25, not 25). A difference "in percentage points" (`_pp`) is 100 × (one share − another), from −100 to 100.
 - **Counts** are integers, 0 or more.
 - **Text fields that describe a method** (for example `sentiment.selection.by`) are short English sentences for people; programs should not parse them.
@@ -49,7 +49,7 @@ For example, `dataset.n_posts` counts every post of the data source, while `sent
 | `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local parquet file. |
 | `scope.granularity` | string | yes | no | `"batch"`: every section describes the whole data source (`DATA_SOURCE`) at once. The format allows no other value. |
 | `scope.tickers` | string | yes | no | Which posts the working sample holds: `"all"` (posts with or without a ticker) or `"has_ticker_only"` (only posts that name a ticker such as `$TSLA`; the switch `TICKER_ONLY`). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
-| `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
+| `scope.n_classes` | integer | yes | no | Classes the models use: 3 (bearish, neutral and bullish; the default) or 2 (bearish and bullish). |
 
 ### dataset
 
@@ -209,10 +209,10 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.training.batch_size` | integer | yes | no | Posts per training step (`BATCH_SIZE`). |
 | `sentiment.training.optimizer` | string | yes | no | `"adam"`. |
 | `sentiment.training.seed` | integer | yes | no | Seed set before building each network. |
-| `sentiment.training.output_layer` | string | yes | no | The output layer, for example `"1 unit, sigmoid"`. |
+| `sentiment.training.output_layer` | string | yes | no | The output layer: `"3 units, softmax"` with three classes, `"1 unit, sigmoid"` with two. |
 | `sentiment.training.loss` | string | yes | no | The loss function. |
 | `sentiment.training.target_of_label` | object | yes | no | What the network learns for each label, keyed by the classes in use. |
-| `sentiment.training.target_of_label.<label>` | integer | — | no | The target: the label's position among the classes in use (with two classes: `"0"` → 0, `"2"` → 1). |
+| `sentiment.training.target_of_label.<label>` | integer | — | no | The target: the label's position among the classes in use (with three classes `"0"` → 0, `"1"` → 1, `"2"` → 2; with two classes `"0"` → 0, `"2"` → 1). |
 | `sentiment.training.history` | object | yes | no | Training history, one entry per model. |
 | `sentiment.training.history.<model>` | object | — | no | One entry per Keras metric of that model: `loss`, `accuracy`, `val_loss`, `val_accuracy`. |
 | `sentiment.training.history.<model>.<metric>` | array | — | no | One value per pass over the training set. |
