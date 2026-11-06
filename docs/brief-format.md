@@ -362,6 +362,114 @@ Chapter 9: the level label file, the posts it labels, the same number from every
 | `levels.split.n_has_ticker.train` | integer | yes | no | In the training set. |
 | `levels.split.n_has_ticker.validation` | integer | yes | no | In the validation set. |
 | `levels.split.n_has_ticker.test` | integer | yes | no | In the test set. |
+| `levels.vectorizers` | object | yes | no | Three new vectorizers fitted on chapter 9's training set only, as in `sentiment.vectorizers` (chapter 6's are not reused). |
+| `levels.vectorizers.vocab_size_requested` | integer | yes | no | Most words the word-count and the TF-IDF vectorizer keep (`VOCAB_SIZE`). |
+| `levels.vectorizers.fitted_on` | string | yes | no | `"train"`. |
+| `levels.vectorizers.fitted_on_n_posts` | integer | yes | no | Training posts they learned from. |
+| `levels.vectorizers.text` | string | yes | no | `"clean_text"`: the cleaned text. |
+| `levels.vectorizers.storage` | string | yes | no | How the vectors are stored: word counts and TF-IDF as sparse float32 matrices, averaged word vectors as a dense float32 table. |
+| `levels.vectorizers.count` | object | yes | no | The word-count vectorizer. |
+| `levels.vectorizers.count.vocab_size` | integer | yes | no | Words it kept. |
+| `levels.vectorizers.tfidf` | object | yes | no | The TF-IDF vectorizer. |
+| `levels.vectorizers.tfidf.vocab_size` | integer | yes | no | Words it kept. |
+| `levels.vectorizers.word2vec` | object | yes | no | The averaged word vectors. |
+| `levels.vectorizers.word2vec.algorithm` | string | yes | no | How the word vectors were made; nothing is downloaded. |
+| `levels.vectorizers.word2vec.vector_size` | integer | yes | no | Numbers in every word vector (`WORD2VEC_DIM`). |
+| `levels.vectorizers.word2vec.window` | integer | yes | no | Words on each side that count as neighbours (`WORD2VEC_WINDOW`). |
+| `levels.vectorizers.word2vec.min_count` | integer | yes | no | Uses a word needs to get a vector (`WORD2VEC_MIN_COUNT`). |
+| `levels.vectorizers.word2vec.epochs` | integer | yes | no | Passes of Word2Vec over the training set (`WORD2VEC_EPOCHS`). |
+| `levels.vectorizers.word2vec.vocab_size` | integer | yes | no | Words that got a vector. |
+| `levels.vectorizers.word2vec.fitted_on_n_posts` | integer | yes | no | Training posts it learned from. |
+| `levels.vectorizers.word2vec.unknown_words` | string | yes | no | What happens to words without a vector. |
+| `levels.vectorizers.word2vec.n_posts_all_zero` | object | yes | no | Posts left with a vector of zeros (no word with a vector), per part. |
+| `levels.vectorizers.word2vec.n_posts_all_zero.train` | integer | yes | no | In the training set. |
+| `levels.vectorizers.word2vec.n_posts_all_zero.validation` | integer | yes | no | In the validation set. |
+| `levels.vectorizers.word2vec.n_posts_all_zero.test` | integer | yes | no | In the test set. |
+| `levels.models` | array | yes | no | The networks, one per kind of vectors: `count_network`, `tfidf_network`, `word2vec_network`. |
+| `levels.models[]` | string | — | no | A model name. |
+| `levels.training` | object | yes | no | How the networks were trained, as in `sentiment.training`. |
+| `levels.training.epochs` | integer | yes | no | Passes over the training set (`LEVEL_EPOCHS`). |
+| `levels.training.batch_size` | integer | yes | no | Posts per training step (`BATCH_SIZE`). |
+| `levels.training.optimizer` | string | yes | no | `"adam"`. |
+| `levels.training.seed` | integer | yes | no | Random seed set before each network is built. |
+| `levels.training.output_layer` | string | yes | no | `"7 units, softmax"`: one output per class. |
+| `levels.training.loss` | string | yes | no | `"sparse_categorical_crossentropy"`. |
+| `levels.training.target_of_label` | object | yes | no | The position each class has inside the network, keyed by the seven classes. |
+| `levels.training.target_of_label.<class>` | integer | — | no | Its position, from 0. |
+| `levels.training.history` | object | yes | no | Loss and accuracy after every pass, keyed by model name. |
+| `levels.training.history.<model>` | object | — | no | One model's history, keyed by metric (`loss`, `accuracy`, `val_loss`, `val_accuracy`). |
+| `levels.training.history.<model>.<metric>` | array | — | no | One value per pass. |
+| `levels.training.history.<model>.<metric>[]` | number | — | yes | The value after that pass. |
+| `levels.selection` | object | yes | no | How the model for chapter 10 was chosen. |
+| `levels.selection.by` | string | yes | no | `"macro-F1 over the six levels (none left out of the mean) on the validation set"`. |
+| `levels.selection.validation_macro_f1` | object | yes | no | Macro-F1 over the six levels on the validation set, keyed by model name. |
+| `levels.selection.validation_macro_f1.<model>` | number | — | yes | That model's score; `null` when it cannot be computed. |
+| `levels.selection.selected` | string | yes | no | The chosen model (a tie goes to the model listed first). |
+| `levels.evaluation` | object | yes | no | The evaluation table on the test set. |
+| `levels.evaluation.subsets` | object | yes | no | The subsets of the test set the table covers: only all test posts. |
+| `levels.evaluation.subsets.all_test` | string | yes | no | `"all test posts"`. |
+| `levels.evaluation.baselines` | array | yes | no | The baselines: `always_majority` and `uniform_random`. |
+| `levels.evaluation.baselines[]` | string | — | no | A baseline. |
+| `levels.evaluation.majority_label` | string | yes | no | The class `always_majority` guesses: the most frequent class of the training set, the class closest to cash on a tie. |
+| `levels.evaluation.rows` | array | yes | no | One row per network and per baseline. |
+| `levels.evaluation.rows[]` | object | — | no | One row. |
+| `levels.evaluation.rows[].model` | string | yes | no | A model or baseline name. |
+| `levels.evaluation.rows[].kind` | string | yes | no | `"model"` or `"baseline"`. |
+| `levels.evaluation.rows[].subset` | string | yes | no | `"all_test"`. |
+| `levels.evaluation.rows[].n` | integer | yes | no | Test posts. |
+| `levels.evaluation.rows[].accuracy` | number | yes | yes | Share of test posts with the right class; `null` when there are none. |
+| `levels.evaluation.rows[].per_class` | object | yes | no | Scores per class, keyed by the seven classes (`none` included). |
+| `levels.evaluation.rows[].per_class.<class>` | object | — | no | Scores of that class. |
+| `levels.evaluation.rows[].per_class.<class>.precision` | number | yes | yes | Of the posts put into this class, the share that belong to it; `null` when none was put there. |
+| `levels.evaluation.rows[].per_class.<class>.recall` | number | yes | yes | Of the posts of this class, the share found; `null` when there are none. |
+| `levels.evaluation.rows[].per_class.<class>.f1` | number | yes | yes | Harmonic mean of precision and recall; `null` when it cannot be computed. |
+| `levels.evaluation.rows[].per_class.<class>.support` | integer | yes | no | Test posts of this class. |
+| `levels.evaluation.rows[].macro_f1` | number | yes | yes | The main score: the mean F1 of the six levels, taken from the seven-class scores, `none` left out of the mean (classes whose F1 cannot be computed are left out too); `null` when none can. |
+| `levels.evaluation.rows[].macro_f1_seven` | number | yes | yes | The mean F1 of the seven classes, `none` included; `null` when none can be computed. |
+| `levels.confusion_matrices` | object | yes | no | One 7 × 7 matrix per network on the test set, keyed by model name. |
+| `levels.confusion_matrices.<model>` | object | — | no | The matrix of that model. |
+| `levels.confusion_matrices.<model>.labels` | array | yes | no | The classes of the rows and of the columns, in order: always the seven classes. |
+| `levels.confusion_matrices.<model>.labels[]` | string | — | no | A class. |
+| `levels.confusion_matrices.<model>.rows` | string | yes | no | `"true label"`. |
+| `levels.confusion_matrices.<model>.columns` | string | yes | no | `"predicted label"`. |
+| `levels.confusion_matrices.<model>.counts` | array | yes | no | One list per true class. |
+| `levels.confusion_matrices.<model>.counts[]` | array | — | no | One count per predicted class. |
+| `levels.confusion_matrices.<model>.counts[][]` | integer | — | no | Posts with this true and this predicted class. |
+| `levels.confusion_matrices.<model>.n` | integer | yes | no | All cells added up: the test posts. |
+| `levels.beats_baselines` | object | yes | no | Whether each network's macro-F1 over the six levels is higher than both baselines', keyed by model name. |
+| `levels.beats_baselines.<model>` | boolean | — | no | `true` or `false` (`false` when a score is missing). |
+| `levels.groups` | object | yes | no | The same test set folded into three groups of levels, reported next to the six levels. |
+| `levels.groups.mapping` | object | yes | no | The group of every level, keyed by the six levels; `none` belongs to no group. |
+| `levels.groups.mapping.<level>` | string | — | no | `"numbers"` (levels 1 to 3), `"chart_story"` (levels 4 and 5) or `"emotion"` (level 6). |
+| `levels.groups.n_true_none` | integer | yes | no | Test posts whose true class is `none` (left out of the groups). |
+| `levels.groups.n_called_none` | object | yes | no | Test posts each model or baseline called `none` (left out of the groups), keyed by name. |
+| `levels.groups.n_called_none.<model>` | integer | — | no | Posts called `none`. |
+| `levels.groups.evaluation` | object | yes | no | The evaluation table on the groups. |
+| `levels.groups.evaluation.classes` | array | yes | no | The groups, in order: always `["numbers", "chart_story", "emotion"]`. |
+| `levels.groups.evaluation.classes[]` | string | — | no | A group. |
+| `levels.groups.evaluation.rows` | array | yes | no | One row per network and per baseline. |
+| `levels.groups.evaluation.rows[]` | object | — | no | One row. |
+| `levels.groups.evaluation.rows[].model` | string | yes | no | A model or baseline name. |
+| `levels.groups.evaluation.rows[].kind` | string | yes | no | `"model"` or `"baseline"`. |
+| `levels.groups.evaluation.rows[].n` | integer | yes | no | Test posts in a group on both sides: neither the true class nor the prediction is `none`. |
+| `levels.groups.evaluation.rows[].accuracy` | number | yes | yes | Share of those posts with the right group; `null` when there are none. |
+| `levels.groups.evaluation.rows[].per_class` | object | yes | no | Scores per group, keyed by the three groups. |
+| `levels.groups.evaluation.rows[].per_class.<group>` | object | — | no | Scores of that group. |
+| `levels.groups.evaluation.rows[].per_class.<group>.precision` | number | yes | yes | Of the posts put into this group, the share that belong to it; `null` when none was put there. |
+| `levels.groups.evaluation.rows[].per_class.<group>.recall` | number | yes | yes | Of the posts of this group, the share found; `null` when there are none. |
+| `levels.groups.evaluation.rows[].per_class.<group>.f1` | number | yes | yes | Harmonic mean of precision and recall; `null` when it cannot be computed. |
+| `levels.groups.evaluation.rows[].per_class.<group>.support` | integer | yes | no | Posts of this group. |
+| `levels.groups.evaluation.rows[].macro_f1` | number | yes | yes | Mean F1 of the three groups; `null` when none can be computed. |
+| `levels.groups.confusion_matrices` | object | yes | no | One 3 × 3 matrix per network, keyed by model name. |
+| `levels.groups.confusion_matrices.<model>` | object | — | no | The matrix of that model. |
+| `levels.groups.confusion_matrices.<model>.labels` | array | yes | no | The groups of the rows and of the columns, in order. |
+| `levels.groups.confusion_matrices.<model>.labels[]` | string | — | no | A group. |
+| `levels.groups.confusion_matrices.<model>.rows` | string | yes | no | `"true group"`. |
+| `levels.groups.confusion_matrices.<model>.columns` | string | yes | no | `"predicted group"`. |
+| `levels.groups.confusion_matrices.<model>.counts` | array | yes | no | One list per true group. |
+| `levels.groups.confusion_matrices.<model>.counts[]` | array | — | no | One count per predicted group. |
+| `levels.groups.confusion_matrices.<model>.counts[][]` | integer | — | no | Posts with this true and this predicted group. |
+| `levels.groups.confusion_matrices.<model>.n` | integer | yes | no | All cells added up: the posts of `levels.groups.evaluation.rows[].n` for that model. |
 
 ## Versions
 

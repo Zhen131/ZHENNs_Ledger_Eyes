@@ -2126,6 +2126,289 @@ brief["levels"]["split"] = {
 level_split_counts.assign(posts=[len(part) for part in level_parts.values()])
 
 # %% [markdown]
+# ### Three kinds of vectors and three networks
+#
+# The same recipe as chapters 6 and 7, with seven classes instead of three. `fit_vectorizers` trains **new** vectorizers (word counts, TF-IDF, averaged word vectors) on the cleaned texts of this chapter's training set; chapter 6's vectorizers are not reused, because they learned their vocabulary from other posts, and some of this chapter's test posts may have been among them, which would let words of the test set take part in training. `vectorize_texts` turns the three parts into vectors with them.
+#
+# Then one network per kind of vectors: `build_network(n_features, labels=LEVEL_CLASSES)`, one dense layer with **seven softmax outputs** (the six levels and `none`), trained for `LEVEL_EPOCHS` passes with `BATCH_SIZE` posts per step, after `RANDOM_SEED` has fixed the random numbers, exactly as in chapter 7. One network learns all seven classes; there is no second network for `none`. The three networks go into a new dictionary, `level_models`; chapter 7's `models` stays as it is.
+#
+# ***
+#
+# ### 三种向量、三个网络
+#
+# 做法和第 6、7 章一样，只是三类换成七类。`fit_vectorizers` 在本章训练集的清洗后文字上**重新**训三种向量器（词数统计、TF-IDF、平均词向量）；不复用第 6 章的向量器，因为它们的词表是从别的帖子里学的，本章的测试帖可能就在其中，测试集的词就会悄悄参与训练。再用 `vectorize_texts` 拿它们把三份帖子变成向量。
+#
+# 然后每种向量训一个网络：`build_network(n_features, labels=LEVEL_CLASSES)`，一层全连接、**七个 softmax 输出**（六级加 `none`），训 `LEVEL_EPOCHS` 轮、每步 `BATCH_SIZE` 条，训之前先用 `RANDOM_SEED` 固定随机数，和第 7 章完全一样。一个网络学全部七类，不另训一个专门挑 `none` 的网络。三个网络放进一个新字典 `level_models`；第 7 章的 `models` 原样不动。
+
+# %%
+# Train new vectorizers on this chapter's training set and one seven-output network per kind of vectors.
+level_vectorizers = fit_vectorizers(level_train_df["clean_text"])  # learns from this chapter's training set only
+level_by_part = {part: vectorize_texts(frame["clean_text"], fitted=level_vectorizers) for part, frame in level_parts.items()}
+level_features = {name: {part: level_by_part[part][name] for part in level_parts} for name in level_vectorizers}
+level_models = {}  # model name -> fitted network, the vectors it reads and its training history
+for model_name, vectors_name in [("count_network", "count"), ("tfidf_network", "tfidf"), ("word2vec_network", "word2vec")]:
+    tf.keras.utils.set_random_seed(RANDOM_SEED)  # same seed for every network, as in chapter 7
+    network = build_network(level_features[vectors_name]["train"].shape[1], labels=LEVEL_CLASSES)
+    history = network.fit(level_features[vectors_name]["train"], to_targets(level_train_df["level"], LEVEL_CLASSES),
+                          epochs=LEVEL_EPOCHS, batch_size=BATCH_SIZE, verbose=0,
+                          validation_data=(level_features[vectors_name]["validation"],
+                                           to_targets(level_val_df["level"], LEVEL_CLASSES)))
+    level_models[model_name] = {"model": network, "vectors": vectors_name, "history": history}
+    print(f"{model_name}: after {LEVEL_EPOCHS} passes, training accuracy {history.history['accuracy'][-1]:.3f}, "
+          f"validation accuracy {history.history['val_accuracy'][-1]:.3f}")
+
+word2vec_level = level_vectorizers["word2vec"]
+brief["levels"]["vectorizers"] = {
+    "vocab_size_requested": VOCAB_SIZE,
+    "fitted_on": "train",
+    "fitted_on_n_posts": int(level_features["count"]["train"].shape[0]),
+    "text": "clean_text",
+    "storage": "count and tfidf: sparse float32; word2vec: dense float32",
+    "count": {"vocab_size": len(level_vectorizers["count"].vocabulary_)},
+    "tfidf": {"vocab_size": len(level_vectorizers["tfidf"].vocabulary_)},
+    "word2vec": {
+        "algorithm": "Word2Vec, CBOW (gensim), trained on this chapter's training set; nothing downloaded",
+        "vector_size": word2vec_level.model.vector_size,
+        "window": WORD2VEC_WINDOW,
+        "min_count": WORD2VEC_MIN_COUNT,
+        "epochs": WORD2VEC_EPOCHS,
+        "vocab_size": len(word2vec_level.vocabulary_),
+        "fitted_on_n_posts": int(len(level_train_df)),
+        "unknown_words": "skipped when averaging; a post without a word that has a vector gets zeros",
+        "n_posts_all_zero": {part: int((~level_features["word2vec"][part].any(axis=1)).sum()) for part in level_parts},
+    },
+}
+brief["levels"]["models"] = list(level_models)
+brief["levels"]["training"] = {
+    "epochs": LEVEL_EPOCHS,
+    "batch_size": BATCH_SIZE,
+    "optimizer": "adam",
+    "seed": RANDOM_SEED,
+    "output_layer": f"{len(LEVEL_CLASSES)} units, softmax",
+    "loss": "sparse_categorical_crossentropy",
+    "target_of_label": {level: position for position, level in enumerate(LEVEL_CLASSES)},
+    "history": {name: {key: [float(value) for value in values] for key, values in entry["history"].history.items()}
+                for name, entry in level_models.items()},
+}
+
+# %% [markdown]
+# ### Two macro-F1 scores, and choosing one model
+#
+# The main score of this chapter is **macro-F1 over the six levels**: the F1 of each level, averaged, with `none` left out, because `none` is not a level. It is computed from the seven-class scores (`evaluate(..., labels=LEVEL_CLASSES)`), so a post wrongly called `none`, or a `none` post wrongly called a level, still lowers the precision or recall of that level; calling chapter 7's functions with only the six levels could give another number, and this chapter always uses the first one. **Macro-F1 over the seven classes** (with `none`) is reported next to it. `level_macro_f1` computes the main score.
+#
+# As in chapter 7, the model that later chapters use is chosen by this score on the **validation** set; on a tie the network listed first is chosen. The test set plays no part in the choice.
+#
+# ***
+#
+# ### 两个 macro-F1，选一个模型
+#
+# 本章的主分数是**只看六级的 macro-F1**：六级各自的 F1 取平均，不含 `none`，因为 `none` 不是一级。它从七类的分数（`evaluate(..., labels=LEVEL_CLASSES)`）里取，所以被错判成 `none` 的帖子、被错判成某一级的 `none` 帖子，照样会拉低那一级的精确率或召回率；只拿六级去调第 7 章的函数，算出的数可能不同，本章一律用前一种。**含 `none` 的七类 macro-F1** 一并报出。主分数由 `level_macro_f1` 计算。
+#
+# 和第 7 章一样，后面章节要用的模型按**验证集**上的这个分数选；分数一样时选排在前面的网络。测试集不参与选择。
+
+# %%
+# Score every network on the validation set by macro-F1 over the six levels, and choose one.
+def level_macro_f1(true_levels, predicted_levels):
+    """Mean F1 of the six levels, taken from the seven-class scores (none left out of the mean); NaN when none can."""
+    f1 = class_scores(true_levels, predicted_levels, LEVEL_CLASSES)[2][:len(LEVEL_LABELS)]
+    return float(np.nanmean(f1)) if np.isfinite(f1).any() else float("nan")
+
+
+level_validation_macro_f1 = {
+    name: level_macro_f1(level_val_df["level"].to_numpy(),
+                         predict_labels(entry["model"], level_features[entry["vectors"]]["validation"], LEVEL_CLASSES))
+    for name, entry in level_models.items()
+}
+selected_level_model_name = max(level_validation_macro_f1,
+                                key=lambda name: np.nan_to_num(level_validation_macro_f1[name], nan=-1.0))
+selected_level_model = level_models[selected_level_model_name]["model"]
+selected_level_vectorizer = level_vectorizers[level_models[selected_level_model_name]["vectors"]]
+brief["levels"]["selection"] = {
+    "by": "macro-F1 over the six levels (none left out of the mean) on the validation set",
+    "validation_macro_f1": level_validation_macro_f1,
+    "selected": selected_level_model_name,
+}
+print("Validation macro-F1 over the six levels:", {name: round(score, 4) for name, score in level_validation_macro_f1.items()})
+print("Chosen:", selected_level_model_name)
+
+# %% [markdown]
+# ### The evaluation table
+#
+# On the test set, every network and the two baselines of chapter 8 (always the most frequent class of the training set, the class closest to cash on a tie; a uniform random class with `RANDOM_SEED`) get one row: the number of posts, accuracy, precision, recall and F1 of each of the seven classes (`none` in a column of its own), macro-F1 over the six levels and macro-F1 over the seven classes. The plan for this chapter speaks of "`none` in a row of its own"; here every model is a row and every class a column, so `none` has a column of its own, which means the same. **The bar:** each network's macro-F1 over the six levels must be higher than that of both baselines.
+#
+# ***
+#
+# ### 评估表
+#
+# 在测试集上，每个网络和第 8 章的两条对照线（永远猜训练集里最多的那一类，平手取离现金最近的；用 `RANDOM_SEED` 等概率乱猜）各占一行：条数、准确率、七类各自的精确率、召回率、F1（`none` 单独一列）、只看六级的 macro-F1、七类的 macro-F1。本章的计划里写的是「`none` 单独一行」；这里一个模型一行、一类一列，`none` 就单独占一列，意思相同。**过线标准：** 每个网络只看六级的 macro-F1，必须同时高于两条对照线。
+
+# %%
+# Label the test set with every network and both baselines, and score them.
+y_level_test = level_test_df["level"].to_numpy()
+level_majority = level_train_df["level"].value_counts().reindex(LEVEL_CLASSES, fill_value=0).idxmax()  # tie: closest to cash
+no_text_level_train, no_text_level_test = np.zeros((len(level_train_df), 1)), np.zeros((len(level_test_df), 1))
+level_test_predictions = {name: predict_labels(entry["model"], level_features[entry["vectors"]]["test"], LEVEL_CLASSES)
+                          for name, entry in level_models.items()}
+level_test_predictions["always_majority"] = DummyClassifier(strategy="constant", constant=level_majority).fit(
+    no_text_level_train, level_train_df["level"]).predict(no_text_level_test)
+level_test_predictions["uniform_random"] = DummyClassifier(strategy="uniform", random_state=RANDOM_SEED).fit(
+    no_text_level_train, level_train_df["level"]).predict(no_text_level_test)
+
+level_evaluation_rows = []
+for name, predicted in level_test_predictions.items():
+    row = {"model": name, "kind": "baseline" if name in BASELINES else "model", "subset": "all_test",
+           **evaluate(y_level_test, predicted, labels=LEVEL_CLASSES)}
+    row["macro_f1_seven"] = row["macro_f1"]  # with none
+    row["macro_f1"] = level_macro_f1(y_level_test, predicted)  # the six levels: the main score
+    level_evaluation_rows.append(row)
+level_macro = {row["model"]: row["macro_f1"] for row in level_evaluation_rows}
+level_beats_baselines = {name: bool(all(level_macro[name] > level_macro[baseline] for baseline in BASELINES))
+                         for name in level_models}  # False when a score is missing
+brief["levels"]["evaluation"] = {
+    "subsets": {"all_test": "all test posts"},
+    "baselines": BASELINES,
+    "majority_label": str(level_majority),
+    "rows": level_evaluation_rows,
+}
+brief["levels"]["beats_baselines"] = level_beats_baselines
+print("Beats both baselines (macro-F1 over the six levels):", level_beats_baselines)
+pd.DataFrame([{
+    "model": row["model"], "posts": row["n"], "accuracy": row["accuracy"],
+    **{f"{level} F1": row["per_class"][level]["f1"] for level in LEVEL_CLASSES},
+    "macro-F1, six levels": row["macro_f1"], "macro-F1, seven classes": row["macro_f1_seven"],
+} for row in level_evaluation_rows]).set_index("model").map(blank_if_nan)
+
+# %% [markdown]
+# ### Confusion matrices
+#
+# One 7 × 7 matrix per network on the test set: rows are the true classes, columns the predicted ones, in the order of `LEVEL_CLASSES` (levels 1 to 6, then `none`). The counts go into the brief.
+#
+# ***
+#
+# ### 混淆矩阵
+#
+# 每个网络一张 7 × 7 的矩阵，用测试集：行是真实类别，列是判出的类别，顺序照 `LEVEL_CLASSES`（第 1～6 级，再是 `none`）。计数写进简报。
+
+# %%
+# Draw a 7 x 7 confusion matrix for each network and record the counts.
+level_short_names = [str(position + 1) for position in range(len(LEVEL_LABELS))] + ["none"]
+figure, axes = plt.subplots(1, len(level_models), figsize=(5 * len(level_models), 4.5))
+level_confusion_matrices = {}
+for axis, name in zip(np.atleast_1d(axes), level_models):
+    counts = confusion_matrix(y_level_test, level_test_predictions[name], labels=LEVEL_CLASSES)
+    level_confusion_matrices[name] = {"labels": list(LEVEL_CLASSES), "rows": "true label", "columns": "predicted label",
+                                      "counts": counts.tolist(), "n": int(counts.sum())}
+    ConfusionMatrixDisplay(counts, display_labels=level_short_names).plot(ax=axis, colorbar=False, values_format="d")
+    axis.set_title(name)
+    axis.set_xlabel("predicted (levels 1 to 6, none)")
+    axis.set_ylabel("true")
+plt.tight_layout()
+plt.show()
+brief["levels"]["confusion_matrices"] = level_confusion_matrices
+
+# %% [markdown]
+# ### Three groups instead of six levels
+#
+# If six levels prove too fine to learn, the plan allows a fallback: merge them into three groups, **numbers** (levels 1 to 3: net assets and dividends, profits, revenue), **chart and story** (levels 4 and 5) and **emotion** (level 6). This chapter reports the groups **next to** the six levels, not instead of them. `LEVEL_GROUPS` maps every level to its group; `none` belongs to no group.
+#
+# ***
+#
+# ### 六级折成三大类
+#
+# 如果六级太细、学不会，计划允许兜底：合并成三大类，**算账**（第 1～3 级：净资产与股息、利润、营收）、**看图讲故事**（第 4、5 级）、**纯情绪**（第 6 级）。本章把三大类和六级**并排**报，不拿它替换六级。`LEVEL_GROUPS` 把每一级对到它的大类；`none` 不属于任何一类。
+
+# %%
+# The three groups of levels; none belongs to no group.
+LEVEL_GROUPS = {  # level -> group, closest to cash first
+    "assets_dividends": "numbers",
+    "earnings": "numbers",
+    "revenue_business": "numbers",
+    "price_chart": "chart_story",
+    "story_macro": "chart_story",
+    "emotion_only": "emotion",
+}
+LEVEL_GROUP_NAMES = ["numbers", "chart_story", "emotion"]  # the groups in ladder order
+
+# %% [markdown]
+# ### Scores on the three groups
+#
+# The true classes and every network's and baseline's predictions are folded into the three groups. A post whose true class is `none`, or that was predicted `none`, belongs to no group, so the groups are scored only on posts where neither is `none`; how many test posts are truly `none`, and how many each model called `none`, is reported apart. Then the same table and one 3 × 3 confusion matrix per network.
+#
+# ***
+#
+# ### 三大类上的分数
+#
+# 把真实类别和每个网络、每条对照线的判定都折成三大类。真实类别是 `none` 或被判成 `none` 的帖子不属于任何一类，所以三大类只在两者都不是 `none` 的帖子上打分；测试帖里真是 `none` 的有几条、每个模型判成 `none` 的有几条，单独报。然后是同样的评估表，和每个网络一张 3 × 3 的混淆矩阵。
+
+# %%
+# Fold the test labels and predictions into the three groups and score them.
+level_group_rows, level_group_matrices = [], {}
+level_called_none = {name: int((predicted == "none").sum()) for name, predicted in level_test_predictions.items()}
+for name, predicted in level_test_predictions.items():
+    both_levels = (y_level_test != "none") & (predicted != "none")  # posts in a group on both sides
+    true_groups = np.array([LEVEL_GROUPS[level] for level in y_level_test[both_levels]], dtype=object)
+    predicted_groups = np.array([LEVEL_GROUPS[level] for level in predicted[both_levels]], dtype=object)
+    level_group_rows.append({"model": name, "kind": "baseline" if name in BASELINES else "model",
+                             **evaluate(true_groups, predicted_groups, labels=LEVEL_GROUP_NAMES)})
+    if name in level_models:
+        counts = confusion_matrix(true_groups, predicted_groups, labels=LEVEL_GROUP_NAMES)
+        level_group_matrices[name] = {"labels": list(LEVEL_GROUP_NAMES), "rows": "true group",
+                                      "columns": "predicted group", "counts": counts.tolist(), "n": int(counts.sum())}
+brief["levels"]["groups"] = {
+    "mapping": dict(LEVEL_GROUPS),
+    "n_true_none": int((y_level_test == "none").sum()),
+    "n_called_none": level_called_none,
+    "evaluation": {"classes": list(LEVEL_GROUP_NAMES), "rows": level_group_rows},
+    "confusion_matrices": level_group_matrices,
+}
+print(f"Test posts: {len(y_level_test)}; truly none: {brief['levels']['groups']['n_true_none']}; called none: {level_called_none}")
+for name, matrix in level_group_matrices.items():
+    print(f"{name}: groups {LEVEL_GROUP_NAMES}, rows true, columns predicted: {matrix['counts']}")
+pd.DataFrame([{"model": row["model"], "posts": row["n"], "accuracy": row["accuracy"],
+               **{f"{group} F1": row["per_class"][group]["f1"] for group in LEVEL_GROUP_NAMES},
+               "macro-F1": row["macro_f1"]} for row in level_group_rows]).set_index("model").map(blank_if_nan)
+
+# %% [markdown]
+# ### The scoring functions for the next chapter
+#
+# `level_proba(cleaned_texts)` gives the chosen network's probabilities of the seven classes for any batch of cleaned texts: a NumPy array with one row per text and one column per class, in the order of `LEVEL_CLASSES`; every row adds up to 1. `level_texts(texts)` does the same for raw posts, as `score_texts` does for the sentiment: it cleans them with `clean_texts` and returns a table with one row per post (the same index when given a pandas Series), the columns `p_assets_dividends` … `p_emotion_only`, `p_none`, and `call`, the class of the highest probability (which may be `none`; a tie goes to the class closest to cash). The cell ends with a check on four hand-written sentences and on the test set.
+#
+# ***
+#
+# ### 给下一章用的打分函数
+#
+# `level_proba(cleaned_texts)` 用选中的网络，给任意一批清洗后的文字算出七类各自的概率：一个 NumPy 数组，每条文字一行、每类一列，顺序照 `LEVEL_CLASSES`；每行加起来等于 1。`level_texts(texts)` 对原始帖子做同样的事，就像 `score_texts` 对多空做的那样：先用 `clean_texts` 洗，返回一张表，每条帖子一行（给的是 pandas Series 时沿用它的索引），列是 `p_assets_dividends` … `p_emotion_only`、`p_none`，再加 `call`，即概率最大的那一类（可以是 `none`；平手取离现金最近的）。这一格最后拿四句手写的句子和测试集核对一遍。
+
+# %%
+# The scoring functions of the levels, checked on hand-written sentences and on the test set.
+def level_proba(cleaned_texts):
+    """Probabilities of the seven classes from the chosen network; shape (number of texts, 7), columns LEVEL_CLASSES."""
+    texts = ["" if not isinstance(text, str) and pd.isna(text) else str(text) for text in cleaned_texts]
+    return predict_proba(selected_level_model, selected_level_vectorizer.transform(texts), labels=LEVEL_CLASSES)
+
+
+def level_texts(texts):
+    """Clean and score raw texts: one row per text, a probability column per class (p_<class>) and the call."""
+    texts = texts if isinstance(texts, pd.Series) else pd.Series(list(texts), dtype=object)
+    probabilities = level_proba(clean_texts(texts))
+    table = pd.DataFrame(probabilities, index=texts.index, columns=[f"p_{level}" for level in LEVEL_CLASSES])
+    table["call"] = [LEVEL_CLASSES[position] for position in probabilities.argmax(axis=1)]  # tie: the earlier class
+    return table
+
+
+level_demo_texts = ["Dividend yield is 6% and it trades below book value", "Strong EPS beat, margins up again",
+                    "$NVDA broke out above resistance on big volume", "happy friday everyone"]
+level_demo = level_texts(level_demo_texts)
+level_demo_probabilities = level_demo[[f"p_{level}" for level in LEVEL_CLASSES]]
+level_test_calls = np.asarray(LEVEL_CLASSES)[level_proba(level_test_df["clean_text"]).argmax(axis=1)]
+print(f"level_texts check: {len(level_demo_texts)} texts, {len(level_demo)} rows, "
+      f"columns {list(level_demo.columns) == [f'p_{level}' for level in LEVEL_CLASSES] + ['call']}, "
+      f"rows sum to 1 {bool(np.allclose(level_demo_probabilities.sum(axis=1), 1.0, atol=1e-5))}, "
+      f"call is highest {bool((level_demo['call'] == level_demo_probabilities.idxmax(axis=1).str.removeprefix('p_')).all())}, "
+      f"test calls match the evaluation {bool(np.array_equal(level_test_calls, level_test_predictions[selected_level_model_name]))}")
+level_demo.set_index(pd.Index(level_demo_texts, name="text")).round(3)
+
+# %% [markdown]
 # ## 10. The brief: check and save
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, the file other programs read, in three steps:
@@ -2581,7 +2864,9 @@ BRIEF_SCHEMA_TEXT = r"""{
     "levels": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split"],
+      "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split",
+                   "vectorizers", "models", "training", "selection", "evaluation", "confusion_matrices", "beats_baselines",
+                   "groups"],
       "properties": {
         "silver_labels": {"type": "string"},
         "labels_source": {"type": "string"},
@@ -2667,6 +2952,196 @@ BRIEF_SCHEMA_TEXT = r"""{
             },
             "n_has_ticker": {"$ref": "#/$defs/part_counts"}
           }
+        },
+        "vectorizers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf", "word2vec"],
+          "properties": {
+            "vocab_size_requested": {"$ref": "#/$defs/positive"},
+            "fitted_on": {"type": "string"},
+            "fitted_on_n_posts": {"$ref": "#/$defs/count"},
+            "text": {"type": "string"},
+            "storage": {"type": "string"},
+            "count": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["vocab_size"],
+              "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            },
+            "tfidf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["vocab_size"],
+              "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            },
+            "word2vec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["algorithm", "vector_size", "window", "min_count", "epochs", "vocab_size", "fitted_on_n_posts",
+                           "unknown_words", "n_posts_all_zero"],
+              "properties": {
+                "algorithm": {"type": "string"},
+                "vector_size": {"$ref": "#/$defs/positive"},
+                "window": {"$ref": "#/$defs/positive"},
+                "min_count": {"$ref": "#/$defs/positive"},
+                "epochs": {"$ref": "#/$defs/positive"},
+                "vocab_size": {"$ref": "#/$defs/count"},
+                "fitted_on_n_posts": {"$ref": "#/$defs/count"},
+                "unknown_words": {"type": "string"},
+                "n_posts_all_zero": {"$ref": "#/$defs/part_counts"}
+              }
+            }
+          }
+        },
+        "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "training": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["epochs", "batch_size", "optimizer", "seed", "output_layer", "loss", "target_of_label", "history"],
+          "properties": {
+            "epochs": {"$ref": "#/$defs/positive"},
+            "batch_size": {"$ref": "#/$defs/positive"},
+            "optimizer": {"type": "string"},
+            "seed": {"type": "integer"},
+            "output_layer": {"type": "string"},
+            "loss": {"type": "string"},
+            "target_of_label": {"$ref": "#/$defs/level_class_counts"},
+            "history": {
+              "type": "object",
+              "propertyNames": {"title": "model"},
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": {"title": "metric"},
+                "additionalProperties": {"type": "array", "items": {"type": ["number", "null"]}}
+              }
+            }
+          }
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["by", "validation_macro_f1", "selected"],
+          "properties": {
+            "by": {"type": "string"},
+            "validation_macro_f1": {"type": "object", "propertyNames": {"title": "model"}, "additionalProperties": {"$ref": "#/$defs/share_or_null"}},
+            "selected": {"type": "string"}
+          }
+        },
+        "evaluation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subsets", "baselines", "majority_label", "rows"],
+          "properties": {
+            "subsets": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["all_test"],
+              "properties": {"all_test": {"type": "string"}}
+            },
+            "baselines": {"type": "array", "items": {"type": "string"}},
+            "majority_label": {"$ref": "#/$defs/level_class"},
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["model", "kind", "subset", "n", "accuracy", "per_class", "macro_f1", "macro_f1_seven"],
+                "properties": {
+                  "model": {"type": "string"},
+                  "kind": {"type": "string", "enum": ["model", "baseline"]},
+                  "subset": {"type": "string", "enum": ["all_test"]},
+                  "n": {"$ref": "#/$defs/count"},
+                  "accuracy": {"$ref": "#/$defs/share_or_null"},
+                  "per_class": {
+                    "type": "object",
+                    "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
+                    "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
+                    "additionalProperties": {"$ref": "#/$defs/class_scores"}
+                  },
+                  "macro_f1": {"$ref": "#/$defs/share_or_null"},
+                  "macro_f1_seven": {"$ref": "#/$defs/share_or_null"}
+                }
+              }
+            }
+          }
+        },
+        "confusion_matrices": {
+          "type": "object",
+          "propertyNames": {"title": "model"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["labels", "rows", "columns", "counts", "n"],
+            "properties": {
+              "labels": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"], "items": {"$ref": "#/$defs/level_class"}},
+              "rows": {"type": "string"},
+              "columns": {"type": "string"},
+              "counts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/count"}}},
+              "n": {"$ref": "#/$defs/count"}
+            }
+          }
+        },
+        "beats_baselines": {"type": "object", "propertyNames": {"title": "model"}, "additionalProperties": {"type": "boolean"}},
+        "groups": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mapping", "n_true_none", "n_called_none", "evaluation", "confusion_matrices"],
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+              "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+              "additionalProperties": {"$ref": "#/$defs/level_group"}
+            },
+            "n_true_none": {"$ref": "#/$defs/count"},
+            "n_called_none": {"type": "object", "propertyNames": {"title": "model"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+            "evaluation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["classes", "rows"],
+              "properties": {
+                "classes": {"type": "array", "const": ["numbers", "chart_story", "emotion"], "items": {"$ref": "#/$defs/level_group"}},
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["model", "kind", "n", "accuracy", "per_class", "macro_f1"],
+                    "properties": {
+                      "model": {"type": "string"},
+                      "kind": {"type": "string", "enum": ["model", "baseline"]},
+                      "n": {"$ref": "#/$defs/count"},
+                      "accuracy": {"$ref": "#/$defs/share_or_null"},
+                      "per_class": {
+                        "type": "object",
+                        "propertyNames": {"title": "group", "$ref": "#/$defs/level_group"},
+                        "required": ["numbers", "chart_story", "emotion"],
+                        "additionalProperties": {"$ref": "#/$defs/class_scores"}
+                      },
+                      "macro_f1": {"$ref": "#/$defs/share_or_null"}
+                    }
+                  }
+                }
+              }
+            },
+            "confusion_matrices": {
+              "type": "object",
+              "propertyNames": {"title": "model"},
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["labels", "rows", "columns", "counts", "n"],
+                "properties": {
+                  "labels": {"type": "array", "const": ["numbers", "chart_story", "emotion"], "items": {"$ref": "#/$defs/level_group"}},
+                  "rows": {"type": "string"},
+                  "columns": {"type": "string"},
+                  "counts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/count"}}},
+                  "n": {"$ref": "#/$defs/count"}
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -2717,6 +3192,18 @@ BRIEF_SCHEMA_TEXT = r"""{
       "propertyNames": {"title": "class", "$ref": "#/$defs/level_class"},
       "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"],
       "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "level_group": {"type": "string", "enum": ["numbers", "chart_story", "emotion"]},
+    "class_scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precision", "recall", "f1", "support"],
+      "properties": {
+        "precision": {"$ref": "#/$defs/share_or_null"},
+        "recall": {"$ref": "#/$defs/share_or_null"},
+        "f1": {"$ref": "#/$defs/share_or_null"},
+        "support": {"$ref": "#/$defs/count"}
+      }
     },
     "level_class_shares": {
       "type": "object",

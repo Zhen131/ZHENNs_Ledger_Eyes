@@ -846,6 +846,69 @@ def print_sentiment(brief):
     print(f"  beats both baselines:          {sentiment.get('beats_baselines')}")
 
 
+def print_levels(brief):
+    """Print the key numbers of the levels section (full run)."""
+    section = as_dict(brief.get("levels"))
+    if not section:
+        return
+    print("\nLevels (full run)")
+    labels_file = as_dict(section.get("labels_file"))
+    print(f"  label file:                    {labels_file.get('n_rows')} rows, sha256 {labels_file.get('sha256')}")
+    print(f"  per value:                     {labels_file.get('label_counts')}")
+    print(f"  models, prompt versions:       {labels_file.get('models')}, {labels_file.get('prompt_versions')}")
+    print(f"  matching:                      {section.get('matching')}")
+    print(f"  left out:                      {section.get('dropped')}")
+    balance = as_dict(section.get("balance"))
+    print(f"  per class before the draw:     {balance.get('counts_before')}")
+    print(f"  per class after the draw:      {balance.get('counts_after')}   (LEVEL_BALANCE {balance.get('enabled')})")
+    print(f"  split (posts):                 {as_dict(section.get('split')).get('n_posts')}")
+    selection = as_dict(section.get("selection"))
+    print(f"  validation macro-F1 (six):     {selection.get('validation_macro_f1')}   chosen: {selection.get('selected')}")
+
+    def number(value):
+        return f"{value:.4f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
+
+    short = {"assets_dividends": "assets", "earnings": "earn", "revenue_business": "revenue", "price_chart": "chart",
+             "story_macro": "story", "emotion_only": "emotion", "none": "none"}
+    print("  evaluation table, seven classes (F1 per class; macro-F1 over the six levels, then over all seven):")
+    print(f"  {'model':16} {'posts':>5} {'accuracy':>8} " + " ".join(f"{short[c]:>7}" for c in LEVEL_LABELS)
+          + f" {'six':>7} {'seven':>7}")
+    for row in as_dict(section.get("evaluation")).get("rows") or []:
+        per_class = as_dict(row.get("per_class"))
+        print(f"  {str(row.get('model')):16} {str(row.get('n')):>5} {number(row.get('accuracy')):>8} "
+              + " ".join(f"{number(as_dict(per_class.get(c)).get('f1')):>7}" for c in LEVEL_LABELS)
+              + f" {number(row.get('macro_f1')):>7} {number(row.get('macro_f1_seven')):>7}")
+    print("  precision and recall per class:")
+    for row in as_dict(section.get("evaluation")).get("rows") or []:
+        per_class = as_dict(row.get("per_class"))
+        print(f"    {str(row.get('model')):16} " + " ".join(
+            f"{short[c]} {number(as_dict(per_class.get(c)).get('precision'))}/"
+            f"{number(as_dict(per_class.get(c)).get('recall'))}" for c in LEVEL_LABELS))
+    for name, matrix in as_dict(section.get("confusion_matrices")).items():
+        print(f"  7x7 confusion matrix {name} (rows true, columns predicted, {LEVEL_LABELS}): {matrix.get('counts')}")
+    print(f"  beats both baselines:          {section.get('beats_baselines')}")
+    groups = as_dict(section.get("groups"))
+    print(f"  groups: true none {groups.get('n_true_none')}, called none {groups.get('n_called_none')}")
+    print(f"  {'model':16} {'posts':>5} {'accuracy':>8} " + " ".join(f"{g:>11}" for g in LEVEL_GROUP_ORDER)
+          + f" {'macro-F1':>8}")
+    for row in as_dict(groups.get("evaluation")).get("rows") or []:
+        per_class = as_dict(row.get("per_class"))
+        print(f"  {str(row.get('model')):16} {str(row.get('n')):>5} {number(row.get('accuracy')):>8} "
+              + " ".join(f"{number(as_dict(per_class.get(g)).get('f1')):>11}" for g in LEVEL_GROUP_ORDER)
+              + f" {number(row.get('macro_f1')):>8}")
+    for name, matrix in as_dict(groups.get("confusion_matrices")).items():
+        print(f"  3x3 confusion matrix {name} (rows true, columns predicted, {LEVEL_GROUP_ORDER}): {matrix.get('counts')}")
+    review = as_dict(section.get("review"))
+    for who in ("human", "second_model"):
+        part = as_dict(review.get(who))
+        if part:
+            print(f"  review {who}: {part.get('n_reviewed')} rows, agreement {part.get('agreement')}, weighted "
+                  f"{part.get('weighted_agreement')}")
+            print(f"    per pre-label: {part.get('by_prelabel')}")
+            print(f"    confusion (rows review label {LEVEL_LABELS}, columns pre-label {LEVEL_SIX}): "
+                  f"{as_dict(part.get('confusion')).get('counts')}")
+
+
 # ---------------------------------------------------------------- the brief's format (chapter 9)
 
 def as_dict(value):
@@ -1076,6 +1139,7 @@ BROKEN_BRIEFS = [
     ("2 required field missing in a section", ("sentiment", "evaluation"), DELETE, "sentiment", "evaluation"),
     ("2 required field missing in a section", ("sentiment", "evaluation", "rows", 0, "macro_f1"), DELETE,
      "sentiment.evaluation.rows[0]", "macro_f1"),
+    ("2 required field missing in a section", ("levels", "evaluation"), DELETE, "levels", "evaluation"),
     ("3 wrong type", ("dataset", "n_posts"), str, "dataset.n_posts", "integer"),  # a count written as text
     ("3 wrong type", ("scope",), lambda old: [], "scope", "object"),  # an object written as a list
     ("3 wrong type", ("dataset", "cleaning", "keep_negations"), lambda old: "true", "dataset.cleaning.keep_negations",
@@ -2850,6 +2914,198 @@ def check_levels_brief(report, label, brief, switches, full_run):
     report.check(split_ok and split.get("stratified_by") == "level",
                  f"{label}: chapter 9's training, validation and test sets add up to the drawn posts, with every one of "
                  "the seven classes in every part", f"{sizes} {class_counts}")
+    check_levels_models(report, label, levels_section, switches, sizes, full_run)
+
+
+LEVEL_GROUP_OF = {"assets_dividends": "numbers", "earnings": "numbers", "revenue_business": "numbers",
+                  "price_chart": "chart_story", "story_macro": "chart_story", "emotion_only": "emotion"}  # none: no group
+LEVEL_GROUP_ORDER = ["numbers", "chart_story", "emotion"]
+
+
+def six_level_mean(per_class):
+    """Mean of the six levels' F1 in a row's per_class (null scores left out); None when none is a number."""
+    scores = [as_dict(per_class.get(level)).get("f1") for level in LEVEL_SIX]
+    numbers = [score for score in scores if isinstance(score, (int, float)) and not isinstance(score, bool)]
+    return sum(numbers) / len(numbers) if numbers else None
+
+
+def check_levels_models(report, label, levels_section, switches, sizes, full_run):
+    """Chapter 9's vectorizers, networks, choice, evaluation table, confusion matrices and groups (from the brief)."""
+    n_train, n_test = sizes.get("train"), sizes.get("test")
+    vectors = as_dict(levels_section.get("vectorizers"))
+    word2vec = as_dict(vectors.get("word2vec"))
+    vocab = [as_dict(vectors.get(name)).get("vocab_size") for name in ("count", "tfidf")]
+    report.check(vectors.get("fitted_on") == "train" and vectors.get("fitted_on_n_posts") == n_train
+                 and word2vec.get("fitted_on_n_posts") == n_train and is_count(word2vec.get("vocab_size"))
+                 and all(is_count(size) and 0 < size <= switches["VOCAB_SIZE"] for size in vocab),
+                 f"{label}: chapter 9's three vectorizers learned from chapter 9's training set only (at most VOCAB_SIZE "
+                 "words for word counts and TF-IDF)",
+                 f"fitted on {vectors.get('fitted_on')!r} ({vectors.get('fitted_on_n_posts')} posts, word vectors "
+                 f"{word2vec.get('fitted_on_n_posts')}), training posts {n_train}, vocabularies {vocab}")
+    models = levels_section.get("models") if isinstance(levels_section.get("models"), list) else []
+    training = as_dict(levels_section.get("training"))
+    selection = as_dict(levels_section.get("selection"))
+    validation = as_dict(selection.get("validation_macro_f1"))
+    report.check(models == SENTIMENT_MODELS and training.get("output_layer") == "7 units, softmax"
+                 and training.get("loss") == "sparse_categorical_crossentropy"
+                 and training.get("target_of_label") == {value: position for position, value in enumerate(LEVEL_LABELS)}
+                 and training.get("epochs") == switches.get("LEVEL_EPOCHS")
+                 and sorted(as_dict(training.get("history"))) == sorted(models)
+                 and sorted(validation) == sorted(models) and all(is_score(score) for score in validation.values())
+                 and selection.get("selected") in models,
+                 f"{label}: chapter 9 trains three networks with seven softmax outputs for LEVEL_EPOCHS passes and "
+                 "chooses one by a validation score that every network has",
+                 f"models {models}; output {training.get('output_layer')!r}; epochs {training.get('epochs')}; "
+                 f"validation {validation}; selected {selection.get('selected')!r}")
+
+    evaluation = as_dict(levels_section.get("evaluation"))
+    rows = [row for row in evaluation.get("rows") or [] if isinstance(row, dict)]
+    names = models + SENTIMENT_BASELINES
+    found = Counter(row.get("model") for row in rows)
+    problems = [f"{name}: {found[name]} rows" for name in names if found[name] != 1]
+    if len(rows) != len(names):
+        problems.append(f"{len(rows)} rows for {len(names)} models and baselines")
+    for row in rows:
+        name, per_class, n = row.get("model"), as_dict(row.get("per_class")), row.get("n")
+        if row.get("subset") != "all_test" or n != n_test or sorted(per_class) != sorted(LEVEL_LABELS):
+            problems.append(f"{name}: subset {row.get('subset')!r}, {n} posts (test {n_test}), classes {sorted(per_class)}")
+            continue
+        supports = [as_dict(per_class[value]).get("support") for value in LEVEL_LABELS]
+        if not all(is_count(support) for support in supports) or sum(supports) != n:
+            problems.append(f"{name}: supports {supports} do not add up to {n}")
+        scores = [row.get("accuracy"), row.get("macro_f1"), row.get("macro_f1_seven")] + [
+            as_dict(per_class[value]).get(measure) for value in LEVEL_LABELS for measure in ("precision", "recall", "f1")]
+        if not all(is_score(score) for score in scores):
+            problems.append(f"{name}: a score is neither a number in [0, 1] nor null")
+        six = six_level_mean(per_class)
+        if (six is None) != (row.get("macro_f1") is None) or (six is not None and abs(six - row["macro_f1"]) > 1e-9):
+            problems.append(f"{name}: macro_f1 {row.get('macro_f1')} is not the mean F1 of the six levels {six}")
+        f1_all = [as_dict(per_class[value]).get("f1") for value in LEVEL_LABELS]
+        numbers = [score for score in f1_all if isinstance(score, (int, float))]
+        seven = sum(numbers) / len(numbers) if numbers else None
+        if (seven is None) != (row.get("macro_f1_seven") is None) or (
+                seven is not None and abs(seven - row["macro_f1_seven"]) > 1e-9):
+            problems.append(f"{name}: macro_f1_seven {row.get('macro_f1_seven')} is not the mean F1 of the seven classes")
+    report.check(bool(rows) and not problems,
+                 f"{label}: chapter 9's evaluation table has one row per network and per baseline on all test posts, "
+                 "every one of the seven classes scored (none in a column of its own), supports adding up to the test "
+                 "posts, macro_f1 the mean F1 of the six levels (recomputed here) and macro_f1_seven that of all seven",
+                 "; ".join(problems[:5]))
+
+    accuracy = {row.get("model"): row.get("accuracy") for row in rows}
+    matrices = as_dict(levels_section.get("confusion_matrices"))
+    groups = as_dict(levels_section.get("groups"))
+    group_matrices = as_dict(groups.get("confusion_matrices"))
+    group_rows = {row.get("model"): row for row in as_dict(groups.get("evaluation")).get("rows") or []
+                  if isinstance(row, dict)}
+    called_none = as_dict(groups.get("n_called_none"))
+    problems, group_problems = [], []
+    none_index = LEVEL_LABELS.index("none")
+    for name in models:
+        matrix = as_dict(matrices.get(name))
+        counts = matrix.get("counts")
+        if not (matrix.get("labels") == LEVEL_LABELS and isinstance(counts, list) and len(counts) == 7
+                and all(isinstance(line, list) and len(line) == 7 and all(is_count(cell) for cell in line)
+                        for line in counts)):
+            problems.append(f"{name}: not a 7x7 table of counts with the seven classes")
+            continue
+        total = sum(map(sum, counts))
+        if total != n_test or matrix.get("n") != total:
+            problems.append(f"{name}: cells add up to {total}, test posts {n_test}")
+        elif n_test and isinstance(accuracy.get(name), float) and \
+                abs(sum(counts[i][i] for i in range(7)) / n_test - accuracy[name]) > 1e-9:
+            problems.append(f"{name}: diagonal does not match the accuracy")
+        # The groups: fold the 7 x 7 matrix into 3 x 3 here and compare; none counted apart.
+        folded = [[0] * 3 for _ in range(3)]
+        for i, true_value in enumerate(LEVEL_LABELS):
+            for j, called in enumerate(LEVEL_LABELS):
+                if true_value != "none" and called != "none":
+                    folded[LEVEL_GROUP_ORDER.index(LEVEL_GROUP_OF[true_value])][
+                        LEVEL_GROUP_ORDER.index(LEVEL_GROUP_OF[called])] += counts[i][j]
+        group_matrix = as_dict(group_matrices.get(name))
+        both = sum(map(sum, folded))
+        if group_matrix.get("labels") != LEVEL_GROUP_ORDER or group_matrix.get("counts") != folded \
+                or group_matrix.get("n") != both or as_dict(group_rows.get(name)).get("n") != both:
+            group_problems.append(f"{name}: 3x3 {group_matrix.get('counts')} (n {group_matrix.get('n')}), folded from "
+                                  f"the 7x7 {folded} (n {both}); row n {as_dict(group_rows.get(name)).get('n')}")
+        if groups.get("n_true_none") != sum(counts[none_index]) or \
+                called_none.get(name) != sum(line[none_index] for line in counts):
+            group_problems.append(f"{name}: none counted apart {groups.get('n_true_none')} true / {called_none.get(name)} "
+                                  f"called, the 7x7 has {sum(counts[none_index])} / "
+                                  f"{sum(line[none_index] for line in counts)}")
+    report.check(bool(models) and not problems,
+                 f"{label}: one 7x7 confusion matrix per network, adding up to the test posts and agreeing with the "
+                 "accuracy", "; ".join(problems))
+    for name, row in group_rows.items():
+        per_class = as_dict(row.get("per_class"))
+        supports = [as_dict(per_class.get(group)).get("support") for group in LEVEL_GROUP_ORDER]
+        if sorted(per_class) != sorted(LEVEL_GROUP_ORDER) or not all(is_count(value) for value in supports) \
+                or sum(supports) != row.get("n"):
+            group_problems.append(f"{name}: groups {sorted(per_class)}, supports {supports}, n {row.get('n')}")
+    report.check(groups.get("mapping") == LEVEL_GROUP_OF and sorted(group_rows) == sorted(names)
+                 and sorted(called_none) == sorted(names) and not group_problems,
+                 f"{label}: the three groups: every level in its group and none in none; one row per network and per "
+                 "baseline; each network's 3x3 matrix is its 7x7 matrix folded (only posts where neither the true "
+                 "class nor the call is none), and the none posts counted apart agree with the 7x7 matrix",
+                 f"mapping {groups.get('mapping')}; rows {sorted(group_rows)}; " + "; ".join(group_problems[:4]))
+
+    macro = {row.get("model"): row.get("macro_f1") for row in rows}
+
+    def beats_both(name):
+        score = macro.get(name)
+        return score is not None and all(macro.get(baseline) is not None and score > macro[baseline]
+                                         for baseline in SENTIMENT_BASELINES)
+
+    report.check(levels_section.get("beats_baselines") == {name: beats_both(name) for name in models},
+                 f"{label}: chapter 9's beats_baselines agrees with its evaluation rows",
+                 f"{levels_section.get('beats_baselines')}")
+    if full_run:
+        for name in models:
+            report.check(beats_both(name), f"{label}: chapter 9: {name} macro-F1 over the six levels beats always "
+                         "majority and uniform random", f"{macro.get(name)} vs " + ", ".join(
+                             f"{baseline} {macro.get(baseline)}" for baseline in SENTIMENT_BASELINES))
+
+
+def check_levels_groups_cell(report):
+    """Chapter 9's LEVEL_GROUPS cell, run from the source: every level folds into its group, none into none."""
+    namespace = {"__name__": "notebook_cells"}
+    problems = run_cells(["LEVEL_GROUPS"], namespace)
+    mapping, order = namespace.get("LEVEL_GROUPS"), namespace.get("LEVEL_GROUP_NAMES")
+    example = ["earnings", "none", "story_macro", "assets_dividends", "emotion_only", "price_chart", "revenue_business"]
+    folded = [mapping.get(value) for value in example] if isinstance(mapping, dict) else None
+    report.check(not problems and mapping == LEVEL_GROUP_OF and order == LEVEL_GROUP_ORDER
+                 and folded == ["numbers", None, "chart_story", "numbers", "emotion", "chart_story", "numbers"],
+                 "chapter 9: LEVEL_GROUPS (run from the source) folds levels 1 to 3 into numbers, 4 and 5 into "
+                 "chart_story and 6 into emotion, and none into no group",
+                 f"{'; '.join(problems)} mapping {mapping}; order {order}; {example} -> {folded}")
+
+
+LEVEL_TEXTS_LINE = "level_texts check: "  # the line chapter 9 prints after checking level_texts
+
+
+def executed_lines(executed):
+    """Every printed line of an executed notebook."""
+    lines = []
+    if executed.exists():
+        for cell in json.loads(executed.read_text(encoding="utf-8"))["cells"]:
+            for out in cell.get("outputs", []):
+                text = out.get("text", "")
+                lines += ("".join(text) if isinstance(text, list) else text).splitlines()
+    return lines
+
+
+def check_levels_texts_output(report, label, executed):
+    """The executed notebook printed chapter 9's check of level_texts, and every part of it held."""
+    lines = [line for line in executed_lines(executed) if line.startswith(LEVEL_TEXTS_LINE)]
+    expected = re.compile(r"level_texts check: (\d+) texts, (\d+) rows, columns True, rows sum to 1 True, call is "
+                          r"highest True, test calls match the evaluation True")
+    match = expected.fullmatch(lines[0]) if len(lines) == 1 else None
+    report.check(match is not None and match.group(1) == match.group(2) and int(match.group(1)) > 0,
+                 f"{label}: level_texts on the demo sentences gives one row per sentence, the columns p_<class> for the "
+                 "seven classes and call, rows adding up to 1 and a call that is the class of the highest probability, "
+                 "and level_proba reproduces the evaluated test calls of the chosen network", " | ".join(lines) or "no line")
+
+
 
 
 # ---------------------------------------------------------------- modes
@@ -2932,6 +3188,7 @@ def quick(report, defaults, others, overrides, rules=None):
             check_brief(report, label, brief, switches)
             check_sentiment(report, label, brief, switches, full_run=False)
             check_levels_brief(report, label, brief, switches, full_run=False)
+            check_levels_texts_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None:
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -2966,6 +3223,7 @@ def full(report, defaults, overrides, rules=None):
     check_brief(report, "full run", brief, switches)
     check_sentiment(report, "full run", brief, switches, full_run=True)
     check_levels_brief(report, "full run", brief, switches, full_run=True)
+    check_levels_texts_output(report, "full run", executed)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -2988,6 +3246,7 @@ def full(report, defaults, overrides, rules=None):
     print(f"  empty after cleaning:          {cleaning.get('n_empty_after')}")
     print(f"  run time:                      {seconds:.1f} s")
     print_sentiment(brief)
+    print_levels(brief)
     print("\nBrief format (full run)")
     print(f"  format_version:                {brief.get('format_version')}")
     print(f"  format check of the brief:     {format_seconds:.1f} s (the check the notebook runs before saving)")
@@ -3032,6 +3291,7 @@ def main():
     check_levels_second_review_file(report)
     check_levels_switches(report, defaults, others)
     check_levels_reading(report)
+    check_levels_groups_cell(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
