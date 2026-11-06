@@ -1,7 +1,7 @@
 # %% [markdown]
-# # Ledger Eyes: what is the crypto crowd saying?
+# # Ledger Eyes: what is the stock crowd saying, and what are they looking at?
 #
-# This notebook reads a public set of StockTwits crypto posts and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
+# This notebook reads a public set of short English posts about stocks and markets, each labelled bullish, neutral or bearish, and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
 # Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 The brief: check and save.
 #
@@ -9,9 +9,9 @@
 #
 # ***
 #
-# # 账本的眼：币圈的人在说什么？
+# # 账本的眼：股票人群在说什么、在看什么？
 #
-# 这个笔记本读一份公开的 StockTwits 币圈帖子，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
+# 这个笔记本读一份公开的英文股票短帖，每条帖子都标好了看多、中性或看空，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
 # 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 简报：校验与保存。
 #
@@ -29,12 +29,12 @@
 # 所有设置都在下一格，一行一个普通赋值。每行的注释写明默认值和还能改成什么。报告结果以默认值为准。注释里标着 two-state 的开关可以切到另一个值，笔记本照样能从头跑完。这一格带 `parameters` 标签，papermill 之类的工具可以不改笔记本就换掉这些值。
 
 # %% tags=["parameters"]
-DATA_SOURCE = "hf://datasets/ElKulako/stocktwits-crypto/st-data-full.xlsx"  # default: the Hugging Face file; or a local .xlsx with the same sheets and columns
+DATA_SOURCE = "hf://datasets/TimKoornstra/financial-tweets-sentiment@bba602698fd6f18226f6404fd8fb637ef67fa1eb/data/train-00000-of-00001.parquet"  # default: the Hugging Face file at a fixed revision; or a local .parquet file with the same columns (tweet, sentiment)
 WORK_DIR = "data"  # default: "data"; or any folder for the cache and the saved brief
 RANDOM_SEED = 42  # default: 42; or any integer
 SAMPLE_PER_CLASS = 50000  # default: 50000; or any positive integer (most posts per class in the working sample)
 N_CLASSES = 2  # default: 2 (bearish vs bullish); two-state, other: 3 (adds neutral)
-BTC_ONLY = False  # default: False (posts about all coins); two-state, other: True (only posts that mention bitcoin or btc)
+TICKER_ONLY = False  # default: False (posts with or without a ticker); two-state, other: True (only posts that name a ticker such as $TSLA)
 EMOJI_TO_WORDS = True  # default: True (emoji become English words); two-state, other: False (emoji are deleted with special characters)
 KEEP_NEGATIONS = True  # default: True (not, no, never, nor survive cleaning); two-state, other: False (plain NLTK stop word list)
 BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (target vocabulary of the subword tokenizer of chapter 4; single characters are always kept, so a value below their number gives a larger vocabulary; the course example uses 30000)
@@ -70,7 +70,6 @@ REQUIRED_PACKAGES = {
     "numpy": "numpy==2.2.6",
     "sklearn": "scikit-learn==1.6.1",
     "nltk": "nltk==3.9.4",
-    "openpyxl": "openpyxl==3.1.5",
     "pyarrow": "pyarrow==25.0.1",
     "huggingface_hub": "huggingface_hub==0.36.2",
     "fsspec": "fsspec==2026.9.0",
@@ -96,7 +95,7 @@ else:
 from importlib.metadata import version  # standard library: version of an installed package
 
 print(f"python {sys.version.split()[0]}")  # Python version
-for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "openpyxl", "pyarrow", "huggingface_hub",
+for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "pyarrow", "huggingface_hub",
                      "fsspec", "matplotlib", "beautifulsoup4", "tqdm", "emoji", "contractions",
                      "tokenizers", "tensorflow", "keras", "jsonschema"]:
     print(f"{distribution} {version(distribution)}")  # one line per package
@@ -120,7 +119,7 @@ if not isinstance(SAMPLE_PER_CLASS, int) or SAMPLE_PER_CLASS < 1:
     raise ValueError(f"SAMPLE_PER_CLASS must be a positive integer, got {SAMPLE_PER_CLASS!r}")
 if not isinstance(RANDOM_SEED, int):
     raise ValueError(f"RANDOM_SEED must be an integer, got {RANDOM_SEED!r}")
-for name, value in [("BTC_ONLY", BTC_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WORDS), ("KEEP_NEGATIONS", KEEP_NEGATIONS)]:
+for name, value in [("TICKER_ONLY", TICKER_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WORDS), ("KEEP_NEGATIONS", KEEP_NEGATIONS)]:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be True or False, got {value!r}")
 for name, value in [("BPE_VOCAB_SIZE", BPE_VOCAB_SIZE), ("VOCAB_SIZE", VOCAB_SIZE), ("EPOCHS", EPOCHS),
@@ -132,13 +131,13 @@ print("Switches look fine.")
 # %% [markdown]
 # ## The brief
 #
-# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 9 saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset` and `sentiment`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), which coins the working sample covers, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 9 checks the finished brief against it before saving.
+# The brief is the notebook's real output: one dictionary, `brief`, that the chapters fill in and chapter 9 saves as `WORK_DIR/brief.json`. Other programs read this file, so it works as the notebook's interface. Its top level is fixed: `format_version`, `generated_at`, `scope`, `dataset` and `sentiment`. `scope` says what the results cover: the data source, the granularity (`"batch"` means one result for the whole dataset), whether the working sample keeps only posts that name a ticker, and how many classes are used. Each section starts as `null` until its chapter fills it. A number that cannot be computed (for example a share whose denominator is zero) is written as `null`, never as 0 or NaN. The format is fixed (described field by field in the repository's `docs/brief-format.md`, with its version in `format_version`); chapter 9 checks the finished brief against it before saving.
 #
 # ***
 #
 # ## 简报
 #
-# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 9 章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本包含哪些币；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 9 章保存之前，会拿它核对写好的简报。
+# 简报是这个笔记本真正的产出：一个字典 `brief`，各章往里填自己的结果，第 9 章把它存成 `WORK_DIR/brief.json`。别的程序读这个文件，所以它就是笔记本对外的接口。顶层字段固定为 `format_version`、`generated_at`、`scope`、`dataset`、`sentiment`。`scope` 说明结果覆盖什么：数据来源；粒度（`"batch"` 表示对整份数据给一个结果）；工作样本是不是只留带股票代码的帖子；用几分类。每一节先是 `null`，等对应的章节来填。算不出来的数（例如分母为 0 的比例）一律写 `null`，不写 0，也不写 NaN。格式是固定的（仓库里的 `docs/brief-format.md` 逐个字段写了说明，版本号记在 `format_version` 里）；第 9 章保存之前，会拿它核对写好的简报。
 
 # %%
 # Create the brief. Chapters fill in their own sections; unfilled sections stay None (null in JSON).
@@ -148,7 +147,7 @@ brief = {
     "scope": {
         "source": DATA_SOURCE,  # where the posts come from
         "granularity": "batch",  # one result for the whole dataset
-        "coins": "btc_only" if BTC_ONLY else "all",  # which posts the working sample covers
+        "tickers": "has_ticker_only" if TICKER_ONLY else "all",  # which posts the working sample covers
         "n_classes": N_CLASSES,  # 2 = bearish vs bullish, 3 = with neutral
     },
     "dataset": None,  # chapters 0 to 3
@@ -159,35 +158,36 @@ list(brief)  # show the top-level fields
 # %% [markdown]
 # ## 0. The question and the data
 #
-# **The question.** Crypto prices move with the mood of the crowd. This project reads that mood from what people write: are they bullish or bearish, what are they talking about, and which topics pull the mood up or down.
+# **The question.** When people write about stocks, are they bullish, bearish or neutral, and what share of the crowd stands where? This notebook learns to read that from the words of a post. A later chapter will ask a second question about the same posts: is the crowd doing the sums, or telling stories?
 #
-# **The data.** StockTwits crypto posts published on Hugging Face as `ElKulako/stocktwits-crypto` (file `st-data-full.xlsx`, two sheets, roughly 1.3 million posts written between 1 November 2021 and 15 June 2022). Each post has only two columns, `text` and `label`; there is no date, no user and no coin column. The dataset author already removed cashtags such as `$BTC`, hashtags, user names, links, wallet addresses, posts shorter than four words and duplicate posts, and turned all text to lower case.
+# **The data.** `TimKoornstra/financial-tweets-sentiment` on Hugging Face (file `data/train-00000-of-00001.parquet`, pinned at revision `bba602698fd6f18226f6404fd8fb637ef67fa1eb`): 38,091 short English posts about stocks and markets, merged from nine public datasets. Part of them are financial news headlines posted as tweets, part are retail traders writing in their own words; one of the nine sources is about cryptocurrencies, so some posts name coins rather than stocks. The file has three columns, `tweet`, `sentiment` and `url`; the notebook reads only the first two. The posts are kept as written: tickers such as `$TSLA`, user names and links are still in the text.
 #
-# **The labels.** 0 = bearish, 1 = neutral, 2 = bullish, as described on the model card of the same author's CryptoBERT model. Bullish and bearish are tags that StockTwits users can attach to their own posts; the dataset card does not say how the neutral posts were labelled. The labels are noisy: some posts are hard to call even for a person.
+# **The labels.** The dataset codes its classes as 0 = neutral, 1 = bullish, 2 = bearish. This notebook uses another order, 0 = bearish, 1 = neutral, 2 = bullish (bearish lowest, bullish highest), and converts the labels while reading (chapter 1). The labels come from the nine source datasets and are noisy: some posts are hard to call even for a person.
 #
-# **License and citation.** The dataset is released under the MIT License. For academic use the dataset author asks to cite this paper: <https://ieeexplore.ieee.org/document/10223689>.
+# **License and citation.** The dataset is released under the MIT License. Its card asks for no particular citation; we cite its page: <https://huggingface.co/datasets/TimKoornstra/financial-tweets-sentiment>.
 #
 # ***
 #
 # ## 0. 问题与数据
 #
-# **问题。** 币价跟着人群的情绪走。这个项目从人们写的字里读出这种情绪：大家看多还是看空、在聊什么、哪些话题把情绪往上拉或往下拽。
+# **问题。** 人们写股票时，是看多、看空还是中性？这群人里各占几成？这个笔记本学着从一条帖子的字里读出这一点。后面还会有一章对同一批帖子问第二个问题：这群人是在算账，还是在讲故事？
 #
-# **数据。** StockTwits 的币圈帖子，发布在 Hugging Face 上，名叫 `ElKulako/stocktwits-crypto`（文件 `st-data-full.xlsx`，两个工作表，约 130 万条，写于 2021 年 11 月 1 日至 2022 年 6 月 15 日）。每条帖子只有 `text` 和 `label` 两列，没有日期、用户和币种。数据集作者已经去掉了 `$BTC` 这类币种标签、话题标签、用户名、链接、钱包地址、不足四个词的帖子和重复帖子，并把文字都转成了小写。
+# **数据。** Hugging Face 上的 `TimKoornstra/financial-tweets-sentiment`（文件 `data/train-00000-of-00001.parquet`，钉在修订 `bba602698fd6f18226f6404fd8fb637ef67fa1eb`）：38,091 条关于股票和市场的英文短帖，由九个公开数据集合并而成。其中一部分是以推文形式发出的财经新闻标题，一部分是散户用自己的话写的；九个来源里有一个讲加密货币，所以有些帖子说的是币而不是股票。文件有三列：`tweet`、`sentiment`、`url`，笔记本只读前两列。帖子保持原样：`$TSLA` 这类股票代码、用户名和链接都还在正文里。
 #
-# **标签。** 0 = 看空，1 = 中性，2 = 看多，出自同一作者 CryptoBERT 模型的说明页。看多、看空是 StockTwits 用户发帖时可以给自己的帖子打的标记；数据集说明没有写中性是怎么来的。标签有噪音：有些帖子连人也很难判断。
+# **标签。** 数据集自己的编码是 0 = 中性、1 = 看多、2 = 看空。这个笔记本用另一种顺序：0 = 看空、1 = 中性、2 = 看多（看空最小、看多最大），读入时（第 1 章）换算过来。标签来自那九个原始数据集，有噪音：有些帖子连人也很难判断。
 #
-# **许可证与引用。** 数据集使用 MIT 许可证。学术使用时，数据集作者要求引用这篇论文：<https://ieeexplore.ieee.org/document/10223689>。
+# **许可证与引用。** 数据集使用 MIT 许可证。它的说明页没有指定引用方式，我们引用它的页面：<https://huggingface.co/datasets/TimKoornstra/financial-tweets-sentiment>。
 
 # %%
 # Record what the data is and what the labels mean.
-LABEL_NAMES = {0: "bearish", 1: "neutral", 2: "bullish"}  # label value -> meaning
+LABEL_NAMES = {0: "bearish", 1: "neutral", 2: "bullish"}  # label value -> meaning (this notebook's order)
 
 brief["dataset"] = {
-    "name": "ElKulako/stocktwits-crypto",  # Hugging Face dataset id
-    "file": "st-data-full.xlsx",  # the file inside the dataset
+    "name": "TimKoornstra/financial-tweets-sentiment",  # Hugging Face dataset id
+    "revision": "bba602698fd6f18226f6404fd8fb637ef67fa1eb",  # the pinned revision of the dataset
+    "file": "data/train-00000-of-00001.parquet",  # the file inside the dataset
     "license": "MIT",
-    "citation": "https://ieeexplore.ieee.org/document/10223689",  # paper the author asks to cite
+    "citation": "https://huggingface.co/datasets/TimKoornstra/financial-tweets-sentiment",  # no citation asked for
     "label_meaning": {str(value): name for value, name in LABEL_NAMES.items()},
 }
 brief["dataset"]
@@ -195,35 +195,56 @@ brief["dataset"]
 # %% [markdown]
 # ## 1. Loading
 #
-# The file has two sheets. We read both and stack them into one table, `df_all`, with three columns: `post_id`, `text` and `label`. `df_all` holds every post and stays untouched until the end of the notebook; later chapters take posts from it.
+# We read two columns of the file, `tweet` and `sentiment`, into one table, `df_all`, with three columns: `post_id`, `text` and `label`. The third column of the file, `url`, is never read. `df_all` holds every post and stays untouched until the end of the notebook; later chapters take posts from it. Nothing is removed while reading: empty posts and repeated posts stay (chapter 2 counts them).
 #
-# Every post gets a stable id, `post_id`, made from the sheet name and the row number inside the sheet: `stocktwits_1:2` is the first post of the first sheet, because row 1 holds the column names. The id comes from the position in the file, not from random numbers, so with the same data source the same post gets the same id on every run. A text cell that the spreadsheet stores as a number becomes text, and a cell that pandas reads as empty becomes an empty string.
+# **Ids.** Every post gets a stable id, `post_id`, made from its row in the file: `tim:0` is the first row, `tim:1` the second, and so on. The id comes from the position in the file, not from random numbers, so with the same data source the same post gets the same id on every run. A file that already carries a column `row` (the repository's small sample, which keeps the row of every post in the full file) gives its posts the ids `tim:<row>` from that column instead, so a post has the same id in the sample and in the full file. An empty text becomes an empty string.
 #
-# **Known limitation.** In the full file, 59 posts begin with "=", so the spreadsheet stores them as formulas; their stored value is an error such as `#NAME?`, and pandas reads them as empty. Their text is lost and they appear as empty strings (59 of 1,331,697 posts). We keep them as they are, which is also what pandas does on Colab.
+# **The labels are converted while reading.** The dataset's `sentiment` and this notebook's `label`:
 #
-# Reading a 70 MB spreadsheet takes a while, so the table is saved as a Parquet file (a compact file format that loads quickly) in `WORK_DIR/cache/`, and later runs read that file instead. The cache file name carries a fingerprint of the data source. For a local file the fingerprint is the SHA-256 hash of the file's bytes, so any change to the file leads to a fresh read; for a web address it is a hash of the address. A different data source therefore never picks up another source's cache.
+# | `sentiment` in the file | meaning | `label` in this notebook |
+# | --- | --- | --- |
+# | 0 | neutral | 1 |
+# | 1 | bullish | 2 |
+# | 2 | bearish | 0 |
+#
+# Any other value of `sentiment` stops the notebook, and so does a file without the column `tweet` or `sentiment`.
+#
+# Reading the file from Hugging Face takes a moment, so the table is saved as a Parquet file (a compact file format that loads quickly) in `WORK_DIR/cache/`, and later runs read that file instead. The cache file name carries a fingerprint of the data source. For a local file the fingerprint is the SHA-256 hash of the file's bytes, so any change to the file leads to a fresh read; for a web address it is a hash of the address. A different data source therefore never picks up another source's cache.
 #
 # ***
 #
 # ## 1. 加载
 #
-# 文件有两个工作表。两个都读进来，上下拼成一张表 `df_all`，三列：`post_id`、`text`、`label`。`df_all` 存着全部帖子，一直原样留到笔记本最后，后面的章节从里面取帖子。
+# 从文件里读两列：`tweet` 和 `sentiment`，整理成一张表 `df_all`，三列：`post_id`、`text`、`label`。文件的第三列 `url` 从不读入。`df_all` 存着全部帖子，一直原样留到笔记本最后，后面的章节从里面取帖子。读的时候一条不删：空帖和重复帖都留着（第 2 章会数它们）。
 #
-# 每条帖子有一个稳定的编号 `post_id`，由工作表名和帖子在表里的行号组成：`stocktwits_1:2` 是第一个工作表的第一条帖子（第 1 行是列名）。编号来自帖子在文件里的位置，不用随机数，所以数据来源不变时，同一条帖子每次运行的编号都一样。被表格存成数字的文字格转成文字；pandas 读成空的格子变成空字符串。
+# **编号。** 每条帖子有一个稳定的编号 `post_id`，由它在文件里的行号组成：`tim:0` 是第一行，`tim:1` 是第二行，依此类推。编号来自帖子在文件里的位置，不用随机数，所以数据来源不变时，同一条帖子每次运行的编号都一样。如果文件里已经有一列 `row`（仓库里那份小样本就有，记着每条帖子在完整文件里的行号），就用这一列给编号 `tim:<row>`，这样同一条帖子在样本里和完整文件里编号相同。空的正文变成空字符串。
 #
-# **已知局限。** 完整文件里有 59 条帖子以「=」开头，表格把它们当成了公式，格子里存的是 `#NAME?` 这类错误值，pandas 读出来是空的。这些帖子的原文丢了，表里是空字符串（占 1,331,697 条中的 59 条）。我们原样保留，这和 Colab 上 pandas 的读法一致。
+# **读入时换算标签。** 数据集的 `sentiment` 和本笔记本的 `label` 对应如下：
 #
-# 读一个 70 MB 的表格要花一阵子，所以读完后把表存成 Parquet 文件（一种读得很快的紧凑格式），放在 `WORK_DIR/cache/`，以后运行直接读它。缓存文件名里带着数据来源的「指纹」：本地文件用文件内容的 SHA-256 哈希，文件一改就会重新读；网址用网址本身的哈希。所以换了数据来源，绝不会读到别的来源的缓存。
+# | 文件里的 `sentiment` | 意思 | 本笔记本的 `label` |
+# | --- | --- | --- |
+# | 0 | 中性 | 1 |
+# | 1 | 看多 | 2 |
+# | 2 | 看空 | 0 |
+#
+# `sentiment` 出现别的值，笔记本就停下；文件里缺 `tweet` 或 `sentiment` 列，也停下。
+#
+# 从 Hugging Face 读文件要等一会儿，所以读完后把表存成 Parquet 文件（一种读得很快的紧凑格式），放在 `WORK_DIR/cache/`，以后运行直接读它。缓存文件名里带着数据来源的「指纹」：本地文件用文件内容的 SHA-256 哈希，文件一改就会重新读；网址用网址本身的哈希。所以换了数据来源，绝不会读到别的来源的缓存。
 
 # %%
-# Functions that read the spreadsheet and fingerprint a data source.
+# Functions that read the parquet file and fingerprint a data source.
 import hashlib  # standard library: SHA-256 hashes
 import time  # standard library: timing
 from pathlib import Path  # standard library: file paths
 
+import fsspec  # opens local paths and hf:// addresses alike (huggingface_hub provides hf://)
 import pandas as pd  # tables
+import pyarrow.parquet as pq  # reads the file's column names before its columns
 
-CACHE_LAYOUT = "posts-v1"  # mixed into every fingerprint, so a change to the cached table's layout never reuses an old cache
+CACHE_LAYOUT = "posts-tim-v1"  # mixed into every fingerprint, so a change to the cached table's layout never reuses an old cache
+TEXT_COLUMN, RAW_LABEL_COLUMN, ROW_COLUMN = "tweet", "sentiment", "row"  # columns of the file; "row" only in the sample
+RAW_TO_LABEL = {0: 1, 1: 2, 2: 0}  # the dataset's sentiment (0 neutral, 1 bullish, 2 bearish) -> label (0 bearish, 1 neutral, 2 bullish)
+ID_PREFIX = "tim"  # post_id = tim:<row>, the row's position (from 0) in the full file
 
 
 def source_fingerprint(source):
@@ -239,25 +260,33 @@ def source_fingerprint(source):
     return "url-" + digest.hexdigest()[:16]
 
 
+def posts_from_raw(raw):
+    """Turn a table with tweet, sentiment (and maybe row) into post_id, text and label; nothing is removed."""
+    raw = raw.reset_index(drop=True)
+    rows = raw[ROW_COLUMN].astype("int64") if ROW_COLUMN in raw.columns else pd.Series(range(len(raw)), dtype="int64")
+    unknown = sorted({int(value) if float(value).is_integer() else value for value in raw[RAW_LABEL_COLUMN].dropna().unique()}
+                     - set(RAW_TO_LABEL))
+    if unknown or raw[RAW_LABEL_COLUMN].isna().any():
+        raise ValueError(f"Unknown {RAW_LABEL_COLUMN} values: {unknown or ['missing']} (known: {sorted(RAW_TO_LABEL)})")
+    return pd.DataFrame({
+        "post_id": [f"{ID_PREFIX}:{row}" for row in rows],
+        "text": ["" if text is None or (isinstance(text, float) and pd.isna(text)) else str(text)
+                 for text in raw[TEXT_COLUMN].tolist()],  # an empty value becomes an empty string
+        "label": raw[RAW_LABEL_COLUMN].astype("int64").map(RAW_TO_LABEL).astype("int64"),
+    })
+
+
 def read_posts(source):
-    """Read every sheet of the spreadsheet and stack them into one table with post_id, text and label."""
-    sheets = pd.read_excel(source, sheet_name=None, dtype={"text": str})  # dict: sheet name -> table
-    frames = []
-    for sheet_name, sheet in sheets.items():
-        absent = {"text", "label"} - set(sheet.columns)
+    """Read the columns tweet and sentiment (and row, when there) of a parquet file into post_id, text and label."""
+    with fsspec.open(source, "rb") as handle:
+        parquet = pq.ParquetFile(handle)
+        columns = parquet.schema_arrow.names  # the column names, read before any column
+        absent = [name for name in (TEXT_COLUMN, RAW_LABEL_COLUMN) if name not in columns]
         if absent:
-            raise ValueError(f"Sheet {sheet_name!r} has no column(s) {sorted(absent)}")
-        frames.append(pd.DataFrame({
-            # Row 1 holds the column names, so the first post sits in row 2.
-            "post_id": [f"{sheet_name}:{row}" for row in range(2, len(sheet) + 2)],
-            "text": sheet["text"].fillna("").astype(str),  # cells read as empty (formula cells included) become empty strings
-            "label": sheet["label"].astype("int64"),  # fails loudly if a label is missing
-        }))
-    posts = pd.concat(frames, ignore_index=True)  # sheets in file order, one below the other
-    unknown = sorted(set(posts["label"].unique()) - set(LABEL_NAMES))
-    if unknown:
-        raise ValueError(f"Unknown label values: {unknown}")
-    return posts
+            raise ValueError(f"{source} has no column(s) {absent}; columns found: {columns}")
+        wanted = [TEXT_COLUMN, RAW_LABEL_COLUMN] + ([ROW_COLUMN] if ROW_COLUMN in columns else [])
+        raw = parquet.read(columns=wanted).to_pandas()  # url and any other column are never read
+    return posts_from_raw(raw)
 
 # %%
 # Load all posts: from the Parquet cache when it exists, otherwise from the source (and then write the cache).
@@ -268,7 +297,7 @@ def load_posts(source, work_dir):
     if cache_file.exists():
         posts = pd.read_parquet(cache_file)
         print(f"[load] cache hit: read {cache_file.name} in {time.perf_counter() - started:.1f} s; "
-              "the source spreadsheet was not opened")
+              "the source file was not opened")
     else:
         posts = read_posts(source)
         seconds = time.perf_counter() - started
@@ -276,7 +305,7 @@ def load_posts(source, work_dir):
         temporary = cache_file.with_suffix(".tmp")  # write first, rename after, so a crash never leaves half a cache
         posts.to_parquet(temporary, index=False)
         temporary.replace(cache_file)
-        print(f"[load] read the source spreadsheet in {seconds:.1f} s; saved cache {cache_file.name}")
+        print(f"[load] read the source file in {seconds:.1f} s; saved cache {cache_file.name}")
     return posts
 
 
@@ -287,33 +316,44 @@ print(f"{len(df_all):,} posts")
 df_all.head()
 
 # %%
-# Record the size of each sheet and of the whole table.
-sheet_sizes = df_all["post_id"].str.rsplit(":", n=1).str[0].value_counts(sort=False)  # posts per sheet, file order
-brief["dataset"]["sheets"] = {name: int(count) for name, count in sheet_sizes.items()}
+# Record the conversion of the labels and the size of the whole table.
+brief["dataset"]["label_from_sentiment"] = {str(raw): label for raw, label in RAW_TO_LABEL.items()}  # the conversion
+sentiment_of_label = {label: raw for raw, label in RAW_TO_LABEL.items()}  # the conversion is one to one, so it can be undone
+sentiment_counts = df_all["label"].map(sentiment_of_label).value_counts()
+brief["dataset"]["sentiment_counts"] = {str(raw): int(sentiment_counts.get(raw, 0)) for raw in sorted(RAW_TO_LABEL)}  # dataset's own coding
 brief["dataset"]["n_posts"] = int(len(df_all))
 brief["dataset"]["n_unique_post_ids"] = int(df_all["post_id"].nunique())
 brief["dataset"]["n_empty_text"] = int((df_all["text"].str.strip() == "").sum())  # texts that are empty or blank after reading
-{key: brief["dataset"][key] for key in ["sheets", "n_posts", "n_unique_post_ids", "n_empty_text"]}
+{key: brief["dataset"][key] for key in ["label_from_sentiment", "sentiment_counts", "n_posts", "n_unique_post_ids",
+                                        "n_empty_text"]}
 
 # %% [markdown]
-# ### Which posts mention Bitcoin?
+# ### Which posts name a ticker?
 #
-# There is no coin column, and the dataset author removed cashtags such as `$BTC`, so we look at the words themselves. A post mentions Bitcoin when its text contains `bitcoin` or `btc` as a whole word, ignoring case. "btc to 50k" and "bitcoin's dominance" count; "bitcoins", "gbtc" and "btc_usd" do not. The answer goes into a True/False column, `mentions_btc`.
+# A **ticker** is the short code of a stock on an exchange, such as TSLA for Tesla. On social media it is written with a dollar sign in front, `$TSLA`, so that readers (and search) can find every post about that stock. A post has a ticker when its text contains `$` followed by 1 to 5 letters, in any case, optionally followed by a dot and one or two letters for a share class such as `$BRK.B`. A letter or digit right before the `$` or right after the code means it is not a ticker. So `$TSLA`, `$tsla`, `$F`, `$BRK.B`, `($AAPL)`, `$NVDA's` and `$SPY.` at the end of a sentence count; `$100`, `$5.20`, `$TOOLONG` (more than five letters) and `abc$TSLA` do not. The answer goes into a True/False column of `df_all`, `has_ticker`. This cell is the only place where the rule is written.
 #
 # ***
 #
-# ### 哪些帖子提到了比特币？
+# ### 哪些帖子带股票代码？
 #
-# 数据里没有币种列，数据集作者还去掉了 `$BTC` 这类币种标签，所以只能看字面。帖子正文里出现完整的单词 `bitcoin` 或 `btc`（不分大小写）就算提到。「btc to 50k」「bitcoin's dominance」算；「bitcoins」「gbtc」「btc_usd」不算。结果放在一列真假值 `mentions_btc` 里。
+# **股票代码**（ticker）是一只股票在交易所里的简称，例如特斯拉是 TSLA。社交媒体上的写法是前面加一个美元符号，写成 `$TSLA`，读者（和搜索）就能找到所有讲这只股票的帖子。帖子正文里出现 `$` 紧跟 1～5 个字母（不分大小写），后面还可以跟一个点和一两个字母表示股份类别（例如 `$BRK.B`），就算带股票代码。`$` 前面紧挨着字母或数字、或者代码后面紧跟着字母或数字，都不算。所以 `$TSLA`、`$tsla`、`$F`、`$BRK.B`、`($AAPL)`、`$NVDA's`、句尾的 `$SPY.` 都算；`$100`、`$5.20`、`$TOOLONG`（超过五个字母）、`abc$TSLA` 都不算。结果放在 `df_all` 的一列真假值 `has_ticker` 里。这条规则只写在这一格。
 
 # %%
-# Flag posts that mention bitcoin or btc as a whole word.
+# Flag posts that name a ticker: "$", then 1 to 5 letters, optionally a dot and 1 or 2 letters (the only definition).
 import re  # standard library: regular expressions
 
-BTC_PATTERN = re.compile(r"\b(?:bitcoin|btc)\b", flags=re.IGNORECASE)  # whole words only, any case
-df_all["mentions_btc"] = df_all["text"].str.contains(BTC_PATTERN)
-print(f"{int(df_all['mentions_btc'].sum()):,} posts mention bitcoin or btc")
-df_all[df_all["mentions_btc"]].head()
+TICKER_PATTERN = re.compile(r"(?<![A-Za-z0-9])\$[A-Za-z]{1,5}(?:\.[A-Za-z]{1,2})?(?![A-Za-z0-9])")
+
+
+def has_ticker(texts):
+    """True for every text that names a ticker such as $TSLA or $BRK.B; a missing text has none."""
+    return pd.Series([bool(TICKER_PATTERN.search(text)) if isinstance(text, str) else False for text in texts],
+                     index=texts.index if isinstance(texts, pd.Series) else None, dtype=bool)
+
+
+df_all["has_ticker"] = has_ticker(df_all["text"])
+print(f"{int(df_all['has_ticker'].sum()):,} posts name a ticker")
+df_all[df_all["has_ticker"]].head()
 
 # %% [markdown]
 # ## 2. A first look
@@ -395,42 +435,42 @@ plt.title("Post length")
 plt.show()
 
 # %% [markdown]
-# ### Posts that mention Bitcoin, per class
+# ### Posts with a ticker, per class
 #
-# Later chapters report Bitcoin posts on their own line, so we check how many there are in each class.
+# Later chapters report the posts with a ticker on their own line, so we check how many there are in each class.
 #
 # ***
 #
-# ### 每一类里提到比特币的帖子
+# ### 每一类里带股票代码的帖子
 #
-# 后面的章节会把提到比特币的帖子单独列一行，所以先看每一类里各有多少。
+# 后面的章节会把带股票代码的帖子单独列一行，所以先看每一类里各有多少。
 
 # %%
-# Count posts that mention Bitcoin, per label.
-btc_counts = df_all.loc[df_all["mentions_btc"], "label"].value_counts().reindex(list(LABEL_NAMES), fill_value=0)
-brief["dataset"]["btc_mentions"] = {
-    "rule": BTC_PATTERN.pattern + " (ignore case)",  # the matching rule, written out
-    "n_posts": int(btc_counts.sum()),
-    "share": safe_ratio(int(btc_counts.sum()), len(df_all)),
-    "by_class": {str(label): int(count) for label, count in btc_counts.items()},
-    "share_within_class": {str(label): safe_ratio(int(btc_counts[label]), int(class_counts[label])) for label in LABEL_NAMES},
+# Count posts with a ticker, per label.
+ticker_counts = df_all.loc[df_all["has_ticker"], "label"].value_counts().reindex(list(LABEL_NAMES), fill_value=0)
+brief["dataset"]["ticker_mentions"] = {
+    "rule": TICKER_PATTERN.pattern,  # the matching rule, written out
+    "n_posts": int(ticker_counts.sum()),
+    "share": safe_ratio(int(ticker_counts.sum()), len(df_all)),
+    "by_class": {str(label): int(count) for label, count in ticker_counts.items()},
+    "share_within_class": {str(label): safe_ratio(int(ticker_counts[label]), int(class_counts[label])) for label in LABEL_NAMES},
 }
 pd.DataFrame({
-    "meaning": [LABEL_NAMES[label] for label in btc_counts.index],
-    "posts mentioning bitcoin": btc_counts.values,
-    "share of the class": [brief["dataset"]["btc_mentions"]["share_within_class"][str(label)] for label in btc_counts.index],
-}, index=btc_counts.index.rename("label"))
+    "meaning": [LABEL_NAMES[label] for label in ticker_counts.index],
+    "posts with a ticker": ticker_counts.values,
+    "share of the class": [brief["dataset"]["ticker_mentions"]["share_within_class"][str(label)] for label in ticker_counts.index],
+}, index=ticker_counts.index.rename("label"))
 
 # %% [markdown]
 # ### Repeated texts and links
 #
-# The dataset card says duplicates and links were removed, so we check. A repeated text is a post whose exact text already appeared earlier in the table (empty texts count as repeats of each other). We only count them here and keep every post as it is.
+# The dataset card says duplicate entries were removed, so we check, and we count the posts that still carry a web link. A repeated text is a post whose exact text already appeared earlier in the table (empty texts count as repeats of each other). We only count them here and keep every post as it is.
 #
 # ***
 #
 # ### 重复的文本和链接
 #
-# 数据集说明里说已经去掉了重复帖和链接，这里核对一下。「重复」指一条帖子的文字和表里更早的某条一字不差（空文本之间也算重复）。这里只数条数，帖子一条不删。
+# 数据集说明里说已经去掉了重复的条目，这里核对一下，再数一数还带着网址链接的帖子。「重复」指一条帖子的文字和表里更早的某条一字不差（空文本之间也算重复）。这里只数条数，帖子一条不删。
 
 # %%
 # Count repeated texts and texts that still contain a link.
@@ -450,7 +490,7 @@ brief["dataset"]["n_posts_with_links"] = int(df_all["text"].str.contains(LINK_PA
 # The full table is too large to clean and model in a classroom session, so we draw a working sample, `df`, following the switches:
 #
 # 1. Keep the classes in use: with `N_CLASSES = 2` the neutral posts are left out; with 3 all classes stay.
-# 2. With `BTC_ONLY = True`, keep only posts that mention Bitcoin.
+# 2. With `TICKER_ONLY = True`, keep only posts that name a ticker.
 # 3. Draw the same number of posts from every class: the smaller of `SAMPLE_PER_CLASS` and the size of the smallest remaining class, using `RANDOM_SEED`. Equal class sizes stop the models from simply learning that bullish posts are the most common.
 #
 # Labels keep their meaning (0 bearish, 1 neutral, 2 bullish), and every post keeps its `post_id`. `df_all` stays untouched.
@@ -462,19 +502,19 @@ brief["dataset"]["n_posts_with_links"] = int(df_all["text"].str.contains(LINK_PA
 # 全量表太大，课堂上的时间不够清洗和建模，所以按开关抽出一份工作样本 `df`：
 #
 # 1. 只留用到的类别：`N_CLASSES = 2` 时去掉中性；为 3 时三类都留。
-# 2. `BTC_ONLY = True` 时，只留提到比特币的帖子。
+# 2. `TICKER_ONLY = True` 时，只留带股票代码的帖子。
 # 3. 每一类抽一样多：取 `SAMPLE_PER_CLASS` 和剩下最少那一类的条数中较小的那个，用 `RANDOM_SEED` 抽。每类一样多，模型就不会只学会「看多的帖子最多」。
 #
 # 标签含义不变（0 看空、1 中性、2 看多），每条帖子带着它的 `post_id`。`df_all` 原样不动。
 
 # %%
 # Draw the working sample: filter by the switches, then the same number of posts from every class.
-def draw_working_sample(posts, n_classes, btc_only, per_class, seed):
+def draw_working_sample(posts, n_classes, ticker_only, per_class, seed):
     """Return (sample, available): an equal-sized random sample per class, and the class sizes before sampling."""
     labels = [0, 2] if n_classes == 2 else [0, 1, 2]  # bearish and bullish, or all three
     pool = posts[posts["label"].isin(labels)]
-    if btc_only:
-        pool = pool[pool["mentions_btc"]]
+    if ticker_only:
+        pool = pool[pool["has_ticker"]]
     available = pool["label"].value_counts().reindex(labels, fill_value=0)  # posts left in each class
     n_per_class = int(min(per_class, available.min()))
     if n_per_class == 0:
@@ -484,19 +524,19 @@ def draw_working_sample(posts, n_classes, btc_only, per_class, seed):
     return sample.reset_index(drop=True), available
 
 
-df, available_per_class = draw_working_sample(df_all, N_CLASSES, BTC_ONLY, SAMPLE_PER_CLASS, RANDOM_SEED)
-df = df[["post_id", "text", "label", "mentions_btc"]].copy()  # the working sample; df_all is unchanged
+df, available_per_class = draw_working_sample(df_all, N_CLASSES, TICKER_ONLY, SAMPLE_PER_CLASS, RANDOM_SEED)
+df = df[["post_id", "text", "label", "has_ticker"]].copy()  # the working sample; df_all is unchanged
 sample_counts = df["label"].value_counts().sort_index()
 brief["dataset"]["sample"] = {
     "n_classes": N_CLASSES,
-    "btc_only": BTC_ONLY,
+    "ticker_only": TICKER_ONLY,
     "seed": RANDOM_SEED,
     "per_class_requested": SAMPLE_PER_CLASS,
     "available_by_class": {str(label): int(count) for label, count in available_per_class.items()},
     "per_class": int(sample_counts.min()),
     "class_counts": {str(label): int(count) for label, count in sample_counts.items()},
     "n_posts": int(len(df)),
-    "n_mentions_btc": int(df["mentions_btc"].sum()),
+    "n_has_ticker": int(df["has_ticker"].sum()),
 }
 print(brief["dataset"]["sample"])
 df.head()
@@ -541,13 +581,13 @@ df[["text", "clean_text"]].head(3)
 # %% [markdown]
 # ### Step 1: lower case
 #
-# "BTC" and "btc" should count as the same word.
+# "TSLA" and "tsla" should count as the same word.
 #
 # ***
 #
 # ### 第 1 步：转小写
 #
-# 「BTC」和「btc」应该算同一个词。
+# 「TSLA」和「tsla」应该算同一个词。
 
 # %%
 # Lower case.
@@ -837,8 +877,8 @@ pd.DataFrame({"average words per post": [brief["dataset"]["cleaning"]["avg_words
 # %%
 # Clean a few example sentences and keep the results in the brief.
 CLEANING_EXAMPLES = [
-    "I don't think btc will pump, not bullish at all 😭",
-    "Never selling my bitcoin 🚀🚀",
+    "I don't think $TSLA will pump, not bullish at all 😭",
+    "Never selling my Nvidia shares 🚀🚀",
     "No way it can't go higher, I won't sell 😂",
     "Nor do I care about this dip 💎🙌",
 ]
@@ -1065,13 +1105,13 @@ print(f"Training set: {len(train_df):,} posts; validation set: {len(val_df):,}; 
 # %% [markdown]
 # ### Class counts and shares in each part
 #
-# The three parts should show (almost) the same class shares as the working sample. The last column counts the posts that mention Bitcoin, which chapter 8 reports separately.
+# The three parts should show (almost) the same class shares as the working sample. The last column counts the posts that name a ticker, which chapter 8 reports separately.
 #
 # ***
 #
 # ### 每一份里各类的条数和占比
 #
-# 三份的类别占比应当和工作样本（几乎）一样。最后一列是提到比特币的帖子条数，第 8 章会把它们单独报一行。
+# 三份的类别占比应当和工作样本（几乎）一样。最后一列是带股票代码的帖子条数，第 8 章会把它们单独报一行。
 
 # %%
 # Count posts per class in each part and record the split in the brief.
@@ -1088,14 +1128,14 @@ brief["sentiment"]["split"] = {
                      for name in split_parts},
     "class_shares": {name: {str(label): safe_ratio(int(split_counts.loc[name, label]), len(part))
                             for label in CLASS_LABELS} for name, part in split_parts.items()},
-    "n_mentions_btc": {name: int(part["mentions_btc"].sum()) for name, part in split_parts.items()},
+    "n_has_ticker": {name: int(part["has_ticker"].sum()) for name, part in split_parts.items()},
 }
 split_table = split_counts.rename(columns=LABEL_NAMES)
 for label in CLASS_LABELS:
     split_table[f"{LABEL_NAMES[label]} share"] = [brief["sentiment"]["split"]["class_shares"][name][str(label)]
                                                   for name in split_parts]
 split_table["posts"] = [len(part) for part in split_parts.values()]
-split_table["mention bitcoin"] = [brief["sentiment"]["split"]["n_mentions_btc"][name] for name in split_parts]
+split_table["with a ticker"] = [brief["sentiment"]["split"]["n_has_ticker"][name] for name in split_parts]
 split_table
 
 # %% [markdown]
@@ -1400,7 +1440,7 @@ brief["sentiment"]["scoring"] = {
     "train_ids": "train_post_ids",
     "n_train_ids": len(train_post_ids),
 }
-demo_texts = ["btc to the moon 🚀🚀", "not bullish at all, selling everything"]
+demo_texts = ["$TSLA to the moon 🚀🚀", "not bullish at all, selling everything"]
 pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
              columns=[LABEL_NAMES[label] for label in SENTIMENT_PROBA_LABELS])
 
@@ -1420,7 +1460,7 @@ pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
 # - **always majority**: always guess the most frequent class of the training set; if classes are equally frequent, the smallest label (bearish) is taken;
 # - **uniform random**: for every post, pick one of the classes at random with equal chances, with `RANDOM_SEED`, so the guesses are the same on every run.
 #
-# **The bar:** each model's macro-F1 on all test posts must be higher than that of both baselines. Every model and every baseline gets two rows: one on all test posts and one on only the test posts that mention Bitcoin.
+# **The bar:** each model's macro-F1 on all test posts must be higher than that of both baselines. Every model and every baseline gets two rows: one on all test posts and one on only the test posts that name a ticker.
 #
 # A score that cannot be computed (for example the precision of a class the model never predicts, or any score on an empty subset) is left empty: "—" in the tables and `null` in the brief, never 0. Macro-F1 averages only the classes whose F1 can be computed.
 #
@@ -1441,7 +1481,7 @@ pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
 # - **永远猜多数**：永远猜训练集里最多的那一类；各类一样多时，取标签最小的那一类（看空）；
 # - **随机乱猜**：每条帖子都从各类里等概率随便挑一个，用 `RANDOM_SEED`，所以每次挑得一样。
 #
-# **过线标准：** 每个模型在全部测试帖上的 macro-F1，必须同时高于这两条对照线。每个模型、每条对照线都有两行：一行是全部测试帖，一行只看提到比特币的测试帖。
+# **过线标准：** 每个模型在全部测试帖上的 macro-F1，必须同时高于这两条对照线。每个模型、每条对照线都有两行：一行是全部测试帖，一行只看带股票代码的测试帖。
 #
 # 算不出来的分数（比如模型从来没判过的那一类的精确率，或者空子集上的任何分数）一律留空：表里显示「—」，简报里写 `null`，绝不写 0。Macro-F1 只平均那些算得出 F1 的类别。
 
@@ -1502,18 +1542,18 @@ pd.DataFrame({name: pd.Series(predicted).value_counts().reindex(CLASS_LABELS, fi
 # %% [markdown]
 # ### The evaluation table
 #
-# One row per model or baseline and per subset: all test posts, and only the test posts that mention Bitcoin. Columns: number of posts, accuracy, precision / recall / F1 for each class, and macro-F1.
+# One row per model or baseline and per subset: all test posts, and only the test posts that name a ticker. Columns: number of posts, accuracy, precision / recall / F1 for each class, and macro-F1.
 #
 # ***
 #
 # ### 评估表
 #
-# 每个模型或对照线、每个子集一行：全部测试帖；只含提到比特币的测试帖。列：帖子条数、准确率、每一类的精确率／召回率／F1、macro-F1。
+# 每个模型或对照线、每个子集一行：全部测试帖；只含带股票代码的测试帖。列：帖子条数、准确率、每一类的精确率／召回率／F1、macro-F1。
 
 # %%
 # Score every model and baseline on both subsets of the test set.
-SUBSETS = {"all_test": "all test posts", "test_mentions_btc": "test posts that mention bitcoin or btc"}
-subset_masks = {"all_test": np.ones(len(test_df), dtype=bool), "test_mentions_btc": test_df["mentions_btc"].to_numpy()}
+SUBSETS = {"all_test": "all test posts", "test_has_ticker": "test posts that name a ticker"}
+subset_masks = {"all_test": np.ones(len(test_df), dtype=bool), "test_has_ticker": test_df["has_ticker"].to_numpy()}
 
 
 def evaluate(true_labels, predicted_labels):
@@ -1682,22 +1722,23 @@ BRIEF_SCHEMA_TEXT = r"""{
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "granularity", "coins", "n_classes"],
+      "required": ["source", "granularity", "tickers", "n_classes"],
       "properties": {
         "source": {"type": "string"},
         "granularity": {"type": "string", "enum": ["batch"]},
-        "coins": {"type": "string", "enum": ["all", "btc_only"]},
+        "tickers": {"type": "string", "enum": ["all", "has_ticker_only"]},
         "n_classes": {"type": "integer", "enum": [2, 3]}
       }
     },
     "dataset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "file", "license", "citation", "label_meaning", "sheets", "n_posts", "n_unique_post_ids",
-                   "n_empty_text", "class_counts", "class_shares", "length_words", "btc_mentions", "duplicates",
-                   "n_posts_with_links", "sample", "cleaning"],
+      "required": ["name", "revision", "file", "license", "citation", "label_meaning", "label_from_sentiment",
+                   "sentiment_counts", "n_posts", "n_unique_post_ids", "n_empty_text", "class_counts", "class_shares",
+                   "length_words", "ticker_mentions", "duplicates", "n_posts_with_links", "sample", "cleaning"],
       "properties": {
         "name": {"type": "string"},
+        "revision": {"type": "string"},
         "file": {"type": "string"},
         "license": {"type": "string"},
         "citation": {"type": "string"},
@@ -1707,7 +1748,17 @@ BRIEF_SCHEMA_TEXT = r"""{
           "required": ["0", "1", "2"],
           "properties": {"0": {"type": "string"}, "1": {"type": "string"}, "2": {"type": "string"}}
         },
-        "sheets": {"type": "object", "minProperties": 1, "propertyNames": {"title": "sheet"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+        "label_from_sentiment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["0", "1", "2"],
+          "properties": {
+            "0": {"type": "integer", "enum": [0, 1, 2]},
+            "1": {"type": "integer", "enum": [0, 1, 2]},
+            "2": {"type": "integer", "enum": [0, 1, 2]}
+          }
+        },
+        "sentiment_counts": {"$ref": "#/$defs/label_counts"},
         "n_posts": {"$ref": "#/$defs/count"},
         "n_unique_post_ids": {"$ref": "#/$defs/count"},
         "n_empty_text": {"$ref": "#/$defs/count"},
@@ -1726,7 +1777,7 @@ BRIEF_SCHEMA_TEXT = r"""{
             "max": {"$ref": "#/$defs/count_or_null"}
           }
         },
-        "btc_mentions": {
+        "ticker_mentions": {
           "type": "object",
           "additionalProperties": false,
           "required": ["rule", "n_posts", "share", "by_class", "share_within_class"],
@@ -1751,18 +1802,18 @@ BRIEF_SCHEMA_TEXT = r"""{
         "sample": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["n_classes", "btc_only", "seed", "per_class_requested", "available_by_class", "per_class",
-                       "class_counts", "n_posts", "n_mentions_btc"],
+          "required": ["n_classes", "ticker_only", "seed", "per_class_requested", "available_by_class", "per_class",
+                       "class_counts", "n_posts", "n_has_ticker"],
           "properties": {
             "n_classes": {"type": "integer", "enum": [2, 3]},
-            "btc_only": {"type": "boolean"},
+            "ticker_only": {"type": "boolean"},
             "seed": {"type": "integer"},
             "per_class_requested": {"$ref": "#/$defs/positive"},
             "available_by_class": {"$ref": "#/$defs/class_counts"},
             "per_class": {"$ref": "#/$defs/count"},
             "class_counts": {"$ref": "#/$defs/class_counts"},
             "n_posts": {"$ref": "#/$defs/count"},
-            "n_mentions_btc": {"$ref": "#/$defs/count"}
+            "n_has_ticker": {"$ref": "#/$defs/count"}
           }
         },
         "cleaning": {
@@ -1844,7 +1895,7 @@ BRIEF_SCHEMA_TEXT = r"""{
         "split": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_mentions_btc"],
+          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_has_ticker"],
           "properties": {
             "seed": {"type": "integer"},
             "fractions": {
@@ -1875,7 +1926,7 @@ BRIEF_SCHEMA_TEXT = r"""{
                 "test": {"$ref": "#/$defs/class_shares"}
               }
             },
-            "n_mentions_btc": {"$ref": "#/$defs/part_counts"}
+            "n_has_ticker": {"$ref": "#/$defs/part_counts"}
           }
         },
         "vectorizers": {
@@ -1976,8 +2027,8 @@ BRIEF_SCHEMA_TEXT = r"""{
             "subsets": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["all_test", "test_mentions_btc"],
-              "properties": {"all_test": {"type": "string"}, "test_mentions_btc": {"type": "string"}}
+              "required": ["all_test", "test_has_ticker"],
+              "properties": {"all_test": {"type": "string"}, "test_has_ticker": {"type": "string"}}
             },
             "baselines": {"type": "array", "items": {"type": "string"}},
             "majority_label": {"$ref": "#/$defs/label"},
@@ -1990,7 +2041,7 @@ BRIEF_SCHEMA_TEXT = r"""{
                 "properties": {
                   "model": {"type": "string"},
                   "kind": {"type": "string", "enum": ["model", "baseline"]},
-                  "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]},
+                  "subset": {"type": "string", "enum": ["all_test", "test_has_ticker"]},
                   "n": {"$ref": "#/$defs/count"},
                   "accuracy": {"$ref": "#/$defs/share_or_null"},
                   "per_class": {

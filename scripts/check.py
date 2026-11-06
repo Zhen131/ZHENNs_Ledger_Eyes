@@ -6,17 +6,26 @@
 quick: static checks, then the notebook runs three times on the bundled
        sample (default switches, every two-state switch flipped, default
        switches again). The first two saved briefs are checked chapter by
-       chapter (dataset, cleaning examples, sentiment: split, vectorizers,
-       models, evaluation table, confusion matrices, scoring function). Every
+       chapter (dataset, posts with a ticker, cleaning examples, sentiment:
+       split, vectorizers, models, evaluation table, confusion matrices,
+       scoring function). Every
        brief must pass the format rules (docs/brief.schema.json); the first
        two are also broken on purpose (locked counterexamples, all of which
        must be rejected). The two default runs must agree on every number that
        does not depend on training (the whole dataset section, the posts per
        class in every part of the split and the posts in every test subset).
        Static checks: the pinned packages, the source file and the .ipynb,
-       the switch cell, the text scan, the format rules with their notebook
-       copy and their document, and the chapter headings (0 to 9, the brief
-       last, with no network package in its cells).
+       the switch cell (defaults, other values, and the switch check cell run
+       from the source on good and bad values), the text scan, the format
+       rules with their notebook copy and their document, and the chapter
+       headings (0 to 9, the brief last, with no network package in its
+       cells). Chapter 1's reading cells run from the source on small
+       hand-written parquet files (ids, empty texts, the label conversion,
+       missing columns, an unknown label, a sample with its row column), and
+       its ticker cell on sentences that must and must not count. The bundled
+       sample is checked: its columns and rows, no empty text, no account name
+       and no link, enough posts per class, per level and with a ticker, and
+       its texts against the fingerprints of the level pre-label file.
        The level pre-label script (scripts/prelabel_levels.py) is checked
        without Ollama and without the dataset: its interface and pinned
        prompt, its requests, that it only talks to a loopback address, its
@@ -26,9 +35,13 @@ quick: static checks, then the notebook runs three times on the bundled
        the committed sample label file is checked statically; scripts/env.sh
        is checked for the Python of a Windows virtual environment, and
        requirements-prelabel.txt and .gitattributes statically.
-full:  static checks, then one run on the full dataset with the default
-       switches; prints the key numbers and the evaluation table from the
-       brief, and every model must beat both baselines on all test posts.
+full:  static checks, then one run on the full dataset (the local copy in
+       data/raw/, see scripts/download_data.sh) with the default switches;
+       prints the key numbers and the evaluation table from the brief, and
+       every model must beat both baselines on all test posts. The notebook's
+       own reading cell reads the local copy, and every id of the level
+       pre-label file, the review table and the sample must be a post of it
+       with the same text fingerprint (the sample: the same text and label).
        The level pre-label files are compared with the dataset (read from data/raw/, downloaded
        from Hugging Face at the pinned revision the first time): the sample,
        and the full label file and the review table when they are there
@@ -70,17 +83,36 @@ import prelabel_levels as levels  # noqa: E402
 from notebook_build import NOTEBOOK, SOURCE, build_notebook_text  # noqa: E402
 
 REQUIREMENTS = REPO_DIR / "requirements.txt"
-SAMPLE_SOURCE = "samples/stocktwits-crypto-sample.xlsx"  # relative to the repository, as the notebook sees it
-FULL_SOURCE = "data/raw/st-data-full.xlsx"
+SAMPLE_SOURCE = "samples/tim-financial-tweets-sample.parquet"  # relative to the repository, as the notebook sees it
+FULL_SOURCE = "data/raw/tim-financial-tweets-bba60269.parquet"  # the local copy (scripts/download_data.sh)
+DEFAULT_DATA_SOURCE = ("hf://datasets/TimKoornstra/financial-tweets-sentiment@bba602698fd6f18226f6404fd8fb637ef67fa1eb/"
+                       "data/train-00000-of-00001.parquet")  # the pinned file on Hugging Face
 TOP_LEVEL_FIELDS = ["format_version", "generated_at", "scope", "dataset", "sentiment"]
-SCOPE_FIELDS = ["source", "granularity", "coins", "n_classes"]
+SCOPE_FIELDS = ["source", "granularity", "tickers", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
-                     "N_CLASSES", "BTC_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
+                     "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
 SENTIMENT_SWITCHES = ["BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE"]
 SENTIMENT_MODELS = ["count_network", "tfidf_network"]  # the two networks of chapter 7; more may be added later
 SENTIMENT_BASELINES = ["always_majority", "uniform_random"]
-SENTIMENT_SUBSETS = ["all_test", "test_mentions_btc"]
+SENTIMENT_SUBSETS = ["all_test", "test_has_ticker"]
 SPLIT_PARTS = ["train", "validation", "test"]
+# Switches the removed chapters read; none of them may come back into the switch cell.
+REMOVED_SWITCH_PATTERN = re.compile(r"TOPIC_|N_TOPICS$|DRAWER_WORDS_FILE$|N_OTHER_GROUPS$|BULLISH_THRESHOLD$|"
+                                    r"BEARISH_THRESHOLD$|MIN_TOPIC_POSTS$|MIN_RATE_GAP$|MIN_BULLISH_BEARISH_POSTS$|"
+                                    r"EMOTION_|DATED_|NEWS_|DAILY_MIN_POSTS$|NEW_WORD_|EVENT_|LAYER_GAP$|PRICE_SOURCE$|"
+                                    r"FEAR_GREED_SOURCE$|VALIDATION_MIN_DAYS$|MEDIA_WINDOW_DAYS$|LAUNCH_PANEL$|BTC_ONLY$")
+# Chapter 1: what a ticker is. Locked (only add): texts that must count and texts that must not.
+TICKER_MUST_MATCH = ["$TSLA", "$tsla", "$F", "$BRK.B", "($AAPL)", "$NVDA's", "buying more $SPY."]
+TICKER_MUST_NOT_MATCH = ["$100", "$5.20", "$TOOLONG", "abc$TSLA", "a lone $ sign", "$"]
+RAW_TO_LABEL = {0: 1, 1: 2, 2: 0}  # the dataset's sentiment (0 neutral, 1 bullish, 2 bearish) -> the notebook's label
+READING_PROBE_DIR = REPO_DIR / "data" / "checks" / "reading-probe"
+# The bundled sample: what it must hold (all lower bounds).
+SAMPLE_COLUMNS = ["tweet", "sentiment", "row"]
+SAMPLE_MIN_PER_CLASS = 200
+SAMPLE_MIN_PER_LEVEL = 80
+SAMPLE_MIN_TICKER_PER_SIDE = 100  # bearish and bullish posts with a ticker: TICKER_ONLY with two classes must split
+SAMPLE_HANDLE = re.compile(r"@[A-Za-z0-9_]")  # an account name
+SAMPLE_LINK = re.compile(r"https?://|www\.", flags=re.IGNORECASE)  # a web link
 # Chapter 9: the brief's format rules and their documentation.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
@@ -156,14 +188,14 @@ BINARY_SUFFIXES = {".xlsx", ".parquet", ".png", ".jpg", ".jpeg", ".gif", ".pdf",
 # Cleaning examples: the sentences the notebook must clean and put into the brief,
 # with the words that must survive (with repeats) under each product rule.
 NEGATION_TOKENS = {
-    "I don't think btc will pump, not bullish at all 😭": ["not", "not"],
-    "Never selling my bitcoin 🚀🚀": ["never"],
+    "I don't think $TSLA will pump, not bullish at all 😭": ["not", "not"],
+    "Never selling my Nvidia shares 🚀🚀": ["never"],
     "No way it can't go higher, I won't sell 😂": ["no", "not", "not"],
     "Nor do I care about this dip 💎🙌": ["nor"],
 }
 EMOJI_TOKENS = {
-    "I don't think btc will pump, not bullish at all 😭": ["loudly", "cry", "face"],
-    "Never selling my bitcoin 🚀🚀": ["rocket", "rocket"],
+    "I don't think $TSLA will pump, not bullish at all 😭": ["loudly", "cry", "face"],
+    "Never selling my Nvidia shares 🚀🚀": ["rocket", "rocket"],
     "No way it can't go higher, I won't sell 😂": ["face", "tear", "joy"],
     "Nor do I care about this dip 💎🙌": ["gem", "stone", "raising", "hand"],
 }
@@ -418,7 +450,7 @@ def check_brief(report, label, brief, switches):
     expected_scope = {
         "source": switches["DATA_SOURCE"],
         "granularity": "batch",
-        "coins": "btc_only" if switches["BTC_ONLY"] else "all",
+        "tickers": "has_ticker_only" if switches["TICKER_ONLY"] else "all",
         "n_classes": switches["N_CLASSES"],
     }
     wrong = [f"{key}={scope.get(key)!r} (expected {value!r})" for key, value in expected_scope.items()
@@ -439,9 +471,17 @@ def check_brief(report, label, brief, switches):
     report.check(sorted(sample_counts) == expected_labels and len(set(sample_counts.values())) == 1
                  and sum(sample_counts.values()) == sample.get("n_posts"),
                  f"{label}: working sample has the same number of posts in every class in use", f"{sample_counts}")
-    if switches["BTC_ONLY"]:
-        report.check(sample.get("n_mentions_btc") == sample.get("n_posts"),
-                     f"{label}: with BTC_ONLY every sampled post mentions bitcoin or btc")
+    if switches["TICKER_ONLY"]:
+        report.check(sample.get("n_has_ticker") == sample.get("n_posts"),
+                     f"{label}: with TICKER_ONLY every sampled post names a ticker",
+                     f"{sample.get('n_has_ticker')} of {sample.get('n_posts')}")
+    tickers = dataset.get("ticker_mentions") if isinstance(dataset.get("ticker_mentions"), dict) else {}
+    by_class = tickers.get("by_class") if isinstance(tickers.get("by_class"), dict) else {}
+    report.check(sorted(by_class) == ["0", "1", "2"] and all(is_count(count) for count in by_class.values())
+                 and sum(by_class.values()) == tickers.get("n_posts")
+                 and is_count(tickers.get("n_posts")) and tickers["n_posts"] <= (n_posts if is_count(n_posts) else -1),
+                 f"{label}: posts with a ticker per class add up to the posts with a ticker, at most every post",
+                 f"by class {by_class}, total {tickers.get('n_posts')}, posts {n_posts}")
 
     cleaning = dataset.get("cleaning") or {}
     report.check(cleaning.get("clean_texts_matches_steps") is True,
@@ -579,10 +619,10 @@ def check_sentiment(report, label, brief, switches, full_run):
     report.check(split_ok, f"{label}: training, validation and test sets add up to the working sample, "
                  "about 80/10/10, every class in every part", f"{sizes} {class_counts}")
     n_test = sizes.get("test")
-    btc_counts = split.get("n_mentions_btc") if isinstance(split.get("n_mentions_btc"), dict) else {}
-    n_test_btc = btc_counts.get("test")
-    report.check(is_count(n_test_btc) and n_test_btc <= (n_test if is_count(n_test) else -1),
-                 f"{label}: test posts that mention bitcoin are counted", f"{n_test_btc} of {n_test}")
+    ticker_counts = split.get("n_has_ticker") if isinstance(split.get("n_has_ticker"), dict) else {}
+    n_test_ticker = ticker_counts.get("test")
+    report.check(is_count(n_test_ticker) and n_test_ticker <= (n_test if is_count(n_test) else -1),
+                 f"{label}: test posts that name a ticker are counted", f"{n_test_ticker} of {n_test}")
 
     # Chapter 6: vectorizers learn on the training set only.
     vectors = sentiment.get("vectorizers") if isinstance(sentiment.get("vectorizers"), dict) else {}
@@ -606,14 +646,14 @@ def check_sentiment(report, label, brief, switches, full_run):
     wrong = [pair for pair in expected if found[pair] != 1]
     report.check(not wrong and len(rows) == len(expected),
                  f"{label}: evaluation table has one row per model and per baseline (always majority, uniform random) "
-                 "for all test posts and for test posts that mention bitcoin",
+                 "for all test posts and for test posts that name a ticker",
                  f"missing or repeated: {wrong}; {len(rows)} rows for {len(expected)} expected")
 
     problems = []
     for row in rows:
         name = f"{row.get('model')}/{row.get('subset')}"
         n = row.get("n")
-        expected_n = n_test if row.get("subset") == "all_test" else n_test_btc
+        expected_n = n_test if row.get("subset") == "all_test" else n_test_ticker
         if not is_count(n) or n != expected_n:
             problems.append(f"{name}: {n} posts, expected {expected_n}")
             continue
@@ -695,10 +735,10 @@ def check_sentiment(report, label, brief, switches, full_run):
 
     if not full_run:
         return  # the sample is too small for the scores to mean anything
-    btc_rows = [row for row in rows if row.get("subset") == "test_mentions_btc"]
-    report.check(bool(btc_rows) and all(is_count(row.get("n")) and row["n"] > 0 for row in btc_rows),
-                 f"{label}: the rows for test posts that mention bitcoin have posts",
-                 f"{[row.get('n') for row in btc_rows]}")
+    ticker_rows = [row for row in rows if row.get("subset") == "test_has_ticker"]
+    report.check(bool(ticker_rows) and all(is_count(row.get("n")) and row["n"] > 0 for row in ticker_rows),
+                 f"{label}: the rows for test posts that name a ticker have posts",
+                 f"{[row.get('n') for row in ticker_rows]}")
     for name in models:
         report.check(beats_both(name),
                      f"{label}: {name} macro-F1 on all test posts beats always majority and uniform random",
@@ -719,7 +759,7 @@ def print_sentiment(brief):
         part = tokenization.get(name) or {}
         print(f"  tokenization {name + ':':20} vocabulary {part.get('vocab_size')}, "
               f"tokens per post {part.get('avg_tokens_per_post')}")
-    print(f"  split (posts):                 {split.get('n_posts')}   mention bitcoin: {split.get('n_mentions_btc')}")
+    print(f"  split (posts):                 {split.get('n_posts')}   with a ticker: {split.get('n_has_ticker')}")
     print(f"  vectorizers:                   {sentiment.get('vectorizers')}")
     print(f"  validation macro-F1:           {selection.get('validation_macro_f1')}   chosen: {selection.get('selected')}")
     print(f"  test texts also in training:   {sentiment.get('test_texts_also_in_train')}")
@@ -1200,6 +1240,251 @@ def check_chapters(report):
                  f"chapter {BRIEF_CHAPTER} imports no network package and nothing outside "
                  f"{sorted(BRIEF_CHAPTER_IMPORTS)} (no web page, no panel)",
                  f"imports {sorted(modules)}; not allowed {outside}")
+
+
+# ---------------------------------------------------------------- switches, reading, tickers and the sample (chapters 1 and 2)
+
+def check_switch_cell(report, defaults, others):
+    """The switch cell's defaults and other values, and the switch check cell run from the source."""
+    removed = sorted(name for name in defaults if REMOVED_SWITCH_PATTERN.match(name))
+    report.check(defaults.get("DATA_SOURCE") == DEFAULT_DATA_SOURCE and defaults.get("TICKER_ONLY") is False
+                 and others.get("TICKER_ONLY") is True and not removed,
+                 "switch cell: DATA_SOURCE defaults to the pinned Hugging Face file, TICKER_ONLY defaults to False with "
+                 "True as its other value, and no switch of a removed chapter is left",
+                 f"DATA_SOURCE {defaults.get('DATA_SOURCE')!r}, TICKER_ONLY {defaults.get('TICKER_ONLY')!r} / "
+                 f"{others.get('TICKER_ONLY')!r}, removed switches still there {removed}")
+    source = cell_defining_text("Switches look fine.")
+    problems = []
+
+    def run(values):
+        namespace = {**defaults, **values}
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, "the switch check cell", "exec"), namespace)
+            return None
+        except ValueError as exc:
+            return str(exc)
+
+    if source is None:
+        problems.append("no cell prints 'Switches look fine.'")
+    else:
+        message = run({})
+        if message is not None:
+            problems.append(f"default values refused: {message}")
+        message = run(dict(others))
+        if message is not None:
+            problems.append(f"other values refused: {message}")
+        for name, value in SWITCH_PROBES:
+            message = run({name: value})
+            if message is None or name not in message:
+                problems.append(f"{name}={value!r} {'passed' if message is None else 'refused without naming it'}")
+    report.check(not problems, "switch check cell (run from the source): the defaults and the other values pass, and "
+                 "every bad value stops it with the switch's name ("
+                 + ", ".join(f"{name}={value!r}" for name, value in SWITCH_PROBES) + ")", "; ".join(problems))
+
+
+SWITCH_PROBES = [("N_CLASSES", 4), ("TICKER_ONLY", "yes"), ("EMOJI_TO_WORDS", 1), ("VOCAB_SIZE", 0)]
+
+
+def cell_defining_text(marker):
+    """Source of the first code cell that contains marker, or None."""
+    return next((source for source in code_cells() if marker in source), None)
+
+
+def reading_namespace():
+    """The notebook's reading cells (chapter 1), executed from the source; returns (namespace, problems)."""
+    namespace = {"__name__": "notebook_cells"}
+    return namespace, run_cells(["read_posts"], namespace)
+
+
+def write_parquet(path, columns):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table(columns), path)
+    return path
+
+
+def stops_with(function, *args, words=()):
+    """The ValueError message when function(*args) stops, or None when it does not stop."""
+    try:
+        function(*args)
+    except ValueError as exc:
+        message = str(exc)
+        return message if all(word in message for word in words) else f"(without {words}) {message}"
+    return None
+
+
+def check_reading(report):
+    """Chapter 1's reading cells, run from the source on small hand-written parquet files."""
+    shutil.rmtree(READING_PROBE_DIR, ignore_errors=True)
+    namespace, problems = reading_namespace()
+    if not report.check(not problems, "chapter 1: the reading cell runs from the source", "; ".join(problems)):
+        return
+    read_posts, posts_from_raw = namespace["read_posts"], namespace["posts_from_raw"]
+    texts = ["$TSLA to the moon", None, "  spaces around  ", "", "plain text, no ticker", "second $tsla post"]
+    sentiments = [1, 0, 2, 0, 1, 2]
+    whole = write_parquet(READING_PROBE_DIR / "whole.parquet",
+                          {"tweet": texts, "sentiment": sentiments, "url": [f"https://example.com/{i}" for i in range(6)]})
+    posts = read_posts(str(whole))
+    import pandas as pd
+    expected = levels.posts_from_table(pd.read_parquet(whole))
+    same_as_script = ([{"post_id": row.post_id, "text": row.text} for row in posts.itertuples()] == expected)
+    report.check(list(posts["post_id"]) == [f"tim:{row}" for row in range(len(texts))] and same_as_script,
+                 "chapter 1 on a file without a row column: ids tim:0, tim:1, ... by position, and ids and texts equal "
+                 "those of scripts/prelabel_levels.py (posts_from_table)",
+                 f"ids {list(posts['post_id'])}; same as the pre-label script: {same_as_script}")
+    report.check(list(posts["text"]) == ["" if text is None else text for text in texts]
+                 and list(posts["label"]) == [RAW_TO_LABEL[value] for value in sentiments]
+                 and list(posts.columns) == ["post_id", "text", "label"],
+                 "chapter 1: a missing text becomes an empty string, spaces are kept, the labels are converted "
+                 "(sentiment 0 -> 1, 1 -> 2, 2 -> 0) and the url column is not read",
+                 f"texts {list(posts['text'])}, labels {list(posts['label'])}, columns {list(posts.columns)}")
+    # The sample route: rows drawn from the whole file keep the id and the text of the whole file.
+    picked = [4, 0, 5]
+    part = write_parquet(READING_PROBE_DIR / "part.parquet",
+                         {"tweet": [texts[row] for row in picked], "sentiment": [sentiments[row] for row in picked],
+                          "row": picked})
+    sample = read_posts(str(part))
+    by_id = {row.post_id: (row.text, row.label) for row in posts.itertuples()}
+    mismatched = [row.post_id for row in sample.itertuples() if by_id.get(row.post_id) != (row.text, row.label)]
+    report.check(list(sample["post_id"]) == [f"tim:{row}" for row in picked] and not mismatched,
+                 "chapter 1 on a file with a row column: ids tim:<row> from that column, and every post has the id, the "
+                 "text and the label it has in the whole file", f"ids {list(sample['post_id'])}; mismatched {mismatched}")
+    stops = {
+        "sentiment 3": stops_with(read_posts, str(write_parquet(READING_PROBE_DIR / "three.parquet",
+                                                                {"tweet": ["a", "b"], "sentiment": [1, 3]})),
+                                  words=("sentiment", "3")),
+        "no tweet column": stops_with(read_posts, str(write_parquet(READING_PROBE_DIR / "no-tweet.parquet",
+                                                                    {"text": ["a"], "sentiment": [1]})),
+                                      words=("tweet",)),
+        "no sentiment column": stops_with(read_posts, str(write_parquet(READING_PROBE_DIR / "no-sentiment.parquet",
+                                                                        {"tweet": ["a"], "label": [1]})),
+                                          words=("sentiment",)),
+    }
+    report.check(all(message is not None and not message.startswith("(without") for message in stops.values()),
+                 "chapter 1 stops on an unknown sentiment value and on a missing tweet or sentiment column, naming it",
+                 "; ".join(f"{case}: {message}" for case, message in stops.items()))
+    # The loading cell and the ticker cell, from the source, on the whole probe file: df_all has exactly four columns.
+    namespace.update({"DATA_SOURCE": str(whole), "WORK_DIR": str(READING_PROBE_DIR / "work")})
+    problems = run_cells(["load_posts", "TICKER_PATTERN"], namespace)
+    df_all = namespace.get("df_all")
+    columns = list(df_all.columns) if df_all is not None else None
+    report.check(not problems and columns == ["post_id", "text", "label", "has_ticker"]
+                 and list(df_all["has_ticker"]) == [True, False, False, False, False, True],
+                 "chapter 1: loading and the ticker cell, run from the source, give df_all exactly the columns post_id, "
+                 "text, label and has_ticker", f"{'; '.join(problems)} columns {columns}")
+    shutil.rmtree(READING_PROBE_DIR, ignore_errors=True)
+
+
+def notebook_ticker(texts):
+    """has_ticker for texts, from the notebook's own ticker cell run from the source; None when it cannot run."""
+    import pandas as pd
+    namespace = {"pd": pd, "df_all": pd.DataFrame({"text": list(texts)})}
+    if run_cells(["TICKER_PATTERN"], namespace):
+        return None
+    return [bool(value) for value in namespace["df_all"]["has_ticker"]]
+
+
+def check_ticker_rule(report):
+    """The notebook's ticker cell, run from the source, on texts that must and must not count."""
+    found = notebook_ticker(TICKER_MUST_MATCH + TICKER_MUST_NOT_MATCH)
+    if found is None:
+        report.check(False, "chapter 1: the ticker cell runs from the source")
+        return
+    missed = [text for text, value in zip(TICKER_MUST_MATCH, found) if not value]
+    wrong = [text for text, value in zip(TICKER_MUST_NOT_MATCH, found[len(TICKER_MUST_MATCH):]) if value]
+    report.check(not missed and not wrong, f"chapter 1: the ticker rule counts {TICKER_MUST_MATCH} and does not count "
+                 f"{TICKER_MUST_NOT_MATCH}", f"missed {missed}; wrongly counted {wrong}")
+
+
+def level_file_rows(relative):
+    """The rows of a level file in the repository (lists, as scripts/prelabel_levels.py reads them), or None."""
+    path = REPO_DIR / relative
+    return levels.file_report(path)[1] if path.is_file() else None
+
+
+def check_sample_file(report):
+    """The bundled sample: columns, rows, what it holds, nothing private, and its texts against the level file."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    path = REPO_DIR / SAMPLE_SOURCE
+    if not report.check(path.is_file(), f"{SAMPLE_SOURCE} exists"):
+        return
+    columns = pq.ParquetFile(path).schema_arrow.names
+    sample = pd.read_parquet(path)
+    rows = list(sample["row"]) if "row" in sample.columns else []
+    report.check(columns == SAMPLE_COLUMNS and rows == sorted(set(rows)) and bool(rows),
+                 f"{SAMPLE_SOURCE}: columns exactly {SAMPLE_COLUMNS}, rows unique and in order",
+                 f"columns {columns}, {len(rows)} rows, {len(set(rows))} distinct")
+    if columns != SAMPLE_COLUMNS:
+        return
+    texts = sample["tweet"].fillna("")
+    empty = int((texts.str.strip() == "").sum())
+    handles = int(texts.str.contains(SAMPLE_HANDLE).sum())
+    links = int(texts.str.contains(SAMPLE_LINK).sum())
+    report.check(empty == 0 and handles == 0 and links == 0,
+                 f"{SAMPLE_SOURCE}: no empty text, no account name (@...), no link (http://, https://, www.)",
+                 f"empty {empty}, account names {handles}, links {links}")
+    labels = sample["sentiment"].map(RAW_TO_LABEL)
+    per_class = {label: int((labels == label).sum()) for label in (0, 1, 2)}
+    ticker = notebook_ticker(texts)
+    with_ticker = {label: int(((labels == label) & pd.Series(ticker or [False] * len(sample))).sum()) for label in (0, 2)}
+    level_rows = level_file_rows(LEVEL_FULL_FILE) or []
+    level_of = {item[0]: item[1] for item in level_rows}
+    ids = [f"tim:{row}" for row in rows]
+    per_level = {level: sum(level_of.get(post_id) == level for post_id in ids) for level in LEVEL_SIX}
+    report.check(sample["sentiment"].isin(list(RAW_TO_LABEL)).all() and min(per_class.values()) >= SAMPLE_MIN_PER_CLASS,
+                 f"{SAMPLE_SOURCE}: every class has at least {SAMPLE_MIN_PER_CLASS} posts after the conversion",
+                 f"{per_class} (0 bearish, 1 neutral, 2 bullish)")
+    report.check(bool(level_rows) and min(per_level.values()) >= SAMPLE_MIN_PER_LEVEL,
+                 f"{SAMPLE_SOURCE}: every level of {LEVEL_FULL_FILE} has at least {SAMPLE_MIN_PER_LEVEL} posts in it",
+                 f"{per_level}")
+    report.check(ticker is not None and min(with_ticker.values()) >= SAMPLE_MIN_TICKER_PER_SIDE,
+                 f"{SAMPLE_SOURCE}: the bearish and the bullish class each have at least {SAMPLE_MIN_TICKER_PER_SIDE} "
+                 "posts with a ticker (the notebook's own rule), so the run with TICKER_ONLY and two classes can split",
+                 f"{with_ticker}")
+    hash_of = {item[0]: item[5] for item in level_rows}
+    compared = [(post_id, text) for post_id, text in zip(ids, sample["tweet"]) if post_id in hash_of]
+    differ = [post_id for post_id, text in compared if own_text_hash(text) != hash_of[post_id]]
+    report.check(bool(compared) and not differ,
+                 f"{SAMPLE_SOURCE}: every post that is also in {LEVEL_FULL_FILE} has that file's text fingerprint",
+                 f"{len(compared)} compared, {len(differ)} differ {differ[:3]}")
+    report.info(f"sample: {len(sample)} posts; per class {per_class}; per level {per_level}; "
+                f"with a ticker (bearish, bullish) {with_ticker}")
+
+
+def check_fingerprints_full(report, source):
+    """Full check: the notebook's own reading cell reads the local copy; the level file, the review table and the
+    sample are compared with it."""
+    import pandas as pd
+    namespace, problems = reading_namespace()
+    path = REPO_DIR / source
+    if not report.check(not problems and path.is_file(), "the notebook's reading cell reads the local copy of the dataset",
+                        "; ".join(problems) or f"{source} exists: {path.is_file()}"):
+        return
+    posts = namespace["read_posts"](str(path))
+    text_of = dict(zip(posts["post_id"], posts["text"]))
+    label_of = dict(zip(posts["post_id"], posts["label"]))
+    for relative in (LEVEL_FULL_FILE, LEVEL_REVIEW_FILE):
+        rows = level_file_rows(relative)
+        if rows is None:
+            report.check(False, f"{relative} is there to compare with the dataset")
+            continue
+        missing = [item[0] for item in rows if item[0] not in text_of]
+        changed = [item[0] for item in rows if len(item) > 5 and item[0] in text_of and own_text_hash(text_of[item[0]]) != item[5]]
+        hashed = sum(len(item) > 5 for item in rows)
+        report.check(not missing and not changed,
+                     f"{relative}: every id is a post of the dataset read by the notebook"
+                     + (", with the same text fingerprint" if hashed else ""),
+                     f"{len(rows)} ids, {hashed} fingerprints compared; {len(missing)} missing {missing[:3]}; "
+                     f"{len(changed)} differ {changed[:3]}")
+    sample = namespace["read_posts"](str(REPO_DIR / SAMPLE_SOURCE))
+    differ = [row.post_id for row in sample.itertuples()
+              if text_of.get(row.post_id) != row.text or label_of.get(row.post_id) != row.label]
+    report.check(len(sample) > 0 and not differ,
+                 f"{SAMPLE_SOURCE}: every post has the id, the text and the label it has in the dataset",
+                 f"{len(sample)} posts compared, {len(differ)} differ {differ[:3]}")
 
 
 # ---------------------------------------------------------------- level pre-labels (scripts/prelabel_levels.py)
@@ -2194,6 +2479,7 @@ def full(report, defaults, overrides, rules=None):
                             f"{source} not found; run scripts/download_data.sh or pass -p DATA_SOURCE <address>"):
             return
         report.info(f"data file {source}: {path.stat().st_size:,} bytes, sha256 {sha256_of(path)}")
+    check_fingerprints_full(report, FULL_SOURCE)
     report.info("full run: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
     brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
     brief_path.unlink(missing_ok=True)
@@ -2210,12 +2496,14 @@ def full(report, defaults, overrides, rules=None):
     check_panel_output(report, "full run", executed)
     dataset = brief.get("dataset") or {}
     sample, cleaning = dataset.get("sample") or {}, dataset.get("cleaning") or {}
-    btc = dataset.get("btc_mentions") or {}
+    tickers = dataset.get("ticker_mentions") or {}
     print("\nKey numbers (full run)")
-    print(f"  posts in total:                {dataset.get('n_posts')}   sheets: {dataset.get('sheets')}")
+    print(f"  posts in total:                {dataset.get('n_posts')}")
+    print(f"  dataset's own classes:         {dataset.get('sentiment_counts')}   (0 neutral, 1 bullish, 2 bearish)")
+    print(f"  converted:                     {dataset.get('label_from_sentiment')}   (dataset's value -> label)")
     print(f"  posts per class:               {dataset.get('class_counts')}   (0 bearish, 1 neutral, 2 bullish)")
     print(f"  class shares:                  " + json.dumps({k: round(v, 4) for k, v in (dataset.get('class_shares') or {}).items() if v is not None}))
-    print(f"  mention bitcoin/btc:           {btc.get('n_posts')}   per class: {btc.get('by_class')}")
+    print(f"  posts with a ticker:           {tickers.get('n_posts')}   per class: {tickers.get('by_class')}")
     print(f"  words per post:                {dataset.get('length_words')}")
     print(f"  repeated texts:                {dataset.get('duplicates')}   posts with links: {dataset.get('n_posts_with_links')}")
     print(f"  empty texts:                   {dataset.get('n_empty_text')}")
@@ -2249,6 +2537,10 @@ def main():
     check_text(report)
     rules = load_format_rules(report)
     check_chapters(report)
+    check_switch_cell(report, defaults, others)
+    check_reading(report)
+    check_ticker_rule(report)
+    check_sample_file(report)
     check_levels_interface(report)
     check_levels_prompt(report)
     check_levels_hosts(report)

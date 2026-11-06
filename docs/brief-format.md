@@ -9,7 +9,7 @@ This document describes format **2.0** of the brief, the file `brief.json` that 
 
 - **File.** UTF-8 JSON, indented. Field names are English and never change within a major version (see [Versions](#versions)).
 - **null.** A number that cannot be computed is `null`: a share whose denominator is 0, a score on an empty subset, a summary of an empty table. It is never written as 0, and never as NaN or Infinity, which are not valid JSON. Only the fields marked "Null: yes" below may be `null`. Before saving, the notebook turns every NaN or infinite number into `null`; the check that follows then rejects the brief if that `null` sits in a field that may not be `null`. The check also rejects NaN and Infinity themselves, so a brief that contains them never passes.
-- **Labels.** `0` = bearish, `1` = neutral, `2` = bullish, the dataset's own coding. As keys of an object they are strings (`"0"`, `"1"`, `"2"`).
+- **Labels.** `0` = bearish, `1` = neutral, `2` = bullish. The dataset codes its classes in another order (0 neutral, 1 bullish, 2 bearish); the notebook converts them while reading, and `dataset.label_from_sentiment` records the conversion. As keys of an object they are strings (`"0"`, `"1"`, `"2"`).
 - **Classes in use.** With two classes (the default) the models know only `"0"` and `"2"`; with three classes also `"1"`. Objects keyed by "classes in use" always have the keys `"0"` and `"2"`, and `"1"` only with three classes.
 - **Shares and percentage points.** A share is a fraction from 0 to 1 (0.25, not 25). A difference "in percentage points" (`_pp`) is 100 × (one share − another), from −100 to 100.
 - **Counts** are integers, 0 or more.
@@ -19,7 +19,7 @@ How to read the tables:
 
 | Column | Meaning |
 | --- | --- |
-| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>`, `<metric>` and `<sheet>` stand for every key of an object whose keys vary (described in the row of that object). |
+| Field | The path from the top of the brief. `[]` stands for every item of a list; `<label>`, `<model>` and `<metric>` stand for every key of an object whose keys vary (described in the row of that object). |
 | Type | The JSON type of the value when it is not `null`: string, integer, number, boolean, object or array. "number" also allows whole numbers. |
 | Required | "yes": always present in this format. "no": may be absent. "—": an item of a list or an entry of an object with varying keys; the row above it says which ones are there. |
 | Null | "yes": may be `null` (only when the number cannot be computed). "no": never `null`. |
@@ -28,12 +28,12 @@ The rules allow no other fields: a writer that adds a field without changing the
 
 ## What each section covers
 
-The top-level `scope` describes the brief as a whole: where the posts come from, the granularity, how many classes the models use, and which coins the **working sample** holds. The two sections do not use the same posts, so **each section's coverage is given by its own fields, not by `scope`**:
+The top-level `scope` describes the brief as a whole: where the posts come from, the granularity, how many classes the models use, and whether the **working sample** keeps only posts that name a ticker. The two sections do not use the same posts, so **each section's coverage is given by its own fields, not by `scope`**:
 
 | Section | Posts it uses | Fields that say so |
 | --- | --- | --- |
 | `dataset` | Every post of the data source; then the working sample drawn from them. | `dataset.n_posts`; `dataset.sample` |
-| `sentiment` | The working sample (with the default switches: posts about all coins, bearish and bullish only, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that mention Bitcoin. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
+| `sentiment` | The working sample (with the default switches: posts with or without a ticker, the classes in use, the same number in each class), split into training, validation and test sets. The evaluation table has rows for all test posts and for the test posts that name a ticker. | `sentiment.classes`; `sentiment.split`; `sentiment.evaluation.subsets` |
 
 For example, `dataset.n_posts` counts every post of the data source, while `sentiment.split.n_posts` counts only the posts of the working sample.
 
@@ -46,9 +46,9 @@ For example, `dataset.n_posts` counts every post of the data source, while `sent
 | `format_version` | string | yes | no | The format version, the one named at the top of this document. See [Versions](#versions). |
 | `generated_at` | string | yes | no | When the brief was saved: UTC time, ISO 8601, to the second, ending in `Z` (for example `2026-01-31T12:00:00Z`). |
 | `scope` | object | yes | no | What the brief as a whole covers. |
-| `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local spreadsheet. |
+| `scope.source` | string | yes | no | The data source as given by the switch `DATA_SOURCE`: a Hugging Face address (`hf://...`) or a path to a local parquet file. |
 | `scope.granularity` | string | yes | no | `"batch"`: every section describes the whole data source (`DATA_SOURCE`) at once. The format allows no other value. |
-| `scope.coins` | string | yes | no | Which posts the working sample holds: `"all"` (posts about all coins) or `"btc_only"` (only posts that mention Bitcoin). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
+| `scope.tickers` | string | yes | no | Which posts the working sample holds: `"all"` (posts with or without a ticker) or `"has_ticker_only"` (only posts that name a ticker such as `$TSLA`; the switch `TICKER_ONLY`). It describes the working sample only; see [What each section covers](#what-each-section-covers). |
 | `scope.n_classes` | integer | yes | no | Classes the models use: 2 (bearish and bullish) or 3 (with neutral). |
 
 ### dataset
@@ -58,19 +58,26 @@ Chapters 0 to 3: the data source, a first look at every post, the working sample
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
 | `dataset` | object | yes | no | The data and how it was prepared. |
-| `dataset.name` | string | yes | no | Hugging Face dataset id, `"ElKulako/stocktwits-crypto"`. |
-| `dataset.file` | string | yes | no | The file inside the dataset, `"st-data-full.xlsx"`. |
+| `dataset.name` | string | yes | no | Hugging Face dataset id, `"TimKoornstra/financial-tweets-sentiment"`. |
+| `dataset.revision` | string | yes | no | The dataset's pinned revision (a commit id of 40 hexadecimal digits). |
+| `dataset.file` | string | yes | no | The file inside the dataset, `"data/train-00000-of-00001.parquet"`. |
 | `dataset.license` | string | yes | no | The dataset's license, `"MIT"`. |
-| `dataset.citation` | string | yes | no | Address of the paper the dataset author asks to cite. |
+| `dataset.citation` | string | yes | no | What to cite: the dataset's page, because its card asks for no particular citation. |
 | `dataset.label_meaning` | object | yes | no | The meaning of each label. |
 | `dataset.label_meaning.0` | string | yes | no | `"bearish"`. |
 | `dataset.label_meaning.1` | string | yes | no | `"neutral"`. |
 | `dataset.label_meaning.2` | string | yes | no | `"bullish"`. |
-| `dataset.sheets` | object | yes | no | Posts per sheet of the spreadsheet, keyed by sheet name, in file order (at least one sheet). |
-| `dataset.sheets.<sheet>` | integer | — | no | Number of posts in that sheet. |
+| `dataset.label_from_sentiment` | object | yes | no | How the dataset's own class (`sentiment`) was converted into the label: keyed by the dataset's value. |
+| `dataset.label_from_sentiment.0` | integer | yes | no | Label of the dataset's 0 (neutral): `1`. |
+| `dataset.label_from_sentiment.1` | integer | yes | no | Label of the dataset's 1 (bullish): `2`. |
+| `dataset.label_from_sentiment.2` | integer | yes | no | Label of the dataset's 2 (bearish): `0`. |
+| `dataset.sentiment_counts` | object | yes | no | Posts per value of the dataset's own `sentiment` column, over every post (a record; the same posts as `class_counts`, under the dataset's coding). |
+| `dataset.sentiment_counts.0` | integer | yes | no | Posts the dataset marks 0 (neutral). |
+| `dataset.sentiment_counts.1` | integer | yes | no | Posts the dataset marks 1 (bullish). |
+| `dataset.sentiment_counts.2` | integer | yes | no | Posts the dataset marks 2 (bearish). |
 | `dataset.n_posts` | integer | yes | no | Every post of the data source. |
 | `dataset.n_unique_post_ids` | integer | yes | no | Distinct `post_id` values; equal to `n_posts`. |
-| `dataset.n_empty_text` | integer | yes | no | Posts whose text is empty or blank after reading (cells stored as formulas read as empty; see the README's known limitations). |
+| `dataset.n_empty_text` | integer | yes | no | Posts whose text is empty or blank after reading. |
 | `dataset.class_counts` | object | yes | no | Posts per label, over every post. |
 | `dataset.class_counts.0` | integer | yes | no | Bearish posts. |
 | `dataset.class_counts.1` | integer | yes | no | Neutral posts. |
@@ -86,25 +93,25 @@ Chapters 0 to 3: the data source, a first look at every post, the working sample
 | `dataset.length_words.p99` | number | yes | yes | 99th percentile; `null` when there are no posts. |
 | `dataset.length_words.min` | integer | yes | yes | Shortest post; `null` when there are no posts. |
 | `dataset.length_words.max` | integer | yes | yes | Longest post; `null` when there are no posts. |
-| `dataset.btc_mentions` | object | yes | no | Posts that mention Bitcoin, over every post. |
-| `dataset.btc_mentions.rule` | string | yes | no | The matching rule, written out: `bitcoin` or `btc` as a whole word, ignoring case. |
-| `dataset.btc_mentions.n_posts` | integer | yes | no | Posts that mention Bitcoin. |
-| `dataset.btc_mentions.share` | number | yes | yes | Their share of every post; `null` when there are no posts. |
-| `dataset.btc_mentions.by_class` | object | yes | no | Posts that mention Bitcoin, per label. |
-| `dataset.btc_mentions.by_class.0` | integer | yes | no | Bearish posts that mention Bitcoin. |
-| `dataset.btc_mentions.by_class.1` | integer | yes | no | Neutral posts that mention Bitcoin. |
-| `dataset.btc_mentions.by_class.2` | integer | yes | no | Bullish posts that mention Bitcoin. |
-| `dataset.btc_mentions.share_within_class` | object | yes | no | Within each label, the share of posts that mention Bitcoin. |
-| `dataset.btc_mentions.share_within_class.0` | number | yes | yes | Among bearish posts; `null` when there is no bearish post. |
-| `dataset.btc_mentions.share_within_class.1` | number | yes | yes | Among neutral posts; `null` when there is no neutral post. |
-| `dataset.btc_mentions.share_within_class.2` | number | yes | yes | Among bullish posts; `null` when there is no bullish post. |
+| `dataset.ticker_mentions` | object | yes | no | Posts that name a ticker, over every post. |
+| `dataset.ticker_mentions.rule` | string | yes | no | The matching rule, written out as a regular expression: `$`, then 1 to 5 letters in any case, optionally a dot and 1 or 2 letters, with no letter or digit right before the `$` or right after the code. |
+| `dataset.ticker_mentions.n_posts` | integer | yes | no | Posts that name a ticker. |
+| `dataset.ticker_mentions.share` | number | yes | yes | Their share of every post; `null` when there are no posts. |
+| `dataset.ticker_mentions.by_class` | object | yes | no | Posts that name a ticker, per label. |
+| `dataset.ticker_mentions.by_class.0` | integer | yes | no | Bearish posts that name a ticker. |
+| `dataset.ticker_mentions.by_class.1` | integer | yes | no | Neutral posts that name a ticker. |
+| `dataset.ticker_mentions.by_class.2` | integer | yes | no | Bullish posts that name a ticker. |
+| `dataset.ticker_mentions.share_within_class` | object | yes | no | Within each label, the share of posts that name a ticker. |
+| `dataset.ticker_mentions.share_within_class.0` | number | yes | yes | Among bearish posts; `null` when there is no bearish post. |
+| `dataset.ticker_mentions.share_within_class.1` | number | yes | yes | Among neutral posts; `null` when there is no neutral post. |
+| `dataset.ticker_mentions.share_within_class.2` | number | yes | yes | Among bullish posts; `null` when there is no bullish post. |
 | `dataset.duplicates` | object | yes | no | Repeated texts (counted only; nothing is removed). |
 | `dataset.duplicates.n_rows_repeating_an_earlier_text` | integer | yes | no | Posts whose exact text already appeared earlier in the table (empty texts count as repeats of each other). |
 | `dataset.duplicates.n_distinct_texts_repeated` | integer | yes | no | Distinct texts that occur more than once. |
 | `dataset.n_posts_with_links` | integer | yes | no | Posts whose text still contains a web link (`http://`, `https://` or `www.`). |
 | `dataset.sample` | object | yes | no | The working sample: the posts that chapters 3 to 8 clean, train on and evaluate. |
 | `dataset.sample.n_classes` | integer | yes | no | Classes kept (the switch `N_CLASSES`): 2 or 3. |
-| `dataset.sample.btc_only` | boolean | yes | no | Whether only posts that mention Bitcoin were kept (the switch `BTC_ONLY`). |
+| `dataset.sample.ticker_only` | boolean | yes | no | Whether only posts that name a ticker were kept (the switch `TICKER_ONLY`). |
 | `dataset.sample.seed` | integer | yes | no | Random seed of the draw (`RANDOM_SEED`). |
 | `dataset.sample.per_class_requested` | integer | yes | no | Most posts per class asked for (`SAMPLE_PER_CLASS`). |
 | `dataset.sample.available_by_class` | object | yes | no | Posts left in each class in use after the filters, before the draw. Keyed by the classes in use. |
@@ -113,7 +120,7 @@ Chapters 0 to 3: the data source, a first look at every post, the working sample
 | `dataset.sample.class_counts` | object | yes | no | Posts per class in the working sample, keyed by the classes in use. |
 | `dataset.sample.class_counts.<label>` | integer | — | no | Posts of that class; the same for every class. |
 | `dataset.sample.n_posts` | integer | yes | no | Posts in the working sample. |
-| `dataset.sample.n_mentions_btc` | integer | yes | no | Posts in the working sample that mention Bitcoin. |
+| `dataset.sample.n_has_ticker` | integer | yes | no | Posts in the working sample that name a ticker. |
 | `dataset.cleaning` | object | yes | no | Chapter 3's cleaning of the working sample. |
 | `dataset.cleaning.emoji_to_words` | boolean | yes | no | Whether emoji became English words (the switch `EMOJI_TO_WORDS`). |
 | `dataset.cleaning.keep_negations` | boolean | yes | no | Whether not, no, never, nor and the "n't" forms were kept (the switch `KEEP_NEGATIONS`). |
@@ -181,10 +188,10 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.split.class_shares.validation.<label>` | number | — | yes | Share of that class; `null` when the part is empty. |
 | `sentiment.split.class_shares.test` | object | yes | no | In the test set, keyed by the classes in use. |
 | `sentiment.split.class_shares.test.<label>` | number | — | yes | Share of that class; `null` when the part is empty. |
-| `sentiment.split.n_mentions_btc` | object | yes | no | Posts that mention Bitcoin in each part. |
-| `sentiment.split.n_mentions_btc.train` | integer | yes | no | In the training set. |
-| `sentiment.split.n_mentions_btc.validation` | integer | yes | no | In the validation set. |
-| `sentiment.split.n_mentions_btc.test` | integer | yes | no | In the test set. |
+| `sentiment.split.n_has_ticker` | object | yes | no | Posts that name a ticker in each part. |
+| `sentiment.split.n_has_ticker.train` | integer | yes | no | In the training set. |
+| `sentiment.split.n_has_ticker.validation` | integer | yes | no | In the validation set. |
+| `sentiment.split.n_has_ticker.test` | integer | yes | no | In the test set. |
 | `sentiment.vectorizers` | object | yes | no | Chapter 6's two vectorizers, fitted on the training set only. |
 | `sentiment.vectorizers.vocab_size_requested` | integer | yes | no | Most words each keeps (`VOCAB_SIZE`). |
 | `sentiment.vectorizers.fitted_on` | string | yes | no | `"train"`. |
@@ -236,7 +243,7 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.evaluation` | object | yes | no | Chapter 8's evaluation on the test set. |
 | `sentiment.evaluation.subsets` | object | yes | no | The subsets of the test set, keyed by the names used in `rows[].subset`. |
 | `sentiment.evaluation.subsets.all_test` | string | yes | no | Description: all test posts. |
-| `sentiment.evaluation.subsets.test_mentions_btc` | string | yes | no | Description: test posts that mention Bitcoin. |
+| `sentiment.evaluation.subsets.test_has_ticker` | string | yes | no | Description: test posts that name a ticker. |
 | `sentiment.evaluation.baselines` | array | yes | no | Names of the baselines: `"always_majority"` (always the most frequent training label, the smallest label on a tie) and `"uniform_random"` (a class at random with equal chances, seeded). |
 | `sentiment.evaluation.baselines[]` | string | — | no | A baseline name. |
 | `sentiment.evaluation.majority_label` | string | yes | no | The most frequent label of the training set. |
@@ -244,7 +251,7 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.evaluation.rows[]` | object | — | no | One row. |
 | `sentiment.evaluation.rows[].model` | string | yes | no | A model name or a baseline name. |
 | `sentiment.evaluation.rows[].kind` | string | yes | no | `"model"` or `"baseline"`. |
-| `sentiment.evaluation.rows[].subset` | string | yes | no | `"all_test"` or `"test_mentions_btc"`. |
+| `sentiment.evaluation.rows[].subset` | string | yes | no | `"all_test"` or `"test_has_ticker"`. |
 | `sentiment.evaluation.rows[].n` | integer | yes | no | Posts in the subset. |
 | `sentiment.evaluation.rows[].accuracy` | number | yes | yes | Share of posts labelled correctly; `null` when the subset is empty. |
 | `sentiment.evaluation.rows[].per_class` | object | yes | no | Scores per class, keyed by the classes in use. |

@@ -11,22 +11,23 @@
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "granularity", "coins", "n_classes"],
+      "required": ["source", "granularity", "tickers", "n_classes"],
       "properties": {
         "source": {"type": "string"},
         "granularity": {"type": "string", "enum": ["batch"]},
-        "coins": {"type": "string", "enum": ["all", "btc_only"]},
+        "tickers": {"type": "string", "enum": ["all", "has_ticker_only"]},
         "n_classes": {"type": "integer", "enum": [2, 3]}
       }
     },
     "dataset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "file", "license", "citation", "label_meaning", "sheets", "n_posts", "n_unique_post_ids",
-                   "n_empty_text", "class_counts", "class_shares", "length_words", "btc_mentions", "duplicates",
-                   "n_posts_with_links", "sample", "cleaning"],
+      "required": ["name", "revision", "file", "license", "citation", "label_meaning", "label_from_sentiment",
+                   "sentiment_counts", "n_posts", "n_unique_post_ids", "n_empty_text", "class_counts", "class_shares",
+                   "length_words", "ticker_mentions", "duplicates", "n_posts_with_links", "sample", "cleaning"],
       "properties": {
         "name": {"type": "string"},
+        "revision": {"type": "string"},
         "file": {"type": "string"},
         "license": {"type": "string"},
         "citation": {"type": "string"},
@@ -36,7 +37,17 @@
           "required": ["0", "1", "2"],
           "properties": {"0": {"type": "string"}, "1": {"type": "string"}, "2": {"type": "string"}}
         },
-        "sheets": {"type": "object", "minProperties": 1, "propertyNames": {"title": "sheet"}, "additionalProperties": {"$ref": "#/$defs/count"}},
+        "label_from_sentiment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["0", "1", "2"],
+          "properties": {
+            "0": {"type": "integer", "enum": [0, 1, 2]},
+            "1": {"type": "integer", "enum": [0, 1, 2]},
+            "2": {"type": "integer", "enum": [0, 1, 2]}
+          }
+        },
+        "sentiment_counts": {"$ref": "#/$defs/label_counts"},
         "n_posts": {"$ref": "#/$defs/count"},
         "n_unique_post_ids": {"$ref": "#/$defs/count"},
         "n_empty_text": {"$ref": "#/$defs/count"},
@@ -55,7 +66,7 @@
             "max": {"$ref": "#/$defs/count_or_null"}
           }
         },
-        "btc_mentions": {
+        "ticker_mentions": {
           "type": "object",
           "additionalProperties": false,
           "required": ["rule", "n_posts", "share", "by_class", "share_within_class"],
@@ -80,18 +91,18 @@
         "sample": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["n_classes", "btc_only", "seed", "per_class_requested", "available_by_class", "per_class",
-                       "class_counts", "n_posts", "n_mentions_btc"],
+          "required": ["n_classes", "ticker_only", "seed", "per_class_requested", "available_by_class", "per_class",
+                       "class_counts", "n_posts", "n_has_ticker"],
           "properties": {
             "n_classes": {"type": "integer", "enum": [2, 3]},
-            "btc_only": {"type": "boolean"},
+            "ticker_only": {"type": "boolean"},
             "seed": {"type": "integer"},
             "per_class_requested": {"$ref": "#/$defs/positive"},
             "available_by_class": {"$ref": "#/$defs/class_counts"},
             "per_class": {"$ref": "#/$defs/count"},
             "class_counts": {"$ref": "#/$defs/class_counts"},
             "n_posts": {"$ref": "#/$defs/count"},
-            "n_mentions_btc": {"$ref": "#/$defs/count"}
+            "n_has_ticker": {"$ref": "#/$defs/count"}
           }
         },
         "cleaning": {
@@ -173,7 +184,7 @@
         "split": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_mentions_btc"],
+          "required": ["seed", "fractions", "stratified_by", "n_posts", "class_counts", "class_shares", "n_has_ticker"],
           "properties": {
             "seed": {"type": "integer"},
             "fractions": {
@@ -204,7 +215,7 @@
                 "test": {"$ref": "#/$defs/class_shares"}
               }
             },
-            "n_mentions_btc": {"$ref": "#/$defs/part_counts"}
+            "n_has_ticker": {"$ref": "#/$defs/part_counts"}
           }
         },
         "vectorizers": {
@@ -305,8 +316,8 @@
             "subsets": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["all_test", "test_mentions_btc"],
-              "properties": {"all_test": {"type": "string"}, "test_mentions_btc": {"type": "string"}}
+              "required": ["all_test", "test_has_ticker"],
+              "properties": {"all_test": {"type": "string"}, "test_has_ticker": {"type": "string"}}
             },
             "baselines": {"type": "array", "items": {"type": "string"}},
             "majority_label": {"$ref": "#/$defs/label"},
@@ -319,7 +330,7 @@
                 "properties": {
                   "model": {"type": "string"},
                   "kind": {"type": "string", "enum": ["model", "baseline"]},
-                  "subset": {"type": "string", "enum": ["all_test", "test_mentions_btc"]},
+                  "subset": {"type": "string", "enum": ["all_test", "test_has_ticker"]},
                   "n": {"$ref": "#/$defs/count"},
                   "accuracy": {"$ref": "#/$defs/share_or_null"},
                   "per_class": {
