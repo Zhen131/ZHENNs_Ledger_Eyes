@@ -18,8 +18,8 @@ quick: static checks, then the notebook runs three times on the bundled
        the switch cell (defaults, other values, and the switch check cell run
        from the source on good and bad values), the text scan, the format
        rules with their notebook copy and their document, and the chapter
-       headings (0 to 9, the brief last, with no network package in its
-       cells). Chapter 1's reading cells run from the source on small
+       headings (0 to 11: 9 the levels, 10 reading the crowd, neither with
+       Gradio; the brief last, with no network package in its cells). Chapter 1's reading cells run from the source on small
        hand-written parquet files (ids, empty texts, the label conversion,
        missing columns, an unknown label, a sample with its row column), and
        its ticker cell on sentences that must and must not count. The bundled
@@ -40,6 +40,12 @@ quick: static checks, then the notebook runs three times on the bundled
        the committed sample label file is checked statically; scripts/env.sh
        is checked for the Python of a Windows virtual environment, and
        requirements-prelabel.txt and .gitattributes statically.
+       Chapters 9 and 10: the second review file (static), the level
+       switches, the reading of label tables, the groups, the review
+       agreement and the counting of the two dashboards (each run from the
+       source on hand-written tables), the interface of both chapters, and
+       the levels section of the first two briefs against the files the run
+       read (every run reads the level files from the repository).
 full:  static checks, then one run on the full dataset (the local copy in
        data/raw/, see scripts/download_data.sh) with the default switches;
        prints the key numbers and the evaluation table from the brief, and
@@ -47,6 +53,9 @@ full:  static checks, then one run on the full dataset (the local copy in
        own reading cell reads the local copy, and every id of the level
        pre-label file, the review table and the sample must be a post of it
        with the same text fingerprint (the sample: the same text and label).
+       Chapter 9's numbers are printed, every row of the level label file
+       must be matched, and every network of chapter 9 must beat both
+       baselines on macro-F1 over the six levels.
        The level pre-label files are compared with the dataset (read from data/raw/, downloaded
        from Hugging Face at the pinned revision the first time): the sample,
        and the full label file and the review table when they are there
@@ -143,7 +152,7 @@ INTERFACE_PARAMETERS = {
     "save_brief": [("brief_dict", None), ("path", None)],
 }
 NO_DOWNLOAD_WORDS = ["gensim.downloader", "api.load", "://"]  # chapter 6 must contain none of them
-# Chapter 9: the brief's format rules and their documentation.
+# The last chapter (11): the brief's format rules and their documentation.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
@@ -910,7 +919,7 @@ def print_levels(brief):
                   f"{as_dict(part.get('confusion')).get('counts')}")
 
 
-# ---------------------------------------------------------------- the brief's format (chapter 9)
+# ---------------------------------------------------------------- the brief's format (chapter 11)
 
 def as_dict(value):
     return value if isinstance(value, dict) else {}
@@ -1351,7 +1360,8 @@ NETWORK_MODULES = ("urllib", "requests", "http", "socket", "httpx", "urllib3", "
 # ---------------------------------------------------------------- chapters
 
 def check_chapters(report):
-    """The chapter headings are 0 to 9 in order; the last one is the brief and imports no network package."""
+    """The chapter headings are 0 to 11 in order; the last one is the brief and imports no network package; the level
+    chapters (9 and 10) import no Gradio."""
     chapters = chapter_cells()
     numbers = list(chapters)
     titles = {}
