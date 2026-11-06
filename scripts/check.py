@@ -159,12 +159,13 @@ FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documen
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
 # The chapters, in order; the last one checks and saves the brief and must not use the network.
 START_CHAPTER_COUNT = 12  # chapters 0 to 11 before the replay chapter was added
-CHAPTER_COUNT = START_CHAPTER_COUNT + 1  # one more chapter: the replay
+CHAPTER_COUNT = START_CHAPTER_COUNT + 2  # two more chapters: the replay and the paste box
 BRIEF_CHAPTER = CHAPTER_COUNT - 1  # always the last one
 LEVEL_CHAPTERS = {9: "Levels: what does a post pay attention to?",
                   10: "Reading the crowd: two dashboards"}  # chapter -> title; they import no Gradio
 BRIEF_CHAPTER_TITLE = "The brief: check and save"
-DEMO_CHAPTERS = {11: "Replay: one ticker, week by week"}  # after chapter 10, before the brief; no Gradio
+DEMO_CHAPTERS = {11: "Replay: one ticker, week by week",
+                 12: "Paste box: read your own posts"}  # after chapter 10, before the brief; no Gradio
 BRIEF_CHAPTER_IMPORTS = {"json", "math", "pathlib", "datetime", "numpy", "pandas", "jsonschema"}  # all it may import
 
 # Text scan. Each pattern is written so that it does not match its own source line
@@ -3777,6 +3778,101 @@ def compare_stable(report, first, again):
                  "that do not depend on training", detail)
 
 
+# ---------------------------------------------------------------- the paste box (chapter 12)
+
+PASTE_RANGE = (8, 12)  # the example posts in PASTED_POSTS
+PASTE_RUN = 6  # an example may share no run of this many words or more with a post of the data
+PASTE_LINE = re.compile(r"\[paste\] (\d+) rows for (\d+) non-empty lines; every row has a sentiment call and a level "
+                        r"or none: (True|False)")
+PUNCTUATION = re.compile(r"[^\w\s]")
+
+
+def pasted_posts():
+    """The non-empty, stripped lines of PASTED_POSTS in the notebook source (None when no cell assigns it)."""
+    source = cell_defining("PASTED_POSTS")
+    if source is None:
+        return None
+    namespace = {}
+    exec(compile(source, "the paste box cell", "exec"), namespace)
+    return [line.strip() for line in str(namespace.get("PASTED_POSTS", "")).splitlines() if line.strip()]
+
+
+def word_runs(text, size=PASTE_RUN):
+    """Every run of size words of a text: lower case, links and account names masked, punctuation removed."""
+    words = PUNCTUATION.sub(" ", replay_mask(text).lower()).split()
+    return {tuple(words[index:index + size]) for index in range(len(words) - size + 1)}
+
+
+def shared_runs(examples, texts):
+    """(example, post) pairs that share a run of PASTE_RUN words."""
+    runs = {}
+    for example in examples:
+        for run in word_runs(example):
+            runs.setdefault(run, example)
+    firsts, found = {run[0] for run in runs}, []
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        words = PUNCTUATION.sub(" ", replay_mask(text).lower()).split()
+        for index in range(len(words) - PASTE_RUN + 1):
+            if words[index] in firsts and tuple(words[index:index + PASTE_RUN]) in runs:
+                found.append((runs[tuple(words[index:index + PASTE_RUN])], text))
+                break
+    return found
+
+
+def check_paste_box(report):
+    """The paste box (static): 8 to 12 hand-written examples, no account name, no link, no abbreviation for artificial
+    intelligence, and no run of six words shared with the sample or the replay file."""
+    import pandas as pd
+    examples = pasted_posts()
+    if not report.check(examples is not None, "chapter 12: a code cell assigns PASTED_POSTS"):
+        return
+    handles = [example for example in examples if "@" in example]
+    links = [example for example in examples if re.search(r"https?://|www\.", example, flags=re.IGNORECASE)]
+    abbreviation = [example for example in examples if re.search(r"\bA[I]\b", example)]
+    report.check(PASTE_RANGE[0] <= len(examples) <= PASTE_RANGE[1] and not handles and not links and not abbreviation,
+                 f"chapter 12: PASTED_POSTS holds {PASTE_RANGE[0]} to {PASTE_RANGE[1]} non-empty lines, none with an "
+                 "@, a link or the two-letter abbreviation for artificial intelligence",
+                 f"{len(examples)} lines; with @ {handles}; with a link {links}; with the abbreviation {abbreviation}")
+    sample = pd.read_parquet(REPO_DIR / SAMPLE_SOURCE, columns=["tweet"])["tweet"].tolist()  # every row, in any order
+    replay = pd.read_parquet(REPO_DIR / REPLAY_FILE, columns=["text"])["text"].tolist()
+    found = shared_runs(examples, sample + replay)
+    report.check(not found, f"chapter 12: no example of PASTED_POSTS shares a run of {PASTE_RUN} words (lower case, "
+                 "links and account names masked, punctuation removed) with a post of the sample "
+                 f"({len(sample)} posts) or of the replay file ({len(replay)} posts)",
+                 "; ".join(f"{example[:40]!r} ~ {text[:60]!r}" for example, text in found[:3]))
+
+
+def check_paste_full(report):
+    """Full check: the examples share no run of six words with the two whole datasets (the local copies)."""
+    import pandas as pd
+    examples = pasted_posts() or []
+    copies = {"TimKoornstra/financial-tweets-sentiment": (FULL_SOURCE, "tweet", "scripts/download_data.sh"),
+              "StephanAkkerman/financial-tweets": (REPLAY_COPY, "text", "scripts/make_replay_sample.sh")}
+    for dataset, (copy, column, command) in copies.items():
+        path = REPO_DIR / copy
+        if not report.check(path.is_file(), f"full: local copy of {dataset} for the paste box comparison",
+                            "" if path.is_file() else f"{copy} not found; run {command} first"):
+            continue
+        texts = pd.read_parquet(path, columns=[column])[column].tolist()
+        found = shared_runs(examples, texts)
+        report.check(bool(examples) and not found,
+                     f"full: no example of PASTED_POSTS shares a run of {PASTE_RUN} words with a post of {dataset} "
+                     f"({len(texts):,} posts)", "; ".join(f"{example[:40]!r} ~ {text[:60]!r}" for example, text in found[:3]))
+
+
+def check_paste_output(report, label, executed):
+    """The executed notebook printed one row per pasted line, each with both calls."""
+    examples = pasted_posts() or []
+    lines = [line for line in executed_lines(executed) if line.startswith("[paste] ")]
+    match = PASTE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    report.check(match is not None and int(match.group(1)) == int(match.group(2)) == len(examples) > 0
+                 and match.group(3) == "True",
+                 f"{label}: the paste box printed one row per non-empty line of PASTED_POSTS ({len(examples)}), each "
+                 "with a sentiment call and a level or none", " | ".join(lines) or "no [paste] line")
+
+
 def check_replay_source(report, label, switches):
     """Every check run reads the replay file from the repository, never from a web address."""
     source = switches.get("REPLAY_SOURCE")
@@ -3808,6 +3904,7 @@ def quick(report, defaults, others, overrides, rules=None):
             executed = REPO_DIR / switches["WORK_DIR"] / "executed.ipynb"
             check_replay_section(report, label, replay_printed(report, label, executed), switches, executed)
             buckets.add(switches["REPLAY_BUCKET"])
+            check_paste_output(report, label, executed)
         if brief is not None:
             check_replay_source(report, label, switches)
             check_format(report, label, brief, rules)
@@ -3823,6 +3920,7 @@ def quick(report, defaults, others, overrides, rules=None):
 
 def full(report, defaults, overrides, rules=None):
     check_levels_full(report)
+    check_paste_full(report)
     parameters = {"DATA_SOURCE": FULL_SOURCE, **LOCAL_LEVEL_SOURCES, "REPLAY_SOURCE": REPLAY_FILE, **overrides}
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
@@ -3849,6 +3947,7 @@ def full(report, defaults, overrides, rules=None):
     check_crowd_output(report, "full run", executed, switches)
     check_replay_source(report, "full run", switches)
     check_replay_section(report, "full run", replay_printed(report, "full run", executed), switches, executed)
+    check_paste_output(report, "full run", executed)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -3923,6 +4022,7 @@ def main():
     check_replay_file(report)
     check_replay_switches(report, defaults, others)
     check_replay_reading(report)
+    check_paste_box(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
