@@ -2853,6 +2853,8 @@ def draw_buckets(rows, shares_key, names, labels, title, axis=None):
     for name, label in zip(names, labels):
         values = [np.nan if row[shares_key][name] is None else row[shares_key][name] for row in rows]
         axis.plot(starts, values, marker="o", markersize=3, label=label)
+    pad = max((starts.max() - starts.min()) * 0.03, pd.Timedelta(days=3))
+    axis.set_xlim(starts.min() - pad, starts.max() + pad)  # every bucket of the period, blank ones at the ends too
     axis.set_ylim(0, 1)
     axis.set_ylabel("share of posts")
     axis.set_title(title)
