@@ -201,7 +201,7 @@ brief["dataset"]
 # %% [markdown]
 # ## 1. Loading
 #
-# We read two columns of the file, `tweet` and `sentiment`, into one table, `df_all`, with three columns: `post_id`, `text` and `label`. The third column of the file, `url`, is never read. `df_all` holds every post and stays untouched until the end of the notebook; later chapters take posts from it. Nothing is removed while reading: empty posts and repeated posts stay (chapter 2 counts them).
+# We read two columns of the file, `tweet` and `sentiment`, into one table, `df_all`, with three columns: `post_id`, `text` and `label` (the end of this chapter adds a fourth, `has_ticker`). The third column of the file, `url`, is never read. `df_all` holds every post and stays untouched until the end of the notebook; later chapters take posts from it. Nothing is removed while reading: empty posts and repeated posts stay (chapter 2 counts them).
 #
 # **Ids.** Every post gets a stable id, `post_id`, made from its row in the file: `tim:0` is the first row, `tim:1` the second, and so on. The id comes from the position in the file, not from random numbers, so with the same data source the same post gets the same id on every run. A file that already carries a column `row` (the repository's small sample, which keeps the row of every post in the full file) gives its posts the ids `tim:<row>` from that column instead, so a post has the same id in the sample and in the full file. An empty text becomes an empty string.
 #
@@ -221,7 +221,7 @@ brief["dataset"]
 #
 # ## 1. 加载
 #
-# 从文件里读两列：`tweet` 和 `sentiment`，整理成一张表 `df_all`，三列：`post_id`、`text`、`label`。文件的第三列 `url` 从不读入。`df_all` 存着全部帖子，一直原样留到笔记本最后，后面的章节从里面取帖子。读的时候一条不删：空帖和重复帖都留着（第 2 章会数它们）。
+# 从文件里读两列：`tweet` 和 `sentiment`，整理成一张表 `df_all`，三列：`post_id`、`text`、`label`（本章最后再加第四列 `has_ticker`）。文件的第三列 `url` 从不读入。`df_all` 存着全部帖子，一直原样留到笔记本最后，后面的章节从里面取帖子。读的时候一条不删：空帖和重复帖都留着（第 2 章会数它们）。
 #
 # **编号。** 每条帖子有一个稳定的编号 `post_id`，由它在文件里的行号组成：`tim:0` 是第一行，`tim:1` 是第二行，依此类推。编号来自帖子在文件里的位置，不用随机数，所以数据来源不变时，同一条帖子每次运行的编号都一样。如果文件里已经有一列 `row`（仓库里那份小样本就有，记着每条帖子在完整文件里的行号），就用这一列给编号 `tim:<row>`，这样同一条帖子在样本里和完整文件里编号相同。空的正文变成空字符串。
 #
@@ -1510,7 +1510,7 @@ def evaluate(true_labels, predicted_labels, labels=CLASS_LABELS):
 # 后面的章节要用一个模型给帖子打分。按**验证集上的 macro-F1** 来选（这个指标第 8 章解释）；测试集不参与选择。分数一样时选排在前面的网络（先词数统计，再 TF-IDF，再平均词向量）。每个验证分数和选择结果都写进简报。
 
 # %%
-# Score both networks on the validation set and choose the better one.
+# Score every network on the validation set and choose the best one.
 models = {  # model name -> fitted network and the vectors it reads
     "count_network": {"model": model_count, "vectors": "count", "history": history_count},
     "tfidf_network": {"model": model_tfidf, "vectors": "tfidf", "history": history_tfidf},
@@ -1694,16 +1694,16 @@ print(f"Test posts: {len(test_df):,}; with the same original text as a training 
 # %% [markdown]
 # ### Predictions on the test set
 #
-# Both networks and both baselines label every test post. The baselines ignore the text, so they get a dummy column of zeros as input; scikit-learn's `DummyClassifier` does the guessing, and we check that "always majority" really guesses the most frequent training label.
+# The three networks and both baselines label every test post. The baselines ignore the text, so they get a dummy column of zeros as input; scikit-learn's `DummyClassifier` does the guessing, and we check that "always majority" really guesses the most frequent training label.
 #
 # ***
 #
 # ### 在测试集上做判断
 #
-# 两个网络和两条对照线都给每条测试帖判一个类别。对照线不看文字，所以只喂给它一列全是 0 的假输入；猜的活由 scikit-learn 的 `DummyClassifier` 干。我们还核对「永远猜多数」猜的确实是训练集里最多的那一类。
+# 三个网络和两条对照线都给每条测试帖判一个类别。对照线不看文字，所以只喂给它一列全是 0 的假输入；猜的活由 scikit-learn 的 `DummyClassifier` 干。我们还核对「永远猜多数」猜的确实是训练集里最多的那一类。
 
 # %%
-# Label the test set with both networks and both baselines.
+# Label the test set with every network and both baselines.
 from sklearn.dummy import DummyClassifier  # baselines that ignore the input
 
 BASELINES = ["always_majority", "uniform_random"]

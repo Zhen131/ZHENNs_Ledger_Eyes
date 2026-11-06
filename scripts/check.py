@@ -102,11 +102,10 @@ SENTIMENT_MODELS = ["count_network", "tfidf_network", "word2vec_network"]  # the
 SENTIMENT_BASELINES = ["always_majority", "uniform_random"]
 SENTIMENT_SUBSETS = ["all_test", "test_has_ticker"]
 SPLIT_PARTS = ["train", "validation", "test"]
-# Switches the removed chapters read; none of them may come back into the switch cell.
-REMOVED_SWITCH_PATTERN = re.compile(r"TOPIC_|N_TOPICS$|DRAWER_WORDS_FILE$|N_OTHER_GROUPS$|BULLISH_THRESHOLD$|"
-                                    r"BEARISH_THRESHOLD$|MIN_TOPIC_POSTS$|MIN_RATE_GAP$|MIN_BULLISH_BEARISH_POSTS$|"
-                                    r"EMOTION_|DATED_|NEWS_|DAILY_MIN_POSTS$|NEW_WORD_|EVENT_|LAYER_GAP$|PRICE_SOURCE$|"
-                                    r"FEAR_GREED_SOURCE$|VALIDATION_MIN_DAYS$|MEDIA_WINDOW_DAYS$|LAUNCH_PANEL$|BTC_ONLY$")
+# Every switch of the notebook, in order: the switch cell holds exactly these (so no switch of a removed chapter is left).
+ALL_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS", "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS",
+                "KEEP_NEGATIONS", "BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE", "WORD2VEC_DIM", "WORD2VEC_WINDOW",
+                "WORD2VEC_MIN_COUNT", "WORD2VEC_EPOCHS"]
 # Chapter 1: what a ticker is. Locked (only add): texts that must count and texts that must not.
 TICKER_MUST_MATCH = ["$TSLA", "$tsla", "$F", "$BRK.B", "($AAPL)", "$NVDA's", "buying more $SPY."]
 TICKER_MUST_NOT_MATCH = ["$100", "$5.20", "$TOOLONG", "abc$TSLA", "a lone $ sign", "$"]
@@ -1305,13 +1304,14 @@ def check_chapters(report):
 
 def check_switch_cell(report, defaults, others):
     """The switch cell's defaults and other values, and the switch check cell run from the source."""
-    removed = sorted(name for name in defaults if REMOVED_SWITCH_PATTERN.match(name))
+    removed = sorted(name for name in defaults if name not in ALL_SWITCHES)  # switches of removed chapters, or unknown
     report.check(defaults.get("DATA_SOURCE") == DEFAULT_DATA_SOURCE and defaults.get("TICKER_ONLY") is False
-                 and others.get("TICKER_ONLY") is True and not removed,
+                 and others.get("TICKER_ONLY") is True and not removed and list(defaults) == ALL_SWITCHES,
                  "switch cell: DATA_SOURCE defaults to the pinned Hugging Face file, TICKER_ONLY defaults to False with "
-                 "True as its other value, and no switch of a removed chapter is left",
+                 "True as its other value, and the switch cell holds exactly the switches of ALL_SWITCHES, in order (so "
+                 "no switch of a removed chapter is left)",
                  f"DATA_SOURCE {defaults.get('DATA_SOURCE')!r}, TICKER_ONLY {defaults.get('TICKER_ONLY')!r} / "
-                 f"{others.get('TICKER_ONLY')!r}, removed switches still there {removed}")
+                 f"{others.get('TICKER_ONLY')!r}, switches not in ALL_SWITCHES {removed}, order {list(defaults)}")
     report.check(defaults.get("N_CLASSES") == 3 and others.get("N_CLASSES") == 2,
                  "switch cell: N_CLASSES defaults to 3 (bearish, neutral, bullish), with 2 as its other value",
                  f"default {defaults.get('N_CLASSES')!r}, other {others.get('N_CLASSES')!r}")
