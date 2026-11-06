@@ -3,7 +3,7 @@
 #
 # This notebook reads a public set of short English posts about stocks and markets, each labelled bullish, neutral or bearish, and turns what it finds into one small, fixed-format result file called the **brief**. Other programs read the brief, not the notebook.
 #
-# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Levels: what does a post pay attention to? · 10 Reading the crowd: two dashboards · 11 The brief: check and save.
+# Chapters: 0 The question and the data · 1 Loading · 2 A first look · 3 Cleaning · 4 Tokenization · 5 Training, validation and test sets · 6 Vectorization · 7 Models · 8 Evaluation · 9 Levels: what does a post pay attention to? · 10 Reading the crowd: two dashboards · 11 Replay: one ticker, week by week · 12 The brief: check and save.
 #
 # Run it from top to bottom. Every setting you may want to change is in the switch cell below.
 #
@@ -13,7 +13,7 @@
 #
 # 这个笔记本读一份公开的英文股票短帖，每条帖子都标好了看多、中性或看空，把看到的东西整理成一份固定格式的小文件，叫「简报」（brief）。别的程序读的是简报，不是笔记本。
 #
-# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 六级：帖子在关注哪一层？ · 10 拿来用：两个仪表盘 · 11 简报：校验与保存。
+# 章节：0 问题与数据 · 1 加载 · 2 看一眼 · 3 清洗 · 4 分词 · 5 训练集、验证集和测试集 · 6 向量化 · 7 模型 · 8 评估 · 9 六级：帖子在关注哪一层？ · 10 拿来用：两个仪表盘 · 11 回放：一只股票，一周一周看 · 12 简报：校验与保存。
 #
 # 从头到尾运行即可。可能要改的设置都在下面的开关格里。
 
@@ -50,6 +50,13 @@ LEVEL_REVIEW_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_E
 LEVEL_SECOND_REVIEW_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/labels/levels-review-second-model.csv"  # default: the review of the same rows by a second, larger language model, in this project's repository on GitHub; or a local path, another address with the same columns, or "" (not read) (chapter 9)
 LEVEL_BALANCE = True  # default: True (the same number of posts from each of the seven classes of chapter 9); two-state, other: False (every labelled post)
 LEVEL_EPOCHS = 20  # default: 20; or any positive integer (passes over the training set of chapter 9)
+REPLAY_SOURCE = "https://raw.githubusercontent.com/Zhen131/ZHENNs_Ledger_Eyes/main/samples/replay-tweets.parquet"  # default: the replay file of this project's repository on GitHub (readable once the repository is pushed); or a local path such as "samples/replay-tweets.parquet" (chapter 11)
+REPLAY_TICKERS = ["NVDA", "IBM", "SPY"]  # default: ["NVDA", "IBM", "SPY"], the three tickers of the replay file (a fixed list, not meant to be changed)
+REPLAY_TICKER = "NVDA"  # default: "NVDA"; two-state, other: "SPY" (or "IBM"; one of REPLAY_TICKERS, upper case, without $)
+REPLAY_START = "2026-04-06"  # default: "2026-04-06" (the first Monday after the gap in the data); or any UTC date "YYYY-MM-DD" (the day is included)
+REPLAY_END = "2026-10-21"  # default: "2026-10-21" (the last day of the replay file); or any UTC date "YYYY-MM-DD" not before REPLAY_START (the day is included)
+REPLAY_BUCKET = "W"  # default: "W" (weeks, Monday to Sunday); two-state, other: "M" (calendar months)
+REPLAY_MIN_BUCKET_POSTS = 20  # default: 20; or any positive integer (fewest posts a week or month needs before its shares are drawn)
 
 # %% [markdown]
 # ## Setup
@@ -123,6 +130,8 @@ for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "pyarrow", "hugg
 
 # %%
 # Stop early on switch values the notebook cannot work with.
+from datetime import date  # standard library: calendar dates
+
 if N_CLASSES not in (2, 3):
     raise ValueError(f"N_CLASSES must be 2 or 3, got {N_CLASSES!r}")
 if not isinstance(SAMPLE_PER_CLASS, int) or SAMPLE_PER_CLASS < 1:
@@ -146,6 +155,24 @@ if not LEVEL_LABELS_SOURCE.strip():
     raise ValueError("LEVEL_LABELS_SOURCE must not be empty: chapter 9 needs the level label file")
 if not isinstance(LEVEL_BALANCE, bool):
     raise ValueError(f"LEVEL_BALANCE must be True or False, got {LEVEL_BALANCE!r}")
+if not isinstance(REPLAY_SOURCE, str) or not REPLAY_SOURCE.strip():
+    raise ValueError(f"REPLAY_SOURCE must be a path or a web address, got {REPLAY_SOURCE!r}")
+if REPLAY_TICKER not in REPLAY_TICKERS:
+    raise ValueError(f"REPLAY_TICKER must be one of {REPLAY_TICKERS} (upper case, without $), got {REPLAY_TICKER!r}")
+replay_dates = {}
+for name, value in [("REPLAY_START", REPLAY_START), ("REPLAY_END", REPLAY_END)]:
+    try:
+        replay_dates[name] = date.fromisoformat(value) if isinstance(value, str) and len(value) == 10 else None
+    except ValueError:
+        replay_dates[name] = None
+    if replay_dates[name] is None:
+        raise ValueError(f"{name} must be a date written as \"YYYY-MM-DD\", got {value!r}")
+if replay_dates["REPLAY_START"] > replay_dates["REPLAY_END"]:
+    raise ValueError(f"REPLAY_START ({REPLAY_START}) must not be later than REPLAY_END ({REPLAY_END})")
+if REPLAY_BUCKET not in ("W", "M"):
+    raise ValueError(f"REPLAY_BUCKET must be \"W\" (weeks) or \"M\" (months), got {REPLAY_BUCKET!r}")
+if isinstance(REPLAY_MIN_BUCKET_POSTS, bool) or not isinstance(REPLAY_MIN_BUCKET_POSTS, int) or REPLAY_MIN_BUCKET_POSTS < 1:
+    raise ValueError(f"REPLAY_MIN_BUCKET_POSTS must be a positive integer, got {REPLAY_MIN_BUCKET_POSTS!r}")
 print("Switches look fine.")
 
 # %% [markdown]
@@ -2649,7 +2676,322 @@ print(f"[crowd] read_the_crowd took {crowd_seconds:.2f} s on {crowd['n_posts']} 
 crowd["cross_counts"]
 
 # %% [markdown]
-# ## 11. The brief: check and save
+# ## 11. Replay: one ticker, week by week
+#
+# **Without this chapter**, `read_the_crowd` only reads posts someone hands it, and showing it on real, dated posts would need a key to some social network. This chapter replays a small file of real tweets that comes with the repository (`samples/replay-tweets.parquet`, read through `REPLAY_SOURCE`): 5,179 tweets from the last twelve months of the public dataset [StephanAkkerman/financial-tweets](https://huggingface.co/datasets/StephanAkkerman/financial-tweets) that name **NVDA** (a stock many people talk about), **IBM** (a stock known for its dividend) or **SPY** (a fund that follows the whole S&P 500). Author names, pictures and links were removed before the file was made; account names read `@user` and links `http`.
+#
+# It picks one ticker (`REPLAY_TICKER`) and a period (`REPLAY_START` to `REPLAY_END`, both days included), reads every post with both models in one go, cuts the calls into weeks (or months, `REPLAY_BUCKET`) and draws two charts: the share of each level, week by week, and the share of each sentiment class, week by week. A week with fewer than `REPLAY_MIN_BUCKET_POSTS` posts (or fewer posts on the ladder) is left blank instead of drawing a share from a handful of posts. Then come the two dashboards for the whole period and, last, the three tickers side by side, month by month.
+#
+# How to read it: **the ladder measures this crowd's appetite for risk, not whether the stock went up or down**; the closer to levels 1 and 2, the calmer the attention, the closer to 5 and 6, the more heated. The charts only describe the past: who talked about what, and how much. The tweets come from finance accounts and traders followed by a bot, not from small investors at large. The models learned from much shorter posts of another dataset, so read the shares as a picture, not as a measurement. IBM has few posts (about two a week): most of its weeks stay blank, and its months are a rough reference only.
+#
+# ***
+#
+# ## 11. 回放：一只股票，一周一周看
+#
+# **没有这一章时**，`read_the_crowd` 只能读别人递给它的帖子，想在真实的、带日期的帖子上演示，就得有某个社交网站的钥匙。这一章回放仓库里自带的一份小文件（`samples/replay-tweets.parquet`，经 `REPLAY_SOURCE` 读入）：从公开数据集 [StephanAkkerman/financial-tweets](https://huggingface.co/datasets/StephanAkkerman/financial-tweets) 最近 12 个月里抽出的 5,179 条推文，都提到了 **NVDA**（大家都在炒的一只）、**IBM**（以分红出名的一只）或 **SPY**（跟踪整个标普 500 的基金）。做文件之前已经去掉作者名、头像和链接；正文里的账号写成 `@user`，链接写成 `http`。
+#
+# 它选一只股票（`REPLAY_TICKER`）和一段日期（`REPLAY_START` 到 `REPLAY_END`，两头的那天都算），把所有帖子一次交给两个模型判定，再把判定按周（或按月，`REPLAY_BUCKET`）切开，画两张图：每一级一周一周占几成，每个多空类一周一周占几成。帖子数（或站上梯子的帖子数）少于 `REPLAY_MIN_BUCKET_POSTS` 的周留空，不拿几条帖子硬算占比。接着是整段时间的两个仪表盘，最后是三只股票按月并排。
+#
+# 怎么读：**梯子量的是这群人的风险偏好，不是股票涨了还是跌了**；越靠第 1、2 级，关注越冷静，越靠第 5、6 级越狂热。这些图只陈述过去：谁在谈什么、谈了多少。推文来自一个机器人关注的财经大 V 和交易员，不是广大散户。模型是在另一份短得多的帖子上训的，所以占比当一张参考图看，不当测量结果。IBM 帖子很少（大约一周两条）：它大多数周是空的，按月也只能粗略参考。
+
+# %%
+# Read the replay file and check that the chosen ticker is in it.
+import hashlib  # standard library: SHA-256
+import io  # standard library: bytes as a file
+import urllib.request  # standard library: reads a web address
+from pathlib import Path  # standard library: file paths
+
+import pandas as pd  # tables
+import pyarrow.parquet as pq  # reads the file's column names before its columns
+
+REPLAY_COLUMNS = ["post_id", "created_at", "tickers", "text", "likes", "views"]  # the columns the replay file holds
+
+
+def read_replay(source):
+    """Read the replay file from a local path or a web address: (table with REPLAY_COLUMNS, SHA-256 of the bytes)."""
+    try:
+        if "://" in source:
+            with urllib.request.urlopen(source, timeout=60) as response:
+                data = response.read()
+        else:
+            data = Path(source).read_bytes()
+        columns = pq.ParquetFile(io.BytesIO(data)).schema_arrow.names
+    except (OSError, ValueError) as error:  # no such file, address not found, no network, not a parquet file
+        raise FileNotFoundError(f"REPLAY_SOURCE could not be read from {source!r} ({type(error).__name__}: {error}). "
+                                "Give a local path such as 'samples/replay-tweets.parquet' (on Colab, upload the file "
+                                "first).") from None
+    missing = [column for column in REPLAY_COLUMNS if column not in columns]
+    if missing:
+        raise ValueError(f"The replay file read through REPLAY_SOURCE ({source!r}) lacks the columns {missing}")
+    table = pd.read_parquet(io.BytesIO(data), columns=REPLAY_COLUMNS)  # index: the row in the file, from 0
+    table["tickers"] = table["tickers"].map(lambda names: [str(name) for name in names])
+    table["created_at"] = pd.to_datetime(table["created_at"], utc=True)
+    return table, hashlib.sha256(data).hexdigest()
+
+
+replay_table, replay_sha256 = read_replay(REPLAY_SOURCE)
+replay_counts = {ticker: int(replay_table["tickers"].map(lambda names: ticker in names).sum()) for ticker in REPLAY_TICKERS}
+if not replay_counts.get(REPLAY_TICKER):
+    raise ValueError(f"REPLAY_TICKER is {REPLAY_TICKER!r}, but no post of the replay file read through REPLAY_SOURCE "
+                     f"({REPLAY_SOURCE!r}) names it; posts per ticker: {replay_counts}")
+print(f"[replay] read {len(replay_table):,} posts from {REPLAY_SOURCE} (sha256 {replay_sha256[:12]}...), "
+      f"{replay_table['created_at'].min():%Y-%m-%d} to {replay_table['created_at'].max():%Y-%m-%d}; "
+      f"posts per ticker: {replay_counts}")
+
+# %% [markdown]
+# ### Weeks and months
+#
+# Three small functions do the cutting; the counting itself is left to chapter 10's `crowd_from_calls`, so a week is counted exactly as a whole batch is. `replay_posts` keeps the posts that name a ticker, from the first day at 00:00 UTC up to the end of the last day. `bucket_starts` lists every week (named by its Monday) or month (named by its first day) of a period, empty ones included, so that a gap in the data shows as a gap and not as a missing week. `crowd_by_bucket` hands the calls of each week or month to `crowd_from_calls` and keeps the counts; the shares of a week with fewer than `min_posts` posts (for the sentiment shares) or fewer than `min_posts` posts on the ladder (for the level shares) are `None`, so they are not drawn. When the period does not start on a Monday (or on the 1st), its first and last weeks (or months) hold only part of their days but keep the name of their Monday (or 1st).
+#
+# ***
+#
+# ### 周和月
+#
+# 切分靠三个小函数；计数本身交给第 10 章的 `crowd_from_calls`，所以一周的数法和一整批的数法完全一样。`replay_posts` 留下提到某只股票的帖子，从第一天 0 点（UTC）到最后一天结束。`bucket_starts` 列出一段时间里的每一周（用周一命名）或每个月（用 1 日命名），空的也列，这样数据里的缺口在图上就是缺口，而不是少了一周。`crowd_by_bucket` 把每周或每月的判定交给 `crowd_from_calls`，留下条数；帖子数少于 `min_posts` 的周，多空占比是 `None`；站上梯子的帖子少于 `min_posts` 的周，六级占比是 `None`，图上都不画。日期段不从周一（或 1 日）开始时，首尾两周（或两个月）只包含其中一部分天，但仍用那个周一（或 1 日）命名。
+
+# %%
+# Cut the calls of the replay into weeks or months, and count each with crowd_from_calls: definitions only.
+def replay_posts(table, tickers, start, end):
+    """The posts of table that name one of tickers (a list), from start (00:00 UTC) up to the end of end (the day is
+    included)."""
+    first = pd.Timestamp(start, tz="UTC")
+    after = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
+    keep = table["tickers"].map(lambda names: any(ticker in names for ticker in tickers)) & \
+        (table["created_at"] >= first) & (table["created_at"] < after)
+    return table[keep]
+
+
+def read_crowd_of(texts):
+    """read_the_crowd for a Series of texts; with no text at all the counts of no post (no model is asked)."""
+    return read_the_crowd(texts) if len(texts) else crowd_from_calls(pd.Series([], dtype=object), [])
+
+
+def bucket_of(times, bucket):
+    """The start of the week (its Monday) or of the month (its first day) of every time, at 00:00 UTC."""
+    days = pd.Series(pd.to_datetime(times, utc=True)).dt.floor("D")
+    back = days.dt.weekday if bucket == "W" else days.dt.day - 1
+    return days - pd.to_timedelta(back, unit="D")
+
+
+def bucket_starts(start, end, bucket):
+    """Every week ("W") or month ("M") from the one holding start to the one holding end, in order, empty ones too."""
+    first, last = bucket_of([pd.Timestamp(start, tz="UTC"), pd.Timestamp(end, tz="UTC")], bucket)
+    return list(pd.date_range(first, last, freq="7D" if bucket == "W" else "MS"))
+
+
+def crowd_by_bucket(calls, times, bucket, start, end, min_posts):
+    """One row per week or month: its start, the posts, the posts on the ladder, the counts per level and per
+    sentiment class, and the shares (None below min_posts). calls: a table with the columns sentiment and level, in
+    the order of times."""
+    keys = bucket_of(times, bucket).reset_index(drop=True)
+    rows = []
+    for first in bucket_starts(start, end, bucket):
+        part = calls[(keys == first).to_numpy()]
+        crowd = crowd_from_calls(part["sentiment"], part["level"])
+        n_with_level = crowd["n_posts"] - crowd["n_none"]
+        rows.append({
+            "start": first.strftime("%Y-%m-%d"),
+            "n_posts": crowd["n_posts"],
+            "n_with_level": n_with_level,
+            "level_counts": {level: int(crowd["cross_counts"][level].sum()) for level in LEVEL_LABELS},
+            "sentiment_counts": {name: int((crowd["calls"]["sentiment"] == name).sum())
+                                 for name in crowd["sentiment_shares"]},
+            "level_shares": {level: (share if n_with_level >= min_posts else None)
+                             for level, share in crowd["level_shares"].items()},
+            "sentiment_shares": {name: (share if crowd["n_posts"] >= min_posts else None)
+                                 for name, share in crowd["sentiment_shares"].items()},
+        })
+    return rows
+
+
+def buckets_table(rows):
+    """A table of the rows of crowd_by_bucket for reading: posts, posts judged none, and the level shares in %."""
+    table = pd.DataFrame({
+        "start": [row["start"] for row in rows],
+        "posts": [row["n_posts"] for row in rows],
+        "none": [row["n_posts"] - row["n_with_level"] for row in rows],
+        **{LEVEL_DISPLAY_NAMES[level]: [None if row["level_shares"][level] is None
+                                        else round(100 * row["level_shares"][level], 1) for row in rows]
+           for level in LEVEL_LABELS},
+    })
+    table["note"] = ["" if row["level_shares"][LEVEL_LABELS[0]] is not None else "too few posts" for row in rows]
+    return table
+
+# %% [markdown]
+# ### The chosen ticker, week by week
+#
+# The next cell keeps the posts of `REPLAY_TICKER` in the chosen period, reads them all with `read_the_crowd` in one call (the posts keep their row in the file as their index, so every call stays next to its time), and counts the calls per week (or month). It prints how many posts there are, how many were judged `none`, how many weeks were too thin to draw, and the table of level shares in percent. The two charts follow: one line per level, and one line per sentiment class; a blank stretch is a week with too few posts, not a share of zero.
+#
+# ***
+#
+# ### 选中的那只，一周一周看
+#
+# 下一格留下 `REPLAY_TICKER` 在所选日期段里的帖子，用 `read_the_crowd` 一次读完（帖子沿用它在文件里的行号当索引，每条判定都能对上它的时间），再按周（或按月）数。它打印帖子数、被判成 `none` 的条数、有几周太少画不出来，以及六级占比表（百分数）。后面是两张图：每一级一条线，每个多空类一条线；空着的一段是帖子太少的周，不是占比为 0。
+
+# %%
+# Read the chosen ticker's posts with both models and count them per week or month.
+replay_chosen = replay_posts(replay_table, [REPLAY_TICKER], REPLAY_START, REPLAY_END)
+replay_started = time.perf_counter()
+replay_crowd = read_crowd_of(replay_chosen["text"])  # one call for the whole period; index: the row in the file
+replay_seconds = time.perf_counter() - replay_started
+replay_buckets = crowd_by_bucket(replay_crowd["calls"], replay_chosen["created_at"], REPLAY_BUCKET, REPLAY_START,
+                                 REPLAY_END, REPLAY_MIN_BUCKET_POSTS)
+replay_unit = "week" if REPLAY_BUCKET == "W" else "month"
+replay_thin = sum(row["level_shares"][LEVEL_LABELS[0]] is None for row in replay_buckets)
+print(f"[replay] {REPLAY_TICKER}, {REPLAY_START} to {REPLAY_END}, by {replay_unit}: {replay_crowd['n_posts']} posts, "
+      f"{replay_crowd['n_none']} judged none, {len(replay_buckets)} {replay_unit}s, {replay_thin} with too few posts "
+      f"on the ladder (fewer than {REPLAY_MIN_BUCKET_POSTS}); read_the_crowd took {replay_seconds:.1f} s")
+buckets_table(replay_buckets)
+
+# %%
+# Chart 1: the share of each level, week by week (or month by month); chart 2: the share of each sentiment class.
+def draw_buckets(rows, shares_key, names, labels, title, axis=None):
+    """One line per name over the buckets; a bucket whose share is None is left blank."""
+    axis = axis if axis is not None else plt.subplots(figsize=(12, 4.2))[1]
+    starts = pd.to_datetime([row["start"] for row in rows])
+    for name, label in zip(names, labels):
+        values = [np.nan if row[shares_key][name] is None else row[shares_key][name] for row in rows]
+        axis.plot(starts, values, marker="o", markersize=3, label=label)
+    axis.set_ylim(0, 1)
+    axis.set_ylabel("share of posts")
+    axis.set_title(title)
+    axis.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.0, 1.0))
+    return axis
+
+
+replay_period = f"{REPLAY_TICKER}, {REPLAY_START} to {REPLAY_END}, by {replay_unit}"
+draw_buckets(replay_buckets, "level_shares", LEVEL_LABELS, [LEVEL_DISPLAY_NAMES[level] for level in LEVEL_LABELS],
+             f"Levels per {replay_unit} ({replay_period}; posts judged none left out; blank: too few posts)")
+plt.tight_layout()
+plt.show()
+replay_classes = list(replay_crowd["sentiment_shares"])
+draw_buckets(replay_buckets, "sentiment_shares", replay_classes, replay_classes,
+             f"Sentiment per {replay_unit} ({replay_period}; blank: too few posts)")
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### The whole period
+#
+# The same posts as one batch: chapter 10's two dashboards and cross table, and the sentence from its template. Below them, one sentence says which level was the largest over the whole period and in which week (or month) its share was the highest; it describes these posts and nothing else. The last line checks that the weeks add up to the whole period.
+#
+# ***
+#
+# ### 整段时间
+#
+# 同一批帖子当成一整批：第 10 章的两个仪表盘、交叉表和模板拼出的那句话。下面再用一句话说整段时间里哪一级最大、它在哪一周（或哪个月）占比最高；只是描述这些帖子，别无他意。最后一行核对各周加起来等于整段。
+
+# %%
+# The whole period as one batch, one sentence about it, and a check that the buckets add up to it.
+import json  # standard library: JSON
+
+draw_the_crowd(replay_crowd)
+print(replay_crowd["summary"])
+replay_on_ladder = replay_crowd["n_posts"] - replay_crowd["n_none"]
+if replay_on_ladder:
+    replay_top = max(LEVEL_LABELS, key=lambda level: (replay_crowd["level_shares"][level], -LEVEL_LABELS.index(level)))
+    drawn = [row for row in replay_buckets if row["level_shares"][replay_top] is not None]
+    if drawn:
+        peak = max(drawn, key=lambda row: row["level_shares"][replay_top])  # the first one on a tie
+        when = (f"its share was highest in the {replay_unit} of {peak['start']} "
+                f"({round(100 * peak['level_shares'][replay_top])}% of {peak['n_with_level']} posts on the ladder)")
+    else:
+        when = f"no {replay_unit} had enough posts to draw its share"
+    print(f"From {REPLAY_START} to {REPLAY_END}, {replay_on_ladder} of the {replay_crowd['n_posts']} {REPLAY_TICKER} "
+          f"posts stood on the ladder, most of them on {LEVEL_DISPLAY_NAMES[replay_top]} "
+          f"({round(100 * replay_crowd['level_shares'][replay_top])}%); {when}.")
+else:
+    print(f"From {REPLAY_START} to {REPLAY_END}, none of the {replay_crowd['n_posts']} {REPLAY_TICKER} posts stood on "
+          "the ladder.")
+whole_levels = {level: int(replay_crowd["cross_counts"][level].sum()) for level in LEVEL_LABELS}
+whole_sentiment = {name: int((replay_crowd["calls"]["sentiment"] == name).sum()) for name in replay_classes}
+print("replay check: whole period " + json.dumps({"n_posts": replay_crowd["n_posts"], "n_none": replay_crowd["n_none"],
+                                                  "level_counts": whole_levels, "sentiment_counts": whole_sentiment}))
+print(f"replay check: the {len(replay_buckets)} {replay_unit}s add up to the whole period: "
+      f"{sum(row['n_posts'] for row in replay_buckets) == replay_crowd['n_posts']}")
+replay_crowd["cross_counts"]
+
+# %% [markdown]
+# ### Three tickers side by side, month by month
+#
+# The posts of all three tickers in the same period are read with both models in one call; then each ticker's calls are counted per month (always by month here, whatever `REPLAY_BUCKET` says, because IBM has too few posts for weeks). The first table has one row per ticker and month: posts, posts judged `none`, posts on the ladder and the share of each level in percent, with "too few posts" where a month has fewer than `REPLAY_MIN_BUCKET_POSTS` posts on the ladder. The chart draws the six level shares of each ticker month by month, and the last table sums up the whole period per ticker. A post that names two of the tickers counts for both. **IBM's row rests on few posts: read it as a rough reference only.**
+#
+# ***
+#
+# ### 三只并排，按月看
+#
+# 同一段日期里三只股票的帖子一次交给两个模型判定；再把每只的判定按月数（这里不管 `REPLAY_BUCKET` 是什么都按月，因为 IBM 的帖子按周太少）。第一张表每只股票每个月一行：帖子数、被判成 `none` 的条数、站上梯子的条数和六级各占几成（百分数），站上梯子的帖子少于 `REPLAY_MIN_BUCKET_POSTS` 的月标「too few posts」。图里画每只股票六级占比按月的变化，最后一张表是整段时间每只一行的汇总。一条帖子同时提到两只，两只都算。**IBM 那一行条数很少，只能粗略参考。**
+
+# %%
+# Read the posts of all three tickers in the period at once, and count each ticker's calls per month.
+replay_any = replay_posts(replay_table, REPLAY_TICKERS, REPLAY_START, REPLAY_END)  # posts naming one of the three
+replay_all_crowd = read_crowd_of(replay_any["text"])
+replay_monthly = []
+for ticker in REPLAY_TICKERS:
+    mine = replay_posts(replay_table, [ticker], REPLAY_START, REPLAY_END)
+    calls = replay_all_crowd["calls"].loc[mine.index]
+    whole = crowd_from_calls(calls["sentiment"], calls["level"])
+    replay_monthly.append({"ticker": ticker, "n_posts": whole["n_posts"], "n_none": whole["n_none"], "whole": whole,
+                           "months": crowd_by_bucket(calls, mine["created_at"], "M", REPLAY_START, REPLAY_END,
+                                                     REPLAY_MIN_BUCKET_POSTS)})
+replay_month_table = pd.concat([buckets_table(entry["months"]).assign(ticker=entry["ticker"])
+                                for entry in replay_monthly], ignore_index=True)
+replay_month_table.insert(1, "on ladder", replay_month_table["posts"] - replay_month_table["none"])
+print(f"[replay] three tickers by month, {REPLAY_START} to {REPLAY_END}: "
+      + ", ".join(f"{entry['ticker']} {entry['n_posts']} posts" for entry in replay_monthly))
+replay_month_table.set_index(["ticker", "start"])
+
+# %%
+# The six level shares of each ticker, month by month, and the whole period per ticker.
+figure, axes = plt.subplots(1, len(replay_monthly), figsize=(17, 4.2), sharey=True)
+for axis, entry in zip(np.atleast_1d(axes), replay_monthly):
+    draw_buckets(entry["months"], "level_shares", LEVEL_LABELS, [LEVEL_DISPLAY_NAMES[level] for level in LEVEL_LABELS],
+                 f"{entry['ticker']} ({entry['n_posts']} posts)", axis=axis)
+    axis.tick_params(axis="x", labelrotation=45)
+    if axis is not np.atleast_1d(axes)[-1]:
+        axis.get_legend().remove()
+figure.suptitle(f"Levels per month, {REPLAY_START} to {REPLAY_END} (posts judged none left out; blank: too few posts)")
+plt.tight_layout()
+plt.show()
+pd.DataFrame([{"ticker": entry["ticker"], "posts": entry["n_posts"], "none": entry["n_none"],
+               **{LEVEL_DISPLAY_NAMES[level]: (None if entry["whole"]["level_shares"][level] is None
+                                               else round(100 * entry["whole"]["level_shares"][level], 1))
+                  for level in LEVEL_LABELS},
+               **{f"% {name}": (None if share is None else round(100 * share, 1))
+                  for name, share in entry["whole"]["sentiment_shares"].items()}}
+              for entry in replay_monthly]).set_index("ticker")
+
+# %% [markdown]
+# ### The replay's numbers
+#
+# The numbers of this chapter are gathered into one dictionary, `replay_result`: where the file came from (dataset, revision, license, the source read, the SHA-256 of its bytes and its rows), the ticker, the period, the kind of bucket and the threshold, and for every week (or month) its posts, its posts on the ladder, its counts per level and per sentiment class and its shares (`None` below the threshold); then the same per month for each of the three tickers. No text of any post is kept in it.
+#
+# ***
+#
+# ### 回放的数
+#
+# 这一章的数收进一个字典 `replay_result`：文件从哪来（数据集、修订号、许可证、读的是哪里、读到的字节的 SHA-256 和行数），选的股票、日期段、按周还是按月、门槛；每一周（或每个月）的帖子数、站上梯子的条数、每一级和每个多空类的条数、占比（低于门槛是 `None`）；然后是三只股票各自按月的同样这些数。里面不放任何帖子的原文。
+
+# %%
+# Gather the replay's numbers (no text of any post).
+replay_result = {
+    "source": {"dataset": "StephanAkkerman/financial-tweets", "revision": "ad27fe2d13415186a552a332cbff917530c69a29",
+               "license": "MIT", "file": REPLAY_SOURCE, "sha256": replay_sha256, "n_rows": len(replay_table)},
+    "ticker": REPLAY_TICKER,
+    "start": REPLAY_START,
+    "end": REPLAY_END,
+    "bucket": REPLAY_BUCKET,
+    "min_bucket_posts": REPLAY_MIN_BUCKET_POSTS,
+    "n_posts": replay_crowd["n_posts"],
+    "n_none": replay_crowd["n_none"],
+    "buckets": replay_buckets,
+    "monthly_by_ticker": [{"ticker": entry["ticker"], "n_posts": entry["n_posts"], "n_none": entry["n_none"],
+                           "months": entry["months"]} for entry in replay_monthly],
+}
+print("replay result: " + json.dumps(replay_result))
+
+# %% [markdown]
+# ## 12. The brief: check and save
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, the file other programs read, in three steps:
 #
@@ -2661,7 +3003,7 @@ crowd["cross_counts"]
 #
 # ***
 #
-# ## 11. 简报：校验与保存
+# ## 12. 简报：校验与保存
 #
 # 前面每一章都把结果写进了 `brief`。最后这一章把它变成笔记本真正的产出，也就是别的程序要读的那个文件，分三步：
 #

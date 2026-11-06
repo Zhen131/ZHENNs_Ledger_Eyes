@@ -115,7 +115,8 @@ SPLIT_PARTS = ["train", "validation", "test"]
 ALL_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS", "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS",
                 "KEEP_NEGATIONS", "BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE", "WORD2VEC_DIM", "WORD2VEC_WINDOW",
                 "WORD2VEC_MIN_COUNT", "WORD2VEC_EPOCHS", "LEVEL_LABELS_SOURCE", "LEVEL_REVIEW_SOURCE",
-                "LEVEL_SECOND_REVIEW_SOURCE", "LEVEL_BALANCE", "LEVEL_EPOCHS"]
+                "LEVEL_SECOND_REVIEW_SOURCE", "LEVEL_BALANCE", "LEVEL_EPOCHS", "REPLAY_SOURCE", "REPLAY_TICKERS",
+                "REPLAY_TICKER", "REPLAY_START", "REPLAY_END", "REPLAY_BUCKET", "REPLAY_MIN_BUCKET_POSTS"]
 # Chapter 1: what a ticker is. Locked (only add): texts that must count and texts that must not.
 TICKER_MUST_MATCH = ["$TSLA", "$tsla", "$F", "$BRK.B", "($AAPL)", "$NVDA's", "buying more $SPY."]
 TICKER_MUST_NOT_MATCH = ["$100", "$5.20", "$TOOLONG", "abc$TSLA", "a lone $ sign", "$"]
@@ -157,11 +158,13 @@ SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the n
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
 # The chapters, in order; the last one checks and saves the brief and must not use the network.
-CHAPTER_COUNT = 12  # chapters 0 to 11
-BRIEF_CHAPTER = 11
+START_CHAPTER_COUNT = 12  # chapters 0 to 11 before the replay chapter was added
+CHAPTER_COUNT = START_CHAPTER_COUNT + 1  # one more chapter: the replay
+BRIEF_CHAPTER = CHAPTER_COUNT - 1  # always the last one
 LEVEL_CHAPTERS = {9: "Levels: what does a post pay attention to?",
                   10: "Reading the crowd: two dashboards"}  # chapter -> title; they import no Gradio
 BRIEF_CHAPTER_TITLE = "The brief: check and save"
+DEMO_CHAPTERS = {11: "Replay: one ticker, week by week"}  # after chapter 10, before the brief; no Gradio
 BRIEF_CHAPTER_IMPORTS = {"json", "math", "pathlib", "datetime", "numpy", "pandas", "jsonschema"}  # all it may import
 
 # Text scan. Each pattern is written so that it does not match its own source line
@@ -1392,6 +1395,18 @@ def check_chapters(report):
                  "the level chapters are there with their titles ("
                  + ", ".join(f"{number}. {title}" for number, title in LEVEL_CHAPTERS.items())
                  + ") and import no Gradio (no panel)", f"titles differing {wrong_titles}; chapters importing gradio {gradio}")
+    demo_gradio = sorted(number for number in DEMO_CHAPTERS for cell in chapters.get(number, [])
+                         if cell.cell_type == "code" and "gradio" in {name.split(".")[0] for name in
+                                                                      imported_modules(ast.parse(cell.source))})
+    demo_titles = {number: titles.get(number) for number, title in DEMO_CHAPTERS.items() if titles.get(number) != title}
+    placed = all(max(LEVEL_CHAPTERS) < number < BRIEF_CHAPTER for number in DEMO_CHAPTERS)
+    report.check(not demo_gradio and not demo_titles and placed
+                 and len(numbers) == START_CHAPTER_COUNT + len(DEMO_CHAPTERS),
+                 f"the chapter count is {START_CHAPTER_COUNT} plus the demonstration chapters ("
+                 + ", ".join(f"{number}. {title}" for number, title in DEMO_CHAPTERS.items())
+                 + "), which come after reading the crowd and before the brief, with their titles, and import no Gradio",
+                 f"titles differing {demo_titles}; chapters importing gradio {demo_gradio}; placed {placed}; "
+                 f"{len(numbers)} chapters")
 
 
 # ---------------------------------------------------------------- switches, reading, tickers and the sample (chapters 1 and 2)
@@ -1442,7 +1457,11 @@ def check_switch_cell(report, defaults, others):
 SWITCH_PROBES = [("N_CLASSES", 4), ("TICKER_ONLY", "yes"), ("EMOJI_TO_WORDS", 1), ("VOCAB_SIZE", 0), ("WORD2VEC_DIM", 0),
                  ("WORD2VEC_WINDOW", -1), ("WORD2VEC_MIN_COUNT", 0), ("WORD2VEC_EPOCHS", -3),
                  ("LEVEL_LABELS_SOURCE", ""), ("LEVEL_LABELS_SOURCE", 5), ("LEVEL_REVIEW_SOURCE", None),
-                 ("LEVEL_SECOND_REVIEW_SOURCE", 1.5), ("LEVEL_BALANCE", "yes"), ("LEVEL_EPOCHS", 0), ("LEVEL_EPOCHS", -2)]
+                 ("LEVEL_SECOND_REVIEW_SOURCE", 1.5), ("LEVEL_BALANCE", "yes"), ("LEVEL_EPOCHS", 0), ("LEVEL_EPOCHS", -2),
+                 ("REPLAY_SOURCE", ""), ("REPLAY_SOURCE", None), ("REPLAY_TICKER", "TSLA"), ("REPLAY_TICKER", "nvda"),
+                 ("REPLAY_TICKER", "$NVDA"), ("REPLAY_START", "2026-13-01"), ("REPLAY_START", "2026-10-22"),
+                 ("REPLAY_END", "yesterday"), ("REPLAY_END", "2026-4-6"), ("REPLAY_BUCKET", "D"),
+                 ("REPLAY_MIN_BUCKET_POSTS", 0), ("REPLAY_MIN_BUCKET_POSTS", 2.5)]
 
 
 def cell_defining_text(marker):
@@ -3474,6 +3493,228 @@ def check_replay_file(report):
                 f"from {times.min().isoformat()} to {times.max().isoformat()}")
 
 
+REPLAY_SWITCH_DEFAULTS = {  # the replay chapter's switches and their defaults
+    "REPLAY_SOURCE": LEVEL_RAW_BASE + REPLAY_FILE,
+    "REPLAY_TICKERS": REPLAY_TICKERS,
+    "REPLAY_TICKER": "NVDA",
+    "REPLAY_BUCKET": "W",
+}
+REPLAY_TWO_STATE = {"REPLAY_TICKER": "SPY", "REPLAY_BUCKET": "M"}  # the only two-state switches of the replay chapter
+REPLAY_PROBE_DIR = REPO_DIR / "data" / "checks" / "replay-probe"
+REPLAY_RESULT_LINE = "replay result: "  # the line the replay chapter prints with its numbers
+REPLAY_WHOLE_LINE = "replay check: whole period "  # the line with the whole period's counts
+SHARE_TOLERANCE = 1e-9
+
+
+def check_replay_switches(report, defaults, others):
+    """The replay chapter's switches: defaults, the two two-state switches and their other values, the dates and the
+    threshold."""
+    wrong = [f"{name}={defaults.get(name)!r} (expected {value!r})" for name, value in REPLAY_SWITCH_DEFAULTS.items()
+             if defaults.get(name) != value]
+    for name in ("REPLAY_START", "REPLAY_END"):
+        value = defaults.get(name)
+        try:
+            ok = isinstance(value, str) and len(value) == 10 and bool(datetime.strptime(value, "%Y-%m-%d"))
+        except ValueError:
+            ok = False
+        if not ok:
+            wrong.append(f"{name}={value!r} (expected a date YYYY-MM-DD)")
+    if not wrong and defaults["REPLAY_START"] > defaults["REPLAY_END"]:
+        wrong.append("REPLAY_START is later than REPLAY_END")
+    threshold = defaults.get("REPLAY_MIN_BUCKET_POSTS")
+    if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold < 1:
+        wrong.append(f"REPLAY_MIN_BUCKET_POSTS={threshold!r} (expected a positive integer)")
+    two_state = {name: others[name] for name in others if name.startswith("REPLAY_")}
+    report.check(not wrong and two_state == REPLAY_TWO_STATE and others.get("REPLAY_TICKER") in REPLAY_TICKERS,
+                 "switch cell: REPLAY_SOURCE defaults to the repository's replay file on GitHub, REPLAY_TICKERS is "
+                 f"{REPLAY_TICKERS}, REPLAY_TICKER defaults to 'NVDA' with 'SPY' as its other value, REPLAY_BUCKET "
+                 "defaults to 'W' with 'M' as its other value, REPLAY_START and REPLAY_END are dates in order, "
+                 "REPLAY_MIN_BUCKET_POSTS is a positive integer; only REPLAY_TICKER and REPLAY_BUCKET are two-state",
+                 f"{'; '.join(wrong)}; two-state {two_state}")
+
+
+def check_replay_reading(report):
+    """The replay chapter's reading cell, run from the source on small hand-written parquet files."""
+    import pandas as pd
+    shutil.rmtree(REPLAY_PROBE_DIR, ignore_errors=True)
+    times = pd.to_datetime(["2026-05-04 10:00", "2026-05-05 11:00", "2026-05-12 12:00"], utc=True)
+    columns = {"post_id": ["p:1", "p:2", "p:3"], "created_at": times, "tickers": [["NVDA"], ["NVDA", "AMD"], ["NVDA"]],
+               "text": ["one", "two", "three"], "likes": [1, None, 3], "views": [10, 20, None]}
+    good = write_parquet(REPLAY_PROBE_DIR / "good.parquet", columns)
+    short = write_parquet(REPLAY_PROBE_DIR / "short.parquet", {key: value for key, value in columns.items()
+                                                                if key != "views"})
+
+    def run(source, ticker):
+        namespace = {"__name__": "notebook_cells", "REPLAY_SOURCE": str(source), "REPLAY_TICKER": ticker,
+                     "REPLAY_TICKERS": REPLAY_TICKERS}
+        problems = run_cells(["read_replay"], namespace)
+        return namespace, problems[0] if problems else None
+
+    namespace, good_problem = run(good, "NVDA")
+    table = namespace.get("replay_table")
+    read_ok = (good_problem is None and table is not None and list(table.columns) == REPLAY_COLUMNS
+               and len(table) == 3 and namespace.get("replay_sha256") == sha256_of(good))
+    _, absent = run(good, "IBM")
+    _, missing_column = run(short, "NVDA")
+    _, missing_file = run(REPLAY_PROBE_DIR / "absent.parquet", "NVDA")
+    report.check(read_ok and absent is not None and "REPLAY_TICKER" in absent and "IBM" in absent
+                 and missing_column is not None and "views" in missing_column and "REPLAY_SOURCE" in missing_column
+                 and missing_file is not None and "REPLAY_SOURCE" in missing_file,
+                 "replay chapter's reading cell (run from the source): a good file is read with the six columns and "
+                 "the SHA-256 of its bytes; a ticker of REPLAY_TICKERS that the file does not hold stops it naming "
+                 "REPLAY_TICKER; a missing column and a missing file stop it naming REPLAY_SOURCE",
+                 f"good read {read_ok} ({good_problem}); absent ticker: {absent}; missing column: {missing_column}; "
+                 f"missing file: {missing_file}")
+    shutil.rmtree(REPLAY_PROBE_DIR, ignore_errors=True)
+
+
+def replay_expected_posts(switches, ticker):
+    """The posts of the replay file that name ticker in the period of the switches, computed here."""
+    import pandas as pd
+    table = pd.read_parquet(REPO_DIR / REPLAY_FILE)
+    first = pd.Timestamp(switches["REPLAY_START"], tz="UTC")
+    after = pd.Timestamp(switches["REPLAY_END"], tz="UTC") + pd.Timedelta(days=1)
+    keep = table["tickers"].map(lambda names: ticker in list(names)) & (table["created_at"] >= first) & \
+        (table["created_at"] < after)
+    return table[keep]
+
+
+def replay_expected_buckets(switches, bucket):
+    """The starts (YYYY-MM-DD) of every week (Monday) or month (1st) from REPLAY_START's to REPLAY_END's, computed here."""
+    from datetime import date, timedelta
+    first, last = (date.fromisoformat(switches[name]) for name in ("REPLAY_START", "REPLAY_END"))
+    if bucket == "W":
+        first, last = first - timedelta(days=first.weekday()), last - timedelta(days=last.weekday())
+        starts = [first + timedelta(days=7 * step) for step in range((last - first).days // 7 + 1)]
+    else:
+        starts, current = [], first.replace(day=1)
+        while current <= last:
+            starts.append(current)
+            current = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return [start.isoformat() for start in starts]
+
+
+def replay_bucket_problems(rows, switches, bucket, posts, classes, name):
+    """Problems of a list of bucket rows against the posts they must count."""
+    import pandas as pd
+    problems = []
+    threshold = switches["REPLAY_MIN_BUCKET_POSTS"]
+    starts = replay_expected_buckets(switches, bucket)
+    if not isinstance(rows, list) or [row.get("start") for row in rows if isinstance(row, dict)] != starts:
+        return [f"{name}: bucket starts {[row.get('start') for row in rows or [] if isinstance(row, dict)]}, "
+                f"expected {starts}"]
+    days = posts["created_at"].dt.floor("D")
+    back = days.dt.weekday if bucket == "W" else days.dt.day - 1
+    own = (days - pd.to_timedelta(back, unit="D")).dt.strftime("%Y-%m-%d").value_counts().to_dict()
+    for row in rows:
+        where = f"{name} {row['start']}"
+        n_posts, n_with_level = row.get("n_posts"), row.get("n_with_level")
+        level_counts, sentiment_counts = as_dict(row.get("level_counts")), as_dict(row.get("sentiment_counts"))
+        level_shares, sentiment_shares = as_dict(row.get("level_shares")), as_dict(row.get("sentiment_shares"))
+        if n_posts != own.get(row["start"], 0):
+            problems.append(f"{where}: {n_posts} posts, the file has {own.get(row['start'], 0)}")
+        if list(level_counts) != LEVEL_SIX or sum(level_counts.values()) != n_with_level:
+            problems.append(f"{where}: level counts {level_counts} do not add up to {n_with_level}")
+        if list(sentiment_counts) != classes or sum(sentiment_counts.values()) != n_posts:
+            problems.append(f"{where}: sentiment counts {sentiment_counts} (classes {classes}) do not add up to "
+                            f"{n_posts}")
+        for shares, counts, total, kind in ((sentiment_shares, sentiment_counts, n_posts, "sentiment"),
+                                            (level_shares, level_counts, n_with_level, "level")):
+            if list(shares) != list(counts):
+                problems.append(f"{where}: {kind} shares keyed {list(shares)}")
+            elif not is_count(total) or total < threshold:
+                if any(value is not None for value in shares.values()):
+                    problems.append(f"{where}: {kind} shares {shares} with {total} posts, below {threshold}")
+            elif any(not isinstance(shares[key], (int, float)) or abs(shares[key] - counts[key] / total)
+                     > SHARE_TOLERANCE for key in shares) or abs(sum(shares.values()) - 1) > SHARE_TOLERANCE:
+                problems.append(f"{where}: {kind} shares {shares} do not match the counts {counts}")
+    total = sum(row.get("n_posts") or 0 for row in rows)
+    if total != len(posts):
+        problems.append(f"{name}: the buckets hold {total} posts, the file {len(posts)}")
+    return problems
+
+
+def check_replay_section(report, label, section, switches, executed):
+    """The replay's numbers (from the brief, or printed by the notebook) against the replay file and themselves."""
+    if not report.check(isinstance(section, dict) and bool(section), f"{label}: the replay's numbers are there"):
+        return
+    classes = [name for name in ("bearish", "neutral", "bullish") if switches["N_CLASSES"] == 3 or name != "neutral"]
+    posts = replay_expected_posts(switches, switches["REPLAY_TICKER"])
+    import pyarrow.parquet as pq
+    source = as_dict(section.get("source"))
+    expected_source = {"dataset": REPLAY_DATASET, "revision": REPLAY_REVISION, "license": "MIT",
+                       "file": switches["REPLAY_SOURCE"], "sha256": sha256_of(REPO_DIR / REPLAY_FILE),
+                       "n_rows": pq.ParquetFile(REPO_DIR / REPLAY_FILE).metadata.num_rows}
+    expected = {"ticker": switches["REPLAY_TICKER"], "start": switches["REPLAY_START"], "end": switches["REPLAY_END"],
+                "bucket": switches["REPLAY_BUCKET"], "min_bucket_posts": switches["REPLAY_MIN_BUCKET_POSTS"],
+                "n_posts": len(posts)}
+    differ = [f"{key}: {section.get(key)!r}, expected {value!r}" for key, value in expected.items()
+              if section.get(key) != value]
+    differ += [f"source.{key}: {source.get(key)!r}, expected {value!r}" for key, value in expected_source.items()
+               if source.get(key) != value]
+    report.check(not differ, f"{label}: the replay names the switches' ticker, period, bucket and threshold, counts as "
+                 "many posts as the check finds in the replay file for them, and its source (dataset, revision, "
+                 "license, file, SHA-256 and rows) is the replay file read", "; ".join(differ))
+    buckets = section.get("buckets")
+    problems = replay_bucket_problems(buckets, switches, switches["REPLAY_BUCKET"], posts, classes, "buckets")
+    if not problems and section.get("n_none") + sum(row["n_with_level"] for row in buckets) != section.get("n_posts"):
+        problems.append(f"n_none {section.get('n_none')} and the posts on the ladder do not add up to the posts")
+    report.check(not problems, f"{label}: the {'weeks' if switches['REPLAY_BUCKET'] == 'W' else 'months'} of the "
+                 "replay follow each other without a gap from REPLAY_START to REPLAY_END, each holds the posts the "
+                 "check finds in it and together all of them; the counts per level add up to the posts on the ladder, "
+                 "the counts per class in use (every class there) to the posts; the shares are the counts divided, "
+                 "adding up to 1, or all null below the threshold (sentiment: posts; levels: posts on the ladder); "
+                 "n_none and the posts on the ladder add up to the posts", "; ".join(problems[:4]))
+    monthly = section.get("monthly_by_ticker")
+    problems = []
+    if not isinstance(monthly, list) or [as_dict(entry).get("ticker") for entry in monthly] != REPLAY_TICKERS:
+        problems.append(f"tickers {[as_dict(entry).get('ticker') for entry in monthly or []]}, expected {REPLAY_TICKERS}")
+    else:
+        for entry in monthly:
+            mine = replay_expected_posts(switches, entry["ticker"])
+            if entry.get("n_posts") != len(mine):
+                problems.append(f"{entry['ticker']}: {entry.get('n_posts')} posts, the file has {len(mine)}")
+            months = entry.get("months")
+            problems += replay_bucket_problems(months, switches, "M", mine, classes, entry["ticker"])
+            if isinstance(months, list) and entry.get("n_none") is not None and \
+                    entry["n_none"] + sum(row.get("n_with_level") or 0 for row in months) != entry.get("n_posts"):
+                problems.append(f"{entry['ticker']}: n_none and the posts on the ladder do not add up to the posts")
+    report.check(not problems, f"{label}: the three tickers by month: exactly {REPLAY_TICKERS}, each with the posts "
+                 "the check finds for it in the period, its months without a gap and holding them all, the same rules "
+                 "for counts and shares", "; ".join(problems[:4]))
+    # The whole period, read in one call, against the sum of the buckets.
+    lines = [line for line in executed_lines(executed) if line.startswith(REPLAY_WHOLE_LINE)]
+    try:
+        whole = json.loads(lines[0][len(REPLAY_WHOLE_LINE):]) if len(lines) == 1 else None
+    except ValueError:
+        whole = None
+    summed = None
+    if isinstance(buckets, list) and all(isinstance(row, dict) for row in buckets):
+        summed = {"n_posts": sum(row.get("n_posts") or 0 for row in buckets), "n_none": section.get("n_none"),
+                  "level_counts": {level: sum(as_dict(row.get("level_counts")).get(level, 0) for row in buckets)
+                                   for level in LEVEL_SIX},
+                  "sentiment_counts": {name: sum(as_dict(row.get("sentiment_counts")).get(name, 0) for row in buckets)
+                                       for name in classes}}
+    report.check(whole is not None and whole == summed,
+                 f"{label}: the whole period read in one call counts per level and per sentiment class exactly what "
+                 "its weeks (or months) add up to", f"whole {whole}; buckets {summed}")
+    report.info(f"replay: {section.get('ticker')} {section.get('start')} to {section.get('end')} by "
+                f"{section.get('bucket')}: {section.get('n_posts')} posts, {section.get('n_none')} judged none, "
+                f"{len(buckets or [])} buckets, "
+                f"{sum(1 for row in buckets or [] if as_dict(row.get('level_shares')).get(LEVEL_SIX[0]) is None)} "
+                "with too few posts on the ladder; per ticker "
+                + ", ".join(f"{as_dict(entry).get('ticker')} {as_dict(entry).get('n_posts')}" for entry in monthly or []))
+
+
+def replay_printed(report, label, executed):
+    """The replay's numbers as the notebook printed them (one line), or None."""
+    lines = [line for line in executed_lines(executed) if line.startswith(REPLAY_RESULT_LINE)]
+    try:
+        return json.loads(lines[0][len(REPLAY_RESULT_LINE):]) if len(lines) == 1 else None
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -3536,14 +3777,21 @@ def compare_stable(report, first, again):
                  "that do not depend on training", detail)
 
 
+def check_replay_source(report, label, switches):
+    """Every check run reads the replay file from the repository, never from a web address."""
+    source = switches.get("REPLAY_SOURCE")
+    report.check(isinstance(source, str) and "://" not in source,
+                 f"{label}: REPLAY_SOURCE is a local path (no web address)", f"{source!r}")
+
+
 def quick(report, defaults, others, overrides, rules=None):
     runs = [("default switches", {}, "quick-default"),
             ("other switches", dict(others), "quick-other"),
             (REPEAT_LABEL, {}, "quick-default-again")]
-    briefs = {}
+    briefs, buckets = {}, set()
     for label, flipped, folder in runs:
         parameters = {"DATA_SOURCE": SAMPLE_SOURCE, "WORK_DIR": f"data/checks/{folder}", **LOCAL_LEVEL_SOURCES,
-                      **flipped, **overrides}
+                      "REPLAY_SOURCE": REPLAY_FILE, **flipped, **overrides}
         switches = {**defaults, **parameters}
         report.info(f"{label}: " + ", ".join(f"{k}={v!r}" for k, v in parameters.items()))
         brief_path = REPO_DIR / switches["WORK_DIR"] / "brief.json"
@@ -3557,7 +3805,11 @@ def quick(report, defaults, others, overrides, rules=None):
             check_levels_brief(report, label, brief, switches, full_run=False)
             check_levels_texts_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
             check_crowd_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb", switches)
+            executed = REPO_DIR / switches["WORK_DIR"] / "executed.ipynb"
+            check_replay_section(report, label, replay_printed(report, label, executed), switches, executed)
+            buckets.add(switches["REPLAY_BUCKET"])
         if brief is not None:
+            check_replay_source(report, label, switches)
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
         if brief is not None and label != REPEAT_LABEL:  # the default run and the run with the other switches
@@ -3565,11 +3817,13 @@ def quick(report, defaults, others, overrides, rules=None):
         if brief is not None and label == "default switches":
             check_save_refuses(report, label, brief, rules)
     compare_stable(report, briefs.get("default switches"), briefs.get(REPEAT_LABEL))
+    report.check(buckets == {"W", "M"}, "the default run and the run with the other switches replay by week and by "
+                 "month, once each", f"{sorted(buckets)}")
 
 
 def full(report, defaults, overrides, rules=None):
     check_levels_full(report)
-    parameters = {"DATA_SOURCE": FULL_SOURCE, **LOCAL_LEVEL_SOURCES, **overrides}
+    parameters = {"DATA_SOURCE": FULL_SOURCE, **LOCAL_LEVEL_SOURCES, "REPLAY_SOURCE": REPLAY_FILE, **overrides}
     switches = {**defaults, **parameters}
     source = switches["DATA_SOURCE"]
     if "://" not in source:
@@ -3593,6 +3847,8 @@ def full(report, defaults, overrides, rules=None):
     check_levels_brief(report, "full run", brief, switches, full_run=True)
     check_levels_texts_output(report, "full run", executed)
     check_crowd_output(report, "full run", executed, switches)
+    check_replay_source(report, "full run", switches)
+    check_replay_section(report, "full run", replay_printed(report, "full run", executed), switches, executed)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -3665,6 +3921,8 @@ def main():
     check_levels_interface_names(report)
     check_crowd_function(report)
     check_replay_file(report)
+    check_replay_switches(report, defaults, others)
+    check_replay_reading(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
