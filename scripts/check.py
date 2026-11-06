@@ -28,7 +28,9 @@ quick: static checks, then the notebook runs three times on the bundled
        its texts against the fingerprints of the level pre-label file.
        Chapter 5's split runs from the source on six hand-written classes,
        and chapter 7's score functions (a cell of definitions only) on six
-       classes against scikit-learn.
+       classes against scikit-learn. The names later chapters use (the
+       interface) must be defined with their locked parameters, and chapter
+       6 must train its word vectors itself, downloading none.
        The level pre-label script (scripts/prelabel_levels.py) is checked
        without Ollama and without the dataset: its interface and pinned
        prompt, its requests, that it only talks to a loopback address, its
@@ -95,7 +97,8 @@ SCOPE_FIELDS = ["source", "granularity", "tickers", "n_classes"]
 REQUIRED_SWITCHES = ["DATA_SOURCE", "WORK_DIR", "RANDOM_SEED", "SAMPLE_PER_CLASS",
                      "N_CLASSES", "TICKER_ONLY", "EMOJI_TO_WORDS", "KEEP_NEGATIONS"]
 SENTIMENT_SWITCHES = ["BPE_VOCAB_SIZE", "VOCAB_SIZE", "EPOCHS", "BATCH_SIZE"]
-SENTIMENT_MODELS = ["count_network", "tfidf_network"]  # the two networks of chapter 7; more may be added later
+WORD2VEC_SWITCHES = ["WORD2VEC_DIM", "WORD2VEC_WINDOW", "WORD2VEC_MIN_COUNT", "WORD2VEC_EPOCHS"]  # chapter 6, not two-state
+SENTIMENT_MODELS = ["count_network", "tfidf_network", "word2vec_network"]  # the networks of chapter 7; more may be added later
 SENTIMENT_BASELINES = ["always_majority", "uniform_random"]
 SENTIMENT_SUBSETS = ["all_test", "test_has_ticker"]
 SPLIT_PARTS = ["train", "validation", "test"]
@@ -116,6 +119,29 @@ SAMPLE_MIN_PER_LEVEL = 80
 SAMPLE_MIN_TICKER_PER_SIDE = 100  # bearish and bullish posts with a ticker: TICKER_ONLY with two classes must split
 SAMPLE_HANDLE = re.compile(r"@[A-Za-z0-9_]")  # an account name
 SAMPLE_LINK = re.compile(r"https?://|www\.", flags=re.IGNORECASE)  # a web link
+# Names later chapters use (the interface): each must be defined at the top level of a code cell.
+INTERFACE_NAMES = ["df_all", "has_ticker", "clean_texts", "split_train_val_test", "train_df", "val_df", "test_df",
+                   "count_vectorizer", "tfidf_vectorizer", "word2vec_vectorizer", "vectorizers", "fit_vectorizers",
+                   "vectorize_texts", "to_targets", "build_network", "predict_proba", "predict_labels", "models",
+                   "selected_model_name", "selected_model", "selected_vectorizer", "sentiment_proba", "score_texts",
+                   "class_scores", "macro_f1", "evaluate", "brief_path", "save_brief"]
+# Locked parameters of the interface functions: name -> [(parameter, default as written in the source or None)].
+INTERFACE_PARAMETERS = {
+    "split_train_val_test": [("posts", None), ("seed", None), ("label_column", "'label'"), ("labels", "None")],
+    "fit_vectorizers": [("cleaned_texts", None)],
+    "vectorize_texts": [("cleaned_texts", None), ("fitted", "vectorizers")],
+    "to_targets": [("labels_of_posts", None), ("labels", "CLASS_LABELS")],
+    "build_network": [("n_features", None), ("labels", "CLASS_LABELS")],
+    "predict_proba": [("model", None), ("matrix", None), ("labels", "CLASS_LABELS")],
+    "predict_labels": [("model", None), ("matrix", None), ("labels", "CLASS_LABELS")],
+    "class_scores": [("true_labels", None), ("predicted_labels", None), ("labels", "CLASS_LABELS")],
+    "macro_f1": [("true_labels", None), ("predicted_labels", None), ("labels", "CLASS_LABELS")],
+    "evaluate": [("true_labels", None), ("predicted_labels", None), ("labels", "CLASS_LABELS")],
+    "score_texts": [("texts", None)],
+    "sentiment_proba": [("cleaned_texts", None), ("model", "selected_model"), ("vectorizer", "selected_vectorizer")],
+    "save_brief": [("brief_dict", None), ("path", None)],
+}
+NO_DOWNLOAD_WORDS = ["gensim.downloader", "api.load", "://"]  # chapter 6 must contain none of them
 # Chapter 9: the brief's format rules and their documentation.
 SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the notebook carries an identical copy
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
@@ -631,6 +657,18 @@ def check_sentiment(report, label, brief, switches, full_run):
     vectors = sentiment.get("vectorizers") if isinstance(sentiment.get("vectorizers"), dict) else {}
     vocab_sizes = [(vectors.get(name) or {}).get("vocab_size") if isinstance(vectors.get(name), dict) else None
                    for name in ("count", "tfidf")]
+    word2vec = vectors.get("word2vec") if isinstance(vectors.get("word2vec"), dict) else {}
+    zeros = word2vec.get("n_posts_all_zero") if isinstance(word2vec.get("n_posts_all_zero"), dict) else {}
+    report.check(word2vec.get("fitted_on_n_posts") == sizes.get("train") and is_count(word2vec.get("vocab_size"))
+                 and word2vec["vocab_size"] > 0
+                 and all(word2vec.get(key) == switches.get(name) for key, name in
+                         (("vector_size", "WORD2VEC_DIM"), ("window", "WORD2VEC_WINDOW"),
+                          ("min_count", "WORD2VEC_MIN_COUNT"), ("epochs", "WORD2VEC_EPOCHS")))
+                 and sorted(zeros) == sorted(SPLIT_PARTS)
+                 and all(is_count(zeros[part]) and zeros[part] <= sizes.get(part, -1) for part in SPLIT_PARTS),
+                 f"{label}: the averaged word vectors learned from the training set only, with the WORD2VEC switches, "
+                 "and count the posts left with a vector of zeros",
+                 f"{word2vec}")
     report.check(vectors.get("fitted_on") == "train" and vectors.get("fitted_on_n_posts") == sizes.get("train")
                  and isinstance(switches.get("VOCAB_SIZE"), int)
                  and all(is_count(size) and 0 < size <= switches["VOCAB_SIZE"] for size in vocab_sizes),
@@ -641,7 +679,7 @@ def check_sentiment(report, label, brief, switches, full_run):
     # Chapters 7 and 8: models, evaluation table, confusion matrices, choice and scoring function.
     models = sentiment.get("models") if isinstance(sentiment.get("models"), list) else []
     report.check(all(name in models for name in SENTIMENT_MODELS),
-                 f"{label}: the word-count and TF-IDF networks are both listed", f"{models}")
+                 f"{label}: the word-count, TF-IDF and averaged-word-vector networks are all listed", f"{models}")
     evaluation = sentiment.get("evaluation") if isinstance(sentiment.get("evaluation"), dict) else {}
     rows = [row for row in evaluation.get("rows") or [] if isinstance(row, dict)]
     found = Counter((row.get("model"), row.get("subset")) for row in rows)
@@ -728,6 +766,15 @@ def check_sentiment(report, label, brief, switches, full_run):
                  "and the chosen model's evaluated test labels",
                  f"columns {scoring.get('column_labels')}, bullish column {scoring.get('bullish_column')}, "
                  f"model {scoring.get('model')!r}, check {scoring_check}")
+
+    score_table = scoring.get("score_texts") if isinstance(scoring.get("score_texts"), dict) else {}
+    demo = score_table.get("demo") if isinstance(score_table.get("demo"), dict) else {}
+    names = {"0": "bearish", "1": "neutral", "2": "bullish"}
+    report.check(score_table.get("columns") == [f"p_{names[c]}" for c in classes] + ["call"]
+                 and is_count(demo.get("n_texts")) and demo["n_texts"] > 0 and demo.get("n_rows") == demo["n_texts"]
+                 and demo.get("rows_sum_to_one") is True and demo.get("call_is_highest") is True,
+                 f"{label}: score_texts gives one row per demo sentence, a probability column per class in use adding up "
+                 "to 1, and a call that is the class of the highest probability", f"{score_table}")
 
     duplicates = sentiment.get("test_texts_also_in_train")
     duplicates = duplicates if isinstance(duplicates, dict) else {}
@@ -1298,7 +1345,8 @@ def check_switch_cell(report, defaults, others):
                  + ", ".join(f"{name}={value!r}" for name, value in SWITCH_PROBES) + ")", "; ".join(problems))
 
 
-SWITCH_PROBES = [("N_CLASSES", 4), ("TICKER_ONLY", "yes"), ("EMOJI_TO_WORDS", 1), ("VOCAB_SIZE", 0)]
+SWITCH_PROBES = [("N_CLASSES", 4), ("TICKER_ONLY", "yes"), ("EMOJI_TO_WORDS", 1), ("VOCAB_SIZE", 0), ("WORD2VEC_DIM", 0),
+                 ("WORD2VEC_WINDOW", -1), ("WORD2VEC_MIN_COUNT", 0), ("WORD2VEC_EPOCHS", -3)]
 
 
 def cell_defining_text(marker):
@@ -1450,6 +1498,58 @@ def check_score_functions(report):
                  "chapter 7: on six classes (labels 0 to 5) the score functions, run from the source, give "
                  "scikit-learn's per-class scores and macro-F1, so they do not depend on the number of classes",
                  f"macro-F1 {macro} (scikit-learn {reference}); per-class keys {sorted(row['per_class'])}")
+
+
+def top_level_names():
+    """Every name bound at the top level of a code cell of the source (assignments, tuples included, defs, classes)."""
+    names = set()
+    for source in code_cells():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    names |= {item.id for item in ast.walk(target) if isinstance(item, ast.Name)}
+    return names
+
+
+def check_interface(report, defaults, others):
+    """The names later chapters use are defined, with their locked parameters; chapter 6 downloads nothing; the
+    word vector switches are not two-state."""
+    defined = top_level_names()
+    missing = [name for name in INTERFACE_NAMES if name not in defined]
+    report.check(not missing, f"interface: all {len(INTERFACE_NAMES)} names later chapters use are defined in the "
+                 "notebook", f"missing {missing}")
+    wrong = []
+    for name, expected in INTERFACE_PARAMETERS.items():
+        source = cell_defining(name) or ""
+        function = next((node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                         and node.name == name), None) if source else None
+        if function is None:
+            wrong.append(f"{name}: not found")
+            continue
+        arguments = function.args.args
+        defaults_written = [None] * (len(arguments) - len(function.args.defaults)) + \
+            [ast.unparse(value) for value in function.args.defaults]
+        found = list(zip([argument.arg for argument in arguments], defaults_written))
+        if found != expected:
+            wrong.append(f"{name}: {found}")
+    report.check(not wrong, "interface: the functions take the locked parameters (labels with the classes in use as "
+                 "default, so two and three classes behave as before)", "; ".join(wrong))
+    chapter_six = "\n".join(cell.source for cell in chapter_cells().get(6, []) if cell.cell_type == "code")
+    found = [word for word in NO_DOWNLOAD_WORDS if word in chapter_six]
+    report.check(bool(chapter_six) and not found and "Word2Vec(" in chapter_six,
+                 "chapter 6 trains its word vectors itself and downloads none (no gensim.downloader, api.load or web "
+                 "address in its cells)", f"found {found}")
+    word2vec = {name: defaults.get(name) for name in WORD2VEC_SWITCHES}
+    report.check(all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in word2vec.values())
+                 and not any(name in others for name in WORD2VEC_SWITCHES),
+                 "switch cell: the word vector switches are positive integers and not two-state",
+                 f"{word2vec}; two-state: {[name for name in WORD2VEC_SWITCHES if name in others]}")
 
 
 def notebook_ticker(texts):
@@ -2618,6 +2718,7 @@ def main():
     check_sample_file(report)
     check_split_function(report)
     check_score_functions(report)
+    check_interface(report, defaults, others)
     check_levels_interface(report)
     check_levels_prompt(report)
     check_levels_hosts(report)

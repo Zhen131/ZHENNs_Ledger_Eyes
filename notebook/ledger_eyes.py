@@ -41,17 +41,21 @@ BPE_VOCAB_SIZE = 5000  # default: 5000; or any positive integer (target vocabula
 VOCAB_SIZE = 1000  # default: 1000; or any positive integer (most words each vectorizer of chapter 6 keeps)
 EPOCHS = 5  # default: 5; or any positive integer (passes over the training set in chapter 7)
 BATCH_SIZE = 50  # default: 50; or any positive integer (posts per training step in chapter 7)
+WORD2VEC_DIM = 100  # default: 100 (gensim's own default); or any positive integer (numbers in every word vector of chapter 6)
+WORD2VEC_WINDOW = 5  # default: 5 (gensim's own default); or any positive integer (words on each side that count as a word's neighbours in chapter 6)
+WORD2VEC_MIN_COUNT = 5  # default: 5 (gensim's own default); or any positive integer (uses in the training set a word needs to get a vector in chapter 6)
+WORD2VEC_EPOCHS = 5  # default: 5 (gensim's own default); or any positive integer (passes of Word2Vec over the training set in chapter 6)
 
 # %% [markdown]
 # ## Setup
 #
-# The first cell below installs the packages that Google Colab does not ship with (for example `emoji` and `contractions`); packages that are already there are left alone. All installs happen in this one cell, before anything is imported, so Colab never asks for a restart halfway through. The cell after it prints the versions of the key packages, which helps when results differ between machines.
+# The first cell below installs the packages that Google Colab does not ship with (for example `emoji`, `contractions` and `gensim`); packages that are already there are left alone. All installs happen in this one cell, before anything is imported, so Colab never asks for a restart halfway through. The cell after it prints the versions of the key packages, which helps when results differ between machines.
 #
 # ***
 #
 # ## 准备
 #
-# 下面第一格安装 Google Colab 没有自带的包（例如 `emoji`、`contractions`），已经有的包不动。所有安装都集中在这一格、排在一切 import 之前，这样 Colab 不会在半路要求重启。再下一格打印关键包的版本，不同机器跑出的结果不一样时方便对照。
+# 下面第一格安装 Google Colab 没有自带的包（例如 `emoji`、`contractions`、`gensim`），已经有的包不动。所有安装都集中在这一格、排在一切 import 之前，这样 Colab 不会在半路要求重启。再下一格打印关键包的版本，不同机器跑出的结果不一样时方便对照。
 
 # %%
 # Install missing packages before anything else is imported.
@@ -82,6 +86,7 @@ REQUIRED_PACKAGES = {
     "tensorflow": "tensorflow==2.20.0",
     "keras": "keras==3.15.1",
     "jsonschema": "jsonschema==4.26.0",
+    "gensim": "gensim==4.4.0",
 }
 missing = [requirement for module, requirement in REQUIRED_PACKAGES.items() if importlib.util.find_spec(module) is None]
 if missing:
@@ -97,7 +102,7 @@ from importlib.metadata import version  # standard library: version of an instal
 print(f"python {sys.version.split()[0]}")  # Python version
 for distribution in ["pandas", "numpy", "scikit-learn", "nltk", "pyarrow", "huggingface_hub",
                      "fsspec", "matplotlib", "beautifulsoup4", "tqdm", "emoji", "contractions",
-                     "tokenizers", "tensorflow", "keras", "jsonschema"]:
+                     "tokenizers", "tensorflow", "keras", "jsonschema", "gensim"]:
     print(f"{distribution} {version(distribution)}")  # one line per package
 
 # %% [markdown]
@@ -123,7 +128,8 @@ for name, value in [("TICKER_ONLY", TICKER_ONLY), ("EMOJI_TO_WORDS", EMOJI_TO_WO
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be True or False, got {value!r}")
 for name, value in [("BPE_VOCAB_SIZE", BPE_VOCAB_SIZE), ("VOCAB_SIZE", VOCAB_SIZE), ("EPOCHS", EPOCHS),
-                    ("BATCH_SIZE", BATCH_SIZE)]:
+                    ("BATCH_SIZE", BATCH_SIZE), ("WORD2VEC_DIM", WORD2VEC_DIM), ("WORD2VEC_WINDOW", WORD2VEC_WINDOW),
+                    ("WORD2VEC_MIN_COUNT", WORD2VEC_MIN_COUNT), ("WORD2VEC_EPOCHS", WORD2VEC_EPOCHS)]:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
 print("Switches look fine.")
@@ -1157,75 +1163,149 @@ split_table
 # %% [markdown]
 # ## 6. Vectorization: from cleaned text to numbers
 #
-# A model needs numbers, so every cleaned post (`clean_text`) becomes a vector with one position per word of a fixed vocabulary. We build two kinds of vectors, as in the course:
+# A model needs numbers, so every cleaned post (`clean_text`) becomes a vector. We build three kinds of vectors: two as in the course, with one position per word of a fixed vocabulary, and one made of word embeddings:
 #
 # - **Word counts** (`CountVectorizer`): each position holds how often that word occurs in the post.
 # - **TF-IDF** (`TfidfVectorizer`): each count is weighted by how rare the word is across posts, so words that appear almost everywhere count less.
+# - **Averaged word vectors** (Word2Vec): without them, "rally" and "surge" are two unrelated positions, and a model that learned one has learned nothing about the other. Word2Vec fixes that by giving every word a short list of numbers (`WORD2VEC_DIM`, default 100), learned so that words used in similar places get similar numbers. We train it ourselves, with the gensim package, on the cleaned texts of the training set (the CBOW variant, which guesses a word from the `WORD2VEC_WINDOW` words on each side; a word needs `WORD2VEC_MIN_COUNT` uses to get a vector). A post's vector is the average of the vectors of its words; words that got no vector are skipped, and a post with no such word gets a vector of zeros. Nothing is downloaded: no ready-made word vectors are used.
 #
-# Both keep the `VOCAB_SIZE` most frequent words (default 1000, as in the course). **Each vectorizer learns its vocabulary (and, for TF-IDF, its word weights) from the training set only**; the validation and test sets are only transformed with what was learned. Words that occur only outside the training set are therefore ignored, exactly as they would be for a brand-new post.
+# The first two keep the `VOCAB_SIZE` most frequent words (default 1000, as in the course). **Every vectorizer learns from the training set only** (its vocabulary, for TF-IDF its word weights, for Word2Vec its word vectors); the validation and test sets are only transformed with what was learned. Words that occur only outside the training set are therefore ignored, exactly as they would be for a brand-new post.
 #
-# **Memory.** The course turns the count matrix into an ordinary (dense) table with `.toarray()`. With the full working sample that table would hold 100,000 rows × 1,000 columns, almost all zeros. We keep both kinds of vectors as sparse matrices, which store only the non-zero cells, in 32-bit floats. Keras takes the sparse matrices as they are and turns only one batch at a time (`BATCH_SIZE` posts) into an ordinary table while training. The cell prints how much memory the sparse matrices take next to the size a dense table would have.
+# Each kind is one small function. `fit_vectorizers` trains all three on a batch of cleaned texts and `vectorize_texts` turns any batch of cleaned texts into all three kinds of vectors; this chapter uses them itself, and a later chapter can use them on other posts the same way.
+#
+# **Memory.** The course turns the count matrix into an ordinary (dense) table with `.toarray()`. With the full working sample that table would hold tens of thousands of rows × 1,000 columns, almost all zeros. We keep word counts and TF-IDF as sparse matrices, which store only the non-zero cells, in 32-bit floats; the averaged word vectors are short and almost never zero, so they stay an ordinary table. Keras takes the sparse matrices as they are and turns only one batch at a time (`BATCH_SIZE` posts) into an ordinary table while training. The last cell prints how much memory each kind takes.
 #
 # ***
 #
 # ## 6. 向量化：把清洗后的文字变成数
 #
-# 模型要的是数，所以每条清洗后的帖子（`clean_text`）都变成一个向量，词表里每个词占一个位置。照课堂的做法做两种向量：
+# 模型要的是数，所以每条清洗后的帖子（`clean_text`）都变成一个向量。我们做三种向量：两种照课堂的做法，词表里每个词占一个位置；一种用词向量：
 #
 # - **词数统计**（`CountVectorizer`）：每个位置是这个词在帖子里出现了几次。
 # - **TF-IDF**（`TfidfVectorizer`）：在次数上再乘一个权重，一个词在越多帖子里出现，权重越低，几乎处处都有的词就不那么重要。
+# - **平均词向量**（Word2Vec）：没有它时，「rally」和「surge」是两个毫不相干的位置，模型学会了一个，对另一个还是一无所知。Word2Vec 给每个词一小串数（`WORD2VEC_DIM` 个，默认 100），学的时候让用法相近的词得到相近的数，就解决了这个问题。我们用 gensim 包自己在训练集的清洗后文字上训它（用 CBOW 这种做法：拿左右各 `WORD2VEC_WINDOW` 个词去猜中间那个词；一个词至少要出现 `WORD2VEC_MIN_COUNT` 次才有向量）。一条帖子的向量，就是它里面各个词的向量取平均；没有向量的词跳过，一个这样的词都没有的帖子给一个全 0 的向量。什么都不下载：不用任何现成的词向量。
 #
-# 两种都只留最常见的 `VOCAB_SIZE` 个词（默认 1000，和课堂一样）。**两个向量化器都只在训练集上学词表（TF-IDF 还要学每个词的权重）**；验证集和测试集只用学好的东西去转换。只在训练集以外出现的词因此被忽略，和对待一条全新帖子完全一样。
+# 前两种都只留最常见的 `VOCAB_SIZE` 个词（默认 1000，和课堂一样）。**每个向量化器都只在训练集上学**（学词表；TF-IDF 还学每个词的权重；Word2Vec 学每个词的向量）；验证集和测试集只用学好的东西去转换。只在训练集以外出现的词因此被忽略，和对待一条全新帖子完全一样。
 #
-# **内存。** 课堂上用 `.toarray()` 把词数矩阵变成普通（稠密）的表。用完整的工作样本时，这张表有 100,000 行 × 1,000 列，几乎全是 0。我们把两种向量都存成稀疏矩阵（只记非零的格子），用 32 位浮点数。Keras 直接收下稀疏矩阵，训练时每次只把一批（`BATCH_SIZE` 条）变成普通的表。这一格会打印稀疏矩阵占了多少内存，并和稠密表的大小对照。
+# 每一种都是一个小函数。`fit_vectorizers` 在一批清洗后文字上把三种一起训好，`vectorize_texts` 把任意一批清洗后文字变成三种向量；这一章自己就用它们，后面的章节也能拿它们按同样的办法处理别的帖子。
+#
+# **内存。** 课堂上用 `.toarray()` 把词数矩阵变成普通（稠密）的表。用完整的工作样本时，这张表有好几万行 × 1,000 列，几乎全是 0。词数统计和 TF-IDF 存成稀疏矩阵（只记非零的格子），用 32 位浮点数；平均词向量又短、又几乎没有 0，就存成普通的表。Keras 直接收下稀疏矩阵，训练时每次只把一批（`BATCH_SIZE` 条）变成普通的表。最后一格打印每种向量占多少内存。
 
 # %%
-# Word counts: learn the vocabulary on the training set, then transform all three parts.
+# Word counts: a vectorizer that keeps the VOCAB_SIZE most frequent words of the texts it learns from.
 from sklearn.feature_extraction.text import CountVectorizer  # word counts
 
-count_vectorizer = CountVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  # the most frequent VOCAB_SIZE words
-X_train_count = count_vectorizer.fit_transform(train_df["clean_text"])  # learns the vocabulary: training set only
-X_val_count = count_vectorizer.transform(val_df["clean_text"])  # transform only
-X_test_count = count_vectorizer.transform(test_df["clean_text"])  # transform only
-for matrix in (X_train_count, X_val_count, X_test_count):
-    matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
-print(f"Word counts: {len(count_vectorizer.vocabulary_):,} words; training matrix {X_train_count.shape}")
+
+def fit_count_vectorizer(cleaned_texts):
+    """Learn the vocabulary of cleaned_texts; returns the fitted CountVectorizer."""
+    return CountVectorizer(max_features=VOCAB_SIZE, dtype=np.float32).fit(cleaned_texts)
 
 # %%
-# TF-IDF: learn the vocabulary and the word weights on the training set, then transform all three parts.
+# TF-IDF: the same vocabulary rule, plus a weight per word learned from the same texts.
 from sklearn.feature_extraction.text import TfidfVectorizer  # TF-IDF weights
 
-tfidf_vectorizer = TfidfVectorizer(max_features=VOCAB_SIZE, dtype=np.float32)  # the most frequent VOCAB_SIZE words
-X_train_tfidf = tfidf_vectorizer.fit_transform(train_df["clean_text"])  # learns vocabulary and weights: training set only
-X_val_tfidf = tfidf_vectorizer.transform(val_df["clean_text"])  # transform only
-X_test_tfidf = tfidf_vectorizer.transform(test_df["clean_text"])  # transform only
-for matrix in (X_train_tfidf, X_val_tfidf, X_test_tfidf):
-    matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
-print(f"TF-IDF: {len(tfidf_vectorizer.vocabulary_):,} words; training matrix {X_train_tfidf.shape}")
+
+def fit_tfidf_vectorizer(cleaned_texts):
+    """Learn the vocabulary and the word weights of cleaned_texts; returns the fitted TfidfVectorizer."""
+    return TfidfVectorizer(max_features=VOCAB_SIZE, dtype=np.float32).fit(cleaned_texts)
+
+# %%
+# Averaged word vectors: a Word2Vec model trained on the given texts, and the average of each post's word vectors.
+from gensim.models import Word2Vec  # word embeddings, trained here (nothing is downloaded)
+
+
+class AveragedWordVectors:
+    """Turns cleaned texts into the average of their words' vectors, like the transform of the other two vectorizers."""
+
+    def __init__(self, model):
+        self.model = model  # the trained gensim Word2Vec model
+        self.vocabulary_ = model.wv.key_to_index  # word -> row of the vector table, like the other vectorizers
+
+    def transform(self, cleaned_texts):
+        """One row per text: the mean vector of its words that have a vector; zeros when none has one (float32)."""
+        texts = list(cleaned_texts)
+        vectors = np.zeros((len(texts), self.model.vector_size), dtype=np.float32)
+        for row, text in enumerate(texts):
+            known = [word for word in str(text).split() if word in self.vocabulary_]  # unknown words are skipped
+            if known:
+                vectors[row] = self.model.wv[known].mean(axis=0)
+        return vectors
+
+
+def fit_word2vec_vectorizer(cleaned_texts):
+    """Train Word2Vec (CBOW) on cleaned_texts, split at spaces; returns an AveragedWordVectors."""
+    sentences = [str(text).split() for text in cleaned_texts]  # the cleaned text is words joined by spaces
+    model = Word2Vec(sentences=sentences, vector_size=WORD2VEC_DIM, window=WORD2VEC_WINDOW,
+                     min_count=WORD2VEC_MIN_COUNT, epochs=WORD2VEC_EPOCHS, sg=0,  # sg=0: CBOW
+                     seed=RANDOM_SEED, workers=1)  # one worker, so the seed decides the start
+    return AveragedWordVectors(model)
+
+# %% [markdown]
+# ### All three, on the training set
+#
+# `fit_vectorizers(cleaned_texts)` trains the three vectorizers on the texts it gets; here it gets the training set. `vectorize_texts(cleaned_texts)` then turns the training, validation and test sets into the three kinds of vectors.
+#
+# ***
+#
+# ### 三种一起，在训练集上训
+#
+# `fit_vectorizers(cleaned_texts)` 在给它的文字上把三个向量化器都训好；这里给它的是训练集。然后用 `vectorize_texts(cleaned_texts)` 把训练集、验证集、测试集都变成三种向量。
+
+# %%
+# Train the three vectorizers on the training set, then turn all three parts into vectors.
+def fit_vectorizers(cleaned_texts):
+    """Train the three vectorizers on cleaned_texts; returns {"count", "tfidf", "word2vec"} -> fitted vectorizer."""
+    return {"count": fit_count_vectorizer(cleaned_texts), "tfidf": fit_tfidf_vectorizer(cleaned_texts),
+            "word2vec": fit_word2vec_vectorizer(cleaned_texts)}
+
+
+vectorizers = fit_vectorizers(train_df["clean_text"])  # learns from the training set only
+count_vectorizer, tfidf_vectorizer, word2vec_vectorizer = vectorizers["count"], vectorizers["tfidf"], vectorizers["word2vec"]
+
+
+def vectorize_texts(cleaned_texts, fitted=vectorizers):
+    """Turn cleaned texts into every kind of vector; returns {name: matrix}, one row per text."""
+    texts = ["" if not isinstance(text, str) and pd.isna(text) else str(text) for text in cleaned_texts]
+    matrices = {}
+    for name, vectorizer in fitted.items():
+        matrix = vectorizer.transform(texts)
+        if hasattr(matrix, "sort_indices"):
+            matrix.sort_indices()  # TensorFlow needs the non-zero cells of every row in column order
+        matrices[name] = matrix
+    return matrices
+
+
+split_parts = {"train": train_df, "validation": val_df, "test": test_df}
+by_part = {part: vectorize_texts(frame["clean_text"]) for part, frame in split_parts.items()}
+features = {name: {part: by_part[part][name] for part in split_parts} for name in vectorizers}  # name -> part -> matrix
+X_train_count, X_val_count, X_test_count = (features["count"][part] for part in split_parts)
+X_train_tfidf, X_val_tfidf, X_test_tfidf = (features["tfidf"][part] for part in split_parts)
+X_train_word2vec, X_val_word2vec, X_test_word2vec = (features["word2vec"][part] for part in split_parts)
+for name, vectorizer in vectorizers.items():
+    print(f"{name}: {len(vectorizer.vocabulary_):,} words; training matrix {features[name]['train'].shape}")
 
 # %% [markdown]
 # ### What the vectors look like
 #
-# For each kind: vocabulary size, matrix shapes, the share of cells that are not zero, and the memory the sparse matrices use compared with dense 32-bit tables. Every count is recorded in the brief, together with the number of training posts the vectorizers learned from.
+# For each kind: vocabulary size, matrix shapes, the share of cells that are not zero, and the memory the matrices use compared with dense 32-bit tables. Every count is recorded in the brief, together with the number of training posts the vectorizers learned from; for the averaged word vectors also their settings and how many posts got a vector of zeros.
 #
 # ***
 #
 # ### 向量长什么样
 #
-# 每种向量各报：词表大小、矩阵形状、非零格子的占比，以及稀疏矩阵实际占的内存和 32 位稠密表的对照。这些数都写进简报，连同向量化器是在多少条训练帖上学的。
+# 每种向量各报：词表大小、矩阵形状、非零格子的占比，以及矩阵实际占的内存和 32 位稠密表的对照。这些数都写进简报，连同向量化器是在多少条训练帖上学的；平均词向量还记下它的设置，以及有多少帖子得到的是全 0 向量。
 
 # %%
-# Summarise both kinds of vectors and record them in the brief.
-vectorizers = {"count": count_vectorizer, "tfidf": tfidf_vectorizer}  # name -> fitted vectorizer
-features = {  # name -> part -> sparse matrix
-    "count": {"train": X_train_count, "validation": X_val_count, "test": X_test_count},
-    "tfidf": {"train": X_train_tfidf, "validation": X_val_tfidf, "test": X_test_tfidf},
-}
+# Summarise the three kinds of vectors and record them in the brief.
+def matrix_megabytes(matrix):
+    """Memory of a matrix in megabytes: for a sparse CSR matrix its values, column indices and row pointers."""
+    if hasattr(matrix, "nnz"):
+        return (matrix.data.nbytes + matrix.indices.nbytes + matrix.indptr.nbytes) / 1e6
+    return matrix.nbytes / 1e6
 
 
-def sparse_megabytes(matrix):
-    """Memory of a sparse CSR matrix in megabytes (values, column indices and row pointers)."""
-    return (matrix.data.nbytes + matrix.indices.nbytes + matrix.indptr.nbytes) / 1e6
+def non_zero_cells(matrix):
+    return matrix.nnz if hasattr(matrix, "nnz") else int(np.count_nonzero(matrix))
 
 
 vector_rows = []
@@ -1235,8 +1315,8 @@ for name, parts in features.items():
         "vectors": name,
         "vocabulary": len(vectorizers[name].vocabulary_),
         "training shape": parts["train"].shape,
-        "non-zero share": safe_ratio(sum(matrix.nnz for matrix in parts.values()), cells),
-        "sparse MB": round(sum(sparse_megabytes(matrix) for matrix in parts.values()), 2),
+        "non-zero share": safe_ratio(sum(non_zero_cells(matrix) for matrix in parts.values()), cells),
+        "stored MB": round(sum(matrix_megabytes(matrix) for matrix in parts.values()), 2),
         "dense float32 MB": round(cells * 4 / 1e6, 2),
     })
 brief["sentiment"]["vectorizers"] = {
@@ -1244,15 +1324,27 @@ brief["sentiment"]["vectorizers"] = {
     "fitted_on": "train",
     "fitted_on_n_posts": int(X_train_count.shape[0]),
     "text": "clean_text",
-    "storage": "sparse float32",
-    **{name: {"vocab_size": len(vectorizer.vocabulary_)} for name, vectorizer in vectorizers.items()},
+    "storage": "count and tfidf: sparse float32; word2vec: dense float32",
+    "count": {"vocab_size": len(count_vectorizer.vocabulary_)},
+    "tfidf": {"vocab_size": len(tfidf_vectorizer.vocabulary_)},
+    "word2vec": {
+        "algorithm": "Word2Vec, CBOW (gensim), trained on the training set; nothing downloaded",
+        "vector_size": word2vec_vectorizer.model.vector_size,
+        "window": WORD2VEC_WINDOW,
+        "min_count": WORD2VEC_MIN_COUNT,
+        "epochs": WORD2VEC_EPOCHS,
+        "vocab_size": len(word2vec_vectorizer.vocabulary_),
+        "fitted_on_n_posts": int(len(train_df)),
+        "unknown_words": "skipped when averaging; a post without a word that has a vector gets zeros",
+        "n_posts_all_zero": {part: int((~features["word2vec"][part].any(axis=1)).sum()) for part in split_parts},
+    },
 }
 pd.DataFrame(vector_rows).set_index("vectors")
 
 # %% [markdown]
 # ## 7. Models: a one-layer network
 #
-# As in the course, the model is a neural network with a single dense layer, built with TensorFlow/Keras: every word of the vocabulary gets one weight per output, and the weighted sum goes through an activation function. We train one network on the word counts and one on the TF-IDF vectors.
+# As in the course, the model is a neural network with a single dense layer, built with TensorFlow/Keras: every input (a word of the vocabulary, or a number of the averaged word vector) gets one weight per output, and the weighted sum goes through an activation function. We train one network on each kind of vectors: the word counts, the TF-IDF vectors and the averaged word vectors.
 #
 # **Labels inside the network.** The data keeps its labels (0 bearish, 1 neutral, 2 bullish). The network learns positions instead:
 #
@@ -1265,7 +1357,7 @@ pd.DataFrame(vector_rows).set_index("vectors")
 #
 # ## 7. 模型：一层网络
 #
-# 和课堂一样，模型是只有一个全连接层的神经网络，用 TensorFlow/Keras 搭：词表里每个词对每个输出有一个权重，加权求和后过一个激活函数。词数统计和 TF-IDF 两种向量各训一个网络。
+# 和课堂一样，模型是只有一个全连接层的神经网络，用 TensorFlow/Keras 搭：每个输入（词表里的一个词，或平均词向量里的一个数）对每个输出有一个权重，加权求和后过一个激活函数。三种向量各训一个网络：词数统计、TF-IDF、平均词向量。
 #
 # **网络内部的标签。** 数据里的标签含义不变（0 看空、1 中性、2 看多），网络学的是位置号：
 #
@@ -1341,10 +1433,29 @@ history_count = model_count.fit(X_train_count, to_targets(train_df["label"]), ep
 
 # %%
 # Train the network on the TF-IDF vectors.
-tf.keras.utils.set_random_seed(RANDOM_SEED)  # same seed, so both networks start alike
+tf.keras.utils.set_random_seed(RANDOM_SEED)  # same seed, so the networks start alike
 model_tfidf = build_network(X_train_tfidf.shape[1])
 history_tfidf = model_tfidf.fit(X_train_tfidf, to_targets(train_df["label"]), epochs=EPOCHS, batch_size=BATCH_SIZE,
                                 validation_data=(X_val_tfidf, to_targets(val_df["label"])), verbose=2)
+
+# %% [markdown]
+# ### Network on averaged word vectors
+#
+# The same one-layer network, with one input per number of the averaged word vector (`WORD2VEC_DIM` inputs).
+#
+# ***
+#
+# ### 用平均词向量训练的网络
+#
+# 同样的一层网络，平均词向量里每个数一个输入（共 `WORD2VEC_DIM` 个）。
+
+# %%
+# Train the network on the averaged word vectors.
+tf.keras.utils.set_random_seed(RANDOM_SEED)  # same seed, so the networks start alike
+model_word2vec = build_network(X_train_word2vec.shape[1])
+history_word2vec = model_word2vec.fit(X_train_word2vec, to_targets(train_df["label"]), epochs=EPOCHS,
+                                      batch_size=BATCH_SIZE,
+                                      validation_data=(X_val_word2vec, to_targets(val_df["label"])), verbose=2)
 
 # %% [markdown]
 # ### Scores for every class
@@ -1390,19 +1501,20 @@ def evaluate(true_labels, predicted_labels, labels=CLASS_LABELS):
 # %% [markdown]
 # ### Choosing one model with the validation set
 #
-# Later chapters need one model to score posts. We choose it by **macro-F1 on the validation set** (chapter 8 explains the measure); the test set plays no part in the choice. If both scores are equal, the word-count network is chosen. Both validation scores and the choice go into the brief.
+# Later chapters need one model to score posts. We choose it by **macro-F1 on the validation set** (chapter 8 explains the measure); the test set plays no part in the choice. On a tie the network listed first is chosen (word counts, then TF-IDF, then averaged word vectors). Every validation score and the choice go into the brief.
 #
 # ***
 #
 # ### 用验证集选一个模型
 #
-# 后面的章节要用一个模型给帖子打分。按**验证集上的 macro-F1** 来选（这个指标第 8 章解释）；测试集不参与选择。两个分数一样时选词数统计的网络。两个验证分数和选择结果都写进简报。
+# 后面的章节要用一个模型给帖子打分。按**验证集上的 macro-F1** 来选（这个指标第 8 章解释）；测试集不参与选择。分数一样时选排在前面的网络（先词数统计，再 TF-IDF，再平均词向量）。每个验证分数和选择结果都写进简报。
 
 # %%
 # Score both networks on the validation set and choose the better one.
 models = {  # model name -> fitted network and the vectors it reads
     "count_network": {"model": model_count, "vectors": "count", "history": history_count},
     "tfidf_network": {"model": model_tfidf, "vectors": "tfidf", "history": history_tfidf},
+    "word2vec_network": {"model": model_word2vec, "vectors": "word2vec", "history": history_word2vec},
 }
 validation_macro_f1 = {
     name: macro_f1(val_df["label"].to_numpy(), predict_labels(entry["model"], features[entry["vectors"]]["validation"]))
@@ -1444,6 +1556,8 @@ print("Chosen for later chapters:", selected_model_name)
 #
 # `train_post_ids` is the set of `post_id`s of the training set. A post whose id is not in it was never seen by the models during training.
 #
+# `score_texts(texts)` does both steps for raw posts: it cleans them with `clean_texts`, scores them with `sentiment_proba` and returns a table with one row per post (in the same order, with the same index when given a pandas Series): one column of probability per class in use, named like `p_bearish`, `p_neutral` and `p_bullish`, and a column `call` with the class of the highest probability (a tie goes to the earlier column, as in the evaluation of chapter 8). Counting the calls gives the share of bullish, neutral and bearish posts.
+#
 # ***
 #
 # ### 给后面章节用的打分函数
@@ -1456,6 +1570,8 @@ print("Chosen for later chapters:", selected_model_name)
 # 「看多的概率」永远是最后一列，即 `BULLISH_COLUMN`。每一行加起来等于 1。
 #
 # `train_post_ids` 是训练集帖子的 `post_id` 集合。编号不在里面的帖子，模型训练时从没见过。
+#
+# `score_texts(texts)` 把两步合起来，直接收原始帖子：先用 `clean_texts` 洗，再用 `sentiment_proba` 打分，返回一张表，每条帖子一行（顺序不变；给的是 pandas Series 时沿用它的索引）：每个用到的类别一列概率，列名形如 `p_bearish`、`p_neutral`、`p_bullish`；再加一列 `call`，是概率最大的那一类（平手归前面那一列，和第 8 章评估时一样）。数一数各类的 `call`，就是看多、中性、看空各占几成。
 
 # %%
 # The scoring function and the ids of the training posts.
@@ -1484,9 +1600,34 @@ brief["sentiment"]["scoring"] = {
     "train_ids": "train_post_ids",
     "n_train_ids": len(train_post_ids),
 }
-demo_texts = ["$TSLA to the moon 🚀🚀", "not bullish at all, selling everything"]
-pd.DataFrame(sentiment_proba(clean_texts(demo_texts)), index=demo_texts,
-             columns=[LABEL_NAMES[label] for label in SENTIMENT_PROBA_LABELS])
+
+
+def score_texts(texts):
+    """Clean and score raw texts: one row per text, a probability column per class in use and the call."""
+    texts = texts if isinstance(texts, pd.Series) else pd.Series(list(texts), dtype=object)
+    probabilities = sentiment_proba(clean_texts(texts))
+    table = pd.DataFrame(probabilities, index=texts.index,
+                         columns=[f"p_{LABEL_NAMES[label]}" for label in SENTIMENT_PROBA_LABELS])
+    table["call"] = [LABEL_NAMES[label] for label in np.asarray(SENTIMENT_PROBA_LABELS)[probabilities.argmax(axis=1)]]
+    return table
+
+
+demo_texts = ["$TSLA to the moon 🚀🚀", "not bullish at all, selling everything", "Earnings call is on Thursday."]
+demo_scores = score_texts(demo_texts)
+probability_columns = [column for column in demo_scores.columns if column.startswith("p_")]
+brief["sentiment"]["scoring"]["score_texts"] = {
+    "function": "score_texts",
+    "input": "raw texts; cleaned with clean_texts first",
+    "columns": list(demo_scores.columns),
+    "demo": {
+        "n_texts": len(demo_texts),
+        "n_rows": int(len(demo_scores)),
+        "rows_sum_to_one": bool(np.allclose(demo_scores[probability_columns].sum(axis=1), 1.0, atol=1e-5)),
+        "call_is_highest": bool((demo_scores["call"]
+                                 == demo_scores[probability_columns].idxmax(axis=1).str.removeprefix("p_")).all()),
+    },
+}
+demo_scores.set_index(pd.Index(demo_texts, name="text"))
 
 # %% [markdown]
 # ## 8. Evaluation on the test set
@@ -1963,7 +2104,7 @@ BRIEF_SCHEMA_TEXT = r"""{
         "vectorizers": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf"],
+          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf", "word2vec"],
           "properties": {
             "vocab_size_requested": {"$ref": "#/$defs/positive"},
             "fitted_on": {"type": "string"},
@@ -1981,6 +2122,23 @@ BRIEF_SCHEMA_TEXT = r"""{
               "additionalProperties": false,
               "required": ["vocab_size"],
               "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            },
+            "word2vec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["algorithm", "vector_size", "window", "min_count", "epochs", "vocab_size", "fitted_on_n_posts",
+                           "unknown_words", "n_posts_all_zero"],
+              "properties": {
+                "algorithm": {"type": "string"},
+                "vector_size": {"$ref": "#/$defs/positive"},
+                "window": {"$ref": "#/$defs/positive"},
+                "min_count": {"$ref": "#/$defs/positive"},
+                "epochs": {"$ref": "#/$defs/positive"},
+                "vocab_size": {"$ref": "#/$defs/count"},
+                "fitted_on_n_posts": {"$ref": "#/$defs/count"},
+                "unknown_words": {"type": "string"},
+                "n_posts_all_zero": {"$ref": "#/$defs/part_counts"}
+              }
             }
           }
         },
@@ -2021,7 +2179,8 @@ BRIEF_SCHEMA_TEXT = r"""{
         "scoring": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["function", "input", "output", "column_labels", "bullish_column", "model", "train_ids", "n_train_ids", "check"],
+          "required": ["function", "input", "output", "column_labels", "bullish_column", "model", "train_ids", "n_train_ids", "check",
+                       "score_texts"],
           "properties": {
             "function": {"type": "string"},
             "input": {"type": "string"},
@@ -2040,6 +2199,27 @@ BRIEF_SCHEMA_TEXT = r"""{
                 "n_columns": {"$ref": "#/$defs/count"},
                 "rows_sum_to_one": {"type": "boolean"},
                 "matches_evaluated_predictions": {"type": "boolean"}
+              }
+            },
+            "score_texts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["function", "input", "columns", "demo"],
+              "properties": {
+                "function": {"type": "string"},
+                "input": {"type": "string"},
+                "columns": {"type": "array", "minItems": 3, "items": {"type": "string"}},
+                "demo": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["n_texts", "n_rows", "rows_sum_to_one", "call_is_highest"],
+                  "properties": {
+                    "n_texts": {"$ref": "#/$defs/count"},
+                    "n_rows": {"$ref": "#/$defs/count"},
+                    "rows_sum_to_one": {"type": "boolean"},
+                    "call_is_highest": {"type": "boolean"}
+                  }
+                }
               }
             }
           }

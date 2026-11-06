@@ -221,7 +221,7 @@
         "vectorizers": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf"],
+          "required": ["vocab_size_requested", "fitted_on", "fitted_on_n_posts", "text", "storage", "count", "tfidf", "word2vec"],
           "properties": {
             "vocab_size_requested": {"$ref": "#/$defs/positive"},
             "fitted_on": {"type": "string"},
@@ -239,6 +239,23 @@
               "additionalProperties": false,
               "required": ["vocab_size"],
               "properties": {"vocab_size": {"$ref": "#/$defs/count"}}
+            },
+            "word2vec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["algorithm", "vector_size", "window", "min_count", "epochs", "vocab_size", "fitted_on_n_posts",
+                           "unknown_words", "n_posts_all_zero"],
+              "properties": {
+                "algorithm": {"type": "string"},
+                "vector_size": {"$ref": "#/$defs/positive"},
+                "window": {"$ref": "#/$defs/positive"},
+                "min_count": {"$ref": "#/$defs/positive"},
+                "epochs": {"$ref": "#/$defs/positive"},
+                "vocab_size": {"$ref": "#/$defs/count"},
+                "fitted_on_n_posts": {"$ref": "#/$defs/count"},
+                "unknown_words": {"type": "string"},
+                "n_posts_all_zero": {"$ref": "#/$defs/part_counts"}
+              }
             }
           }
         },
@@ -279,7 +296,8 @@
         "scoring": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["function", "input", "output", "column_labels", "bullish_column", "model", "train_ids", "n_train_ids", "check"],
+          "required": ["function", "input", "output", "column_labels", "bullish_column", "model", "train_ids", "n_train_ids", "check",
+                       "score_texts"],
           "properties": {
             "function": {"type": "string"},
             "input": {"type": "string"},
@@ -298,6 +316,27 @@
                 "n_columns": {"$ref": "#/$defs/count"},
                 "rows_sum_to_one": {"type": "boolean"},
                 "matches_evaluated_predictions": {"type": "boolean"}
+              }
+            },
+            "score_texts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["function", "input", "columns", "demo"],
+              "properties": {
+                "function": {"type": "string"},
+                "input": {"type": "string"},
+                "columns": {"type": "array", "minItems": 3, "items": {"type": "string"}},
+                "demo": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["n_texts", "n_rows", "rows_sum_to_one", "call_is_highest"],
+                  "properties": {
+                    "n_texts": {"$ref": "#/$defs/count"},
+                    "n_rows": {"$ref": "#/$defs/count"},
+                    "rows_sum_to_one": {"type": "boolean"},
+                    "call_is_highest": {"type": "boolean"}
+                  }
+                }
               }
             }
           }

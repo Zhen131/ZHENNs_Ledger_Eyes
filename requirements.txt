@@ -17,11 +17,15 @@ contractions==0.1.73
 tokenizers==0.22.2
 tensorflow==2.20.0
 keras==3.15.1
+# Chapter 6: the averaged word vectors (Word2Vec, trained in the notebook; nothing is downloaded)
+gensim==4.4.0
 # Chapter 9: checking the brief against its rules
 jsonschema==4.26.0
-# Used by scikit-learn, which installs both; pinned here so a local environment matches, not listed in the install cell
+# Installed with scikit-learn and gensim (gensim also brings smart_open); pinned here so a local environment matches,
+# not listed in the install cell
 scipy==1.18.1
 threadpoolctl==3.7.0
+smart_open==9.0.2
 
 # Used by the checks and the notebook build
 jupytext==1.19.5

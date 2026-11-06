@@ -137,11 +137,11 @@ Chapters 0 to 3: the data source, a first look at every post, the working sample
 
 ### sentiment
 
-Chapters 4 to 8: tokenization (shown only), training, validation and test sets, two one-layer networks, the choice of one model and the evaluation on the test set.
+Chapters 4 to 8: tokenization (shown only), training, validation and test sets, three kinds of vectors with a one-layer network on each, the choice of one model and the evaluation on the test set.
 
 | Field | Type | Required | Null | Meaning |
 | --- | --- | --- | --- | --- |
-| `sentiment` | object | yes | no | Bullish or bearish. |
+| `sentiment` | object | yes | no | Bullish, neutral or bearish. |
 | `sentiment.tokenization` | object | yes | no | Chapter 4's comparison of two tokenizers. Display only: no model uses it. |
 | `sentiment.tokenization.used_by_models` | boolean | yes | no | Always `false`. |
 | `sentiment.tokenization.text` | string | yes | no | Which text was tokenized: the original text of the working sample. |
@@ -192,17 +192,30 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.split.n_has_ticker.train` | integer | yes | no | In the training set. |
 | `sentiment.split.n_has_ticker.validation` | integer | yes | no | In the validation set. |
 | `sentiment.split.n_has_ticker.test` | integer | yes | no | In the test set. |
-| `sentiment.vectorizers` | object | yes | no | Chapter 6's two vectorizers, fitted on the training set only. |
-| `sentiment.vectorizers.vocab_size_requested` | integer | yes | no | Most words each keeps (`VOCAB_SIZE`). |
+| `sentiment.vectorizers` | object | yes | no | Chapter 6's three vectorizers, fitted on the training set only. |
+| `sentiment.vectorizers.vocab_size_requested` | integer | yes | no | Most words the word-count and the TF-IDF vectorizer keep (`VOCAB_SIZE`). |
 | `sentiment.vectorizers.fitted_on` | string | yes | no | `"train"`. |
 | `sentiment.vectorizers.fitted_on_n_posts` | integer | yes | no | Training posts they learned from. |
 | `sentiment.vectorizers.text` | string | yes | no | `"clean_text"`: the cleaned text. |
-| `sentiment.vectorizers.storage` | string | yes | no | How the vectors are stored, `"sparse float32"`. |
+| `sentiment.vectorizers.storage` | string | yes | no | How the vectors are stored: word counts and TF-IDF as sparse float32 matrices, averaged word vectors as a dense float32 table. |
 | `sentiment.vectorizers.count` | object | yes | no | The word-count vectorizer. |
 | `sentiment.vectorizers.count.vocab_size` | integer | yes | no | Words it kept. |
 | `sentiment.vectorizers.tfidf` | object | yes | no | The TF-IDF vectorizer. |
 | `sentiment.vectorizers.tfidf.vocab_size` | integer | yes | no | Words it kept. |
-| `sentiment.models` | array | yes | no | Model names, `["count_network", "tfidf_network"]`; later versions of the notebook may add more. Every `<model>` key below is one of them. |
+| `sentiment.vectorizers.word2vec` | object | yes | no | The averaged word vectors: a Word2Vec model trained on the cleaned texts of the training set (nothing downloaded), and a post's vector is the mean of its words' vectors. |
+| `sentiment.vectorizers.word2vec.algorithm` | string | yes | no | How the word vectors were made, in words. |
+| `sentiment.vectorizers.word2vec.vector_size` | integer | yes | no | Numbers in every vector (`WORD2VEC_DIM`). |
+| `sentiment.vectorizers.word2vec.window` | integer | yes | no | Words on each side that count as a word's neighbours (`WORD2VEC_WINDOW`). |
+| `sentiment.vectorizers.word2vec.min_count` | integer | yes | no | Uses in the training set a word needs to get a vector (`WORD2VEC_MIN_COUNT`). |
+| `sentiment.vectorizers.word2vec.epochs` | integer | yes | no | Passes of Word2Vec over the training texts (`WORD2VEC_EPOCHS`). |
+| `sentiment.vectorizers.word2vec.vocab_size` | integer | yes | no | Words that got a vector. |
+| `sentiment.vectorizers.word2vec.fitted_on_n_posts` | integer | yes | no | Training posts it learned from; equal to the training set. |
+| `sentiment.vectorizers.word2vec.unknown_words` | string | yes | no | What happens to a word without a vector: it is skipped when averaging. |
+| `sentiment.vectorizers.word2vec.n_posts_all_zero` | object | yes | no | Posts with no word that has a vector (their vector is all zeros), in each part. |
+| `sentiment.vectorizers.word2vec.n_posts_all_zero.train` | integer | yes | no | In the training set. |
+| `sentiment.vectorizers.word2vec.n_posts_all_zero.validation` | integer | yes | no | In the validation set. |
+| `sentiment.vectorizers.word2vec.n_posts_all_zero.test` | integer | yes | no | In the test set. |
+| `sentiment.models` | array | yes | no | Model names, `["count_network", "tfidf_network", "word2vec_network"]`; later versions of the notebook may add more. Every `<model>` key below is one of them. |
 | `sentiment.models[]` | string | — | no | A model name. |
 | `sentiment.training` | object | yes | no | Chapter 7's training settings and history. |
 | `sentiment.training.epochs` | integer | yes | no | Passes over the training set (`EPOCHS`). |
@@ -221,7 +234,7 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.selection.by` | string | yes | no | The rule: macro-F1 on the validation set. |
 | `sentiment.selection.validation_macro_f1` | object | yes | no | Every model's macro-F1 on the validation set. |
 | `sentiment.selection.validation_macro_f1.<model>` | number | — | yes | The score; `null` when it cannot be computed. |
-| `sentiment.selection.selected` | string | yes | no | The chosen model (a tie goes to `count_network`). |
+| `sentiment.selection.selected` | string | yes | no | The chosen model (a tie goes to the model listed first in `sentiment.models`). |
 | `sentiment.scoring` | object | yes | no | The function later chapters use to score cleaned texts. |
 | `sentiment.scoring.function` | string | yes | no | `"sentiment_proba"`. |
 | `sentiment.scoring.input` | string | yes | no | What it takes. |
@@ -237,6 +250,16 @@ Chapters 4 to 8: tokenization (shown only), training, validation and test sets, 
 | `sentiment.scoring.check.n_columns` | integer | yes | no | Columns returned. |
 | `sentiment.scoring.check.rows_sum_to_one` | boolean | yes | no | Whether every row adds up to 1. |
 | `sentiment.scoring.check.matches_evaluated_predictions` | boolean | yes | no | Whether it gives exactly the labels evaluated for the chosen model. |
+| `sentiment.scoring.score_texts` | object | yes | no | `score_texts(texts)`: raw texts in, cleaned and scored; a table with one row per text, a probability column per class in use and the call. |
+| `sentiment.scoring.score_texts.function` | string | yes | no | `"score_texts"`. |
+| `sentiment.scoring.score_texts.input` | string | yes | no | What it takes. |
+| `sentiment.scoring.score_texts.columns` | array | yes | no | The columns of its table, for example `["p_bearish", "p_neutral", "p_bullish", "call"]`. |
+| `sentiment.scoring.score_texts.columns[]` | string | — | no | A column name. |
+| `sentiment.scoring.score_texts.demo` | object | yes | no | Self-check on the hand-written example sentences of chapter 7. |
+| `sentiment.scoring.score_texts.demo.n_texts` | integer | yes | no | Sentences scored. |
+| `sentiment.scoring.score_texts.demo.n_rows` | integer | yes | no | Rows returned; equal to `n_texts`. |
+| `sentiment.scoring.score_texts.demo.rows_sum_to_one` | boolean | yes | no | Whether the probabilities of every row add up to 1. |
+| `sentiment.scoring.score_texts.demo.call_is_highest` | boolean | yes | no | Whether every call is the class of the highest probability. |
 | `sentiment.test_texts_also_in_train` | object | yes | no | Test posts whose text also occurs in the training set (counted only). |
 | `sentiment.test_texts_also_in_train.same_text` | integer | yes | no | Same original text. |
 | `sentiment.test_texts_also_in_train.same_clean_text` | integer | yes | no | Same cleaned text. |
