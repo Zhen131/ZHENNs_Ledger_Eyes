@@ -148,9 +148,10 @@ SCHEMA_FILE = REPO_DIR / "docs" / "brief.schema.json"  # the format rules; the n
 FORMAT_DOC = REPO_DIR / "docs" / "brief-format.md"  # the field-by-field documentation of the format
 DOC_TABLE_HEADER = "| Field | Type | Required | Null | Meaning |"  # header of every field table in FORMAT_DOC
 # The chapters, in order; the last one checks and saves the brief and must not use the network.
-CHAPTER_COUNT = 11  # chapters 0 to 10
-BRIEF_CHAPTER = 10
-LEVEL_CHAPTERS = {9: "Levels: what does a post pay attention to?"}  # chapter -> title; they import no Gradio
+CHAPTER_COUNT = 12  # chapters 0 to 11
+BRIEF_CHAPTER = 11
+LEVEL_CHAPTERS = {9: "Levels: what does a post pay attention to?",
+                  10: "Reading the crowd: two dashboards"}  # chapter -> title; they import no Gradio
 BRIEF_CHAPTER_TITLE = "The brief: check and save"
 BRIEF_CHAPTER_IMPORTS = {"json", "math", "pathlib", "datetime", "numpy", "pandas", "jsonschema"}  # all it may import
 
@@ -3209,6 +3210,145 @@ def check_levels_review_function(report):
                  f"{complete['agreement']}, weighted {complete['weighted_agreement']}; none {nothing['n_reviewed']}")
 
 
+# The names chapters 9 and 10 offer to later work (the interface for the replay and the paste box), with their locked
+# parameters; LEVEL_LABELS, LEVEL_DISPLAY_NAMES, LEVEL_CLASSES, LEVEL_GROUPS and the functions are locked by name.
+LEVEL_INTERFACE_NAMES = ["LEVEL_LABELS", "LEVEL_DISPLAY_NAMES", "LEVEL_CLASSES", "LEVEL_GROUPS", "level_proba",
+                         "level_texts", "crowd_from_calls", "read_the_crowd", "draw_the_crowd", "score_texts",
+                         "df_all_is_sample", "level_train_df", "level_val_df", "level_test_df", "level_vectorizers",
+                         "level_models", "selected_level_model_name", "selected_level_model", "selected_level_vectorizer",
+                         "level_review_agreement"]
+LEVEL_INTERFACE_PARAMETERS = {
+    "level_proba": [("cleaned_texts", None)],
+    "level_texts": [("texts", None)],
+    "crowd_from_calls": [("sentiment_calls", None), ("level_calls", None), ("sentiment_classes", "None")],
+    "read_the_crowd": [("texts", None)],
+    "draw_the_crowd": [("result", None)],
+    "level_review_agreement": [("table", None), ("label_column", None), ("weights", None)],
+}
+CROWD_KEYS = ["n_posts", "calls", "sentiment_shares", "level_shares", "n_none", "cross_counts", "summary"]
+CROWD_LINE = re.compile(r"read_the_crowd check: (\d+) posts, (shares add up to 1|sentiment shares add up to 1, level "
+                        r"shares: none \(all posts judged none\)), cross table (\d+) x (\d+)")
+
+
+def check_levels_interface_names(report):
+    """Chapters 9 and 10 define the names of their interface, with the locked parameters and values."""
+    defined = top_level_names()
+    missing = [name for name in LEVEL_INTERFACE_NAMES if name not in defined]
+    wrong = []
+    for name, expected in LEVEL_INTERFACE_PARAMETERS.items():
+        source = cell_defining(name) or ""
+        function = next((node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                         and node.name == name), None) if source else None
+        if function is None:
+            wrong.append(f"{name}: not found")
+            continue
+        arguments = function.args.args
+        written = [None] * (len(arguments) - len(function.args.defaults)) + [ast.unparse(value)
+                                                                             for value in function.args.defaults]
+        if list(zip([argument.arg for argument in arguments], written)) != expected:
+            wrong.append(f"{name}: {list(zip([argument.arg for argument in arguments], written))}")
+    namespace = {"__name__": "notebook_cells"}
+    problems = run_cells(["LEVEL_CLASSES", "LEVEL_GROUPS"], namespace)
+    values_ok = (namespace.get("LEVEL_LABELS") == LEVEL_SIX and namespace.get("LEVEL_CLASSES") == LEVEL_LABELS
+                 and isinstance(namespace.get("LEVEL_DISPLAY_NAMES"), dict)
+                 and list(namespace["LEVEL_DISPLAY_NAMES"]) == LEVEL_SIX
+                 and all(isinstance(value, str) and value for value in namespace["LEVEL_DISPLAY_NAMES"].values()))
+    report.check(not missing and not wrong and not problems and values_ok,
+                 f"chapters 9 and 10: all {len(LEVEL_INTERFACE_NAMES)} names of their interface are defined, the "
+                 "functions take their locked parameters, the notebook's LEVEL_LABELS is the six levels (the check's "
+                 "LEVEL_SIX), LEVEL_CLASSES adds none last, and LEVEL_DISPLAY_NAMES names every level",
+                 f"missing {missing}; {'; '.join(wrong + problems)}; LEVEL_LABELS {namespace.get('LEVEL_LABELS')}, "
+                 f"LEVEL_CLASSES {namespace.get('LEVEL_CLASSES')}")
+
+
+def check_crowd_function(report):
+    """crowd_from_calls (a cell of definitions only), run from the source on hand-written calls."""
+    import pandas as pd
+    source = cell_defining("crowd_from_calls") or ""
+    tree = ast.parse(source) if source else None
+    only_definitions = bool(tree) and all(isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+                                          for node in tree.body)
+    namespace = {"__name__": "notebook_cells", "pd": pd, "LABEL_NAMES": {0: "bearish", 1: "neutral", 2: "bullish"},
+                 "CLASS_LABELS": [0, 1, 2]}
+    problems = run_cells(["LEVEL_CLASSES", "crowd_from_calls"], namespace)
+    if not report.check(only_definitions and not problems, "chapter 10: crowd_from_calls sits in a cell of definitions "
+                        "only and runs from the source", "; ".join(problems)):
+        return
+    crowd = namespace["crowd_from_calls"]
+    failures = []
+
+    def expect(case, condition, detail=""):
+        if not condition:
+            failures.append(f"{case} {detail}".strip())
+
+    def shares_add_up(shares):
+        values = list(shares.values())
+        return all(value is None for value in values) or abs(sum(values) - 1) < 1e-9
+
+    # Three classes, a non-default index, none among the calls, a level without calls, a class without calls.
+    sentiment = pd.Series(["bullish", "bullish", "bearish", "bullish", "bearish", "bullish"], index=[10, 11, 12, 20, 21, 30])
+    level = ["price_chart", "none", "earnings", "price_chart", "story_macro", "none"]
+    result = crowd(sentiment, level)
+    expect("keys", list(result) == CROWD_KEYS, list(result))
+    expect("index", list(result["calls"].index) == [10, 11, 12, 20, 21, 30] and list(result["calls"].columns)
+           == ["sentiment", "level"])
+    expect("dashboard 1", result["sentiment_shares"] == {"bearish": 2 / 6, "neutral": 0.0, "bullish": 4 / 6}
+           and shares_add_up(result["sentiment_shares"]), result["sentiment_shares"])
+    expect("dashboard 2", result["n_none"] == 2 and result["level_shares"] == {
+        "assets_dividends": 0.0, "earnings": 0.25, "revenue_business": 0.0, "price_chart": 0.5, "story_macro": 0.25,
+        "emotion_only": 0.0} and shares_add_up(result["level_shares"]), result["level_shares"])
+    cross = result["cross_counts"]
+    expect("cross table", list(cross.index) == ["bearish", "neutral", "bullish"] and list(cross.columns) == LEVEL_SIX
+           and int(cross.to_numpy().sum()) == 4 and int(cross.loc["bullish", "price_chart"]) == 2
+           and int(cross.loc["neutral"].sum()) == 0 and int(cross.loc["bearish", "earnings"]) == 1, cross.to_dict())
+    expect("summary", result["summary"] == "Of 6 posts, 67% bullish, 33% bearish, 0% neutral; most attention on "
+           "price_chart (50% of the 4 posts on the ladder; 2 judged none).", result["summary"])
+    # The highest levels tie: the one closer to cash is named.
+    tie = crowd(["bearish", "bullish"], ["story_macro", "earnings"])
+    expect("tie", "most attention on earnings (50%" in tie["summary"] and list(tie["calls"].index) == [0, 1],
+           tie["summary"])
+    # Two classes in use: two rows, shares still adding up to 1.
+    namespace["CLASS_LABELS"] = [0, 2]
+    two = crowd(["bullish", "bearish", "bullish"], ["emotion_only", "none", "assets_dividends"])
+    namespace["CLASS_LABELS"] = [0, 1, 2]
+    expect("two classes", list(two["sentiment_shares"]) == ["bearish", "bullish"] and two["cross_counts"].shape == (2, 6)
+           and shares_add_up(two["sentiment_shares"]) and shares_add_up(two["level_shares"]), two["sentiment_shares"])
+    given = crowd(["bullish"], ["earnings"], ["bearish", "bullish"])
+    expect("classes given", list(given["sentiment_shares"]) == ["bearish", "bullish"], given["sentiment_shares"])
+    # Every post called none, and no post at all: every key there, the shares that cannot be computed None.
+    all_none = crowd(["bullish", "neutral"], ["none", "none"])
+    expect("all none", list(all_none) == CROWD_KEYS and all(value is None for value in all_none["level_shares"].values())
+           and list(all_none["level_shares"]) == LEVEL_SIX and all_none["n_none"] == 2
+           and int(all_none["cross_counts"].to_numpy().sum()) == 0 and shares_add_up(all_none["sentiment_shares"])
+           and "all 2 judged none" in all_none["summary"], all_none["summary"])
+    empty = crowd([], [])
+    expect("no post", list(empty) == CROWD_KEYS and empty["n_posts"] == 0 and empty["n_none"] == 0
+           and list(empty["sentiment_shares"]) == ["bearish", "neutral", "bullish"]
+           and all(value is None for value in empty["sentiment_shares"].values())
+           and all(value is None for value in empty["level_shares"].values())
+           and empty["cross_counts"].shape == (3, 6) and int(empty["cross_counts"].to_numpy().sum()) == 0
+           and len(empty["calls"]) == 0, empty["summary"])
+    report.check(not failures, "chapter 10: crowd_from_calls on hand-written calls (three classes with a non-default "
+                 "index and a class without calls, two classes, classes given, a tie for the top level, every post "
+                 "called none, no post) returns exactly the seven keys; dashboard 1 counts every post, dashboard 2 and "
+                 "the cross table leave out the posts called none, each adding up to 1 (or None when nothing can be "
+                 "counted); a class in use without calls keeps its row with 0; the sentence agrees with the shares",
+                 "; ".join(failures[:4]))
+
+
+def check_crowd_output(report, label, executed, switches):
+    """The executed notebook printed chapter 10's check of read_the_crowd: shares adding up, the cross table's shape."""
+    lines = [line for line in executed_lines(executed) if line.startswith("read_the_crowd check: ")]
+    match = CROWD_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    report.check(match is not None and int(match.group(1)) > 0 and int(match.group(3)) == switches["N_CLASSES"]
+                 and int(match.group(4)) == 6,
+                 f"{label}: chapter 10's demonstration of read_the_crowd printed its check: shares adding up to 1 (or "
+                 f"none on the ladder), a cross table of {switches['N_CLASSES']} x 6", " | ".join(lines) or "no line")
+    for line in executed_lines(executed):
+        if line.startswith("[crowd] "):
+            report.info(line)
+
+
 LEVEL_TEXTS_LINE = "level_texts check: "  # the line chapter 9 prints after checking level_texts
 
 
@@ -3319,6 +3459,7 @@ def quick(report, defaults, others, overrides, rules=None):
             check_sentiment(report, label, brief, switches, full_run=False)
             check_levels_brief(report, label, brief, switches, full_run=False)
             check_levels_texts_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
+            check_crowd_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb", switches)
         if brief is not None:
             check_format(report, label, brief, rules)
             check_panel_output(report, label, REPO_DIR / switches["WORK_DIR"] / "executed.ipynb")
@@ -3354,6 +3495,7 @@ def full(report, defaults, overrides, rules=None):
     check_sentiment(report, "full run", brief, switches, full_run=True)
     check_levels_brief(report, "full run", brief, switches, full_run=True)
     check_levels_texts_output(report, "full run", executed)
+    check_crowd_output(report, "full run", executed, switches)
     format_started = time.perf_counter()
     check_format(report, "full run", brief, rules)
     format_seconds = time.perf_counter() - format_started
@@ -3423,6 +3565,8 @@ def main():
     check_levels_reading(report)
     check_levels_groups_cell(report)
     check_levels_review_function(report)
+    check_levels_interface_names(report)
+    check_crowd_function(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:
