@@ -3387,6 +3387,93 @@ def check_levels_texts_output(report, label, executed):
 
 
 
+# ---------------------------------------------------------------- the replay file (samples/replay-tweets.parquet)
+
+REPLAY_FILE = "samples/replay-tweets.parquet"  # relative to the repository, as the notebook sees it
+REPLAY_COPY = "data/raw/stephan-financial-tweets-ad27fe2d.parquet"  # the local copy (scripts/make_replay_sample.sh)
+REPLAY_DATASET = "StephanAkkerman/financial-tweets"
+REPLAY_REVISION = "ad27fe2d13415186a552a332cbff917530c69a29"
+REPLAY_COLUMNS = ["post_id", "created_at", "tickers", "text", "likes", "views"]  # exactly these, in order
+REPLAY_TICKERS = ["NVDA", "IBM", "SPY"]  # the notebook's REPLAY_TICKERS must equal this list
+REPLAY_WINDOW_DAYS = 365
+# The check's own copy of the two masking rules, character for character as in scripts/make_replay_sample.py (not
+# imported from it): every link becomes "http", then every account name "@user".
+REPLAY_LINK = re.compile(r"(?:https?://|www\.)\S+", flags=re.IGNORECASE)
+REPLAY_HANDLE = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9_]+")
+REPLAY_ENDS = re.compile(r"The window runs from \*\*([0-9T:-]+Z)\*\* to \*\*([0-9T:-]+Z)\*\*")  # in README.md
+
+
+def replay_mask(text):
+    return REPLAY_HANDLE.sub("@user", REPLAY_LINK.sub("http", text))
+
+
+def replay_post_id(text):
+    """stephan: and the first 8 hexadecimal digits of the SHA-256 of the text (UTF-8)."""
+    return "stephan:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def replay_window():
+    """The two ends of the replay window written in README.md, as UTC timestamps (None when not found)."""
+    import pandas as pd
+    found = REPLAY_ENDS.search((REPO_DIR / "README.md").read_text(encoding="utf-8"))
+    if not found:
+        return None
+    return pd.Timestamp(found.group(1)), pd.Timestamp(found.group(2))
+
+
+def check_replay_file(report):
+    """The replay file (static): its columns and types, the ids recomputed from the texts, the masking, the range."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    path = REPO_DIR / REPLAY_FILE
+    if not report.check(path.is_file(), f"{REPLAY_FILE} exists"):
+        return
+    schema = pq.ParquetFile(path).schema_arrow
+    types = {name: str(schema.field(name).type) for name in schema.names}
+    expected_types = {"post_id": "string", "created_at": "timestamp[us, tz=UTC]", "tickers": "list<element: string>",
+                      "text": "string", "likes": "int64", "views": "int64"}
+    table = pd.read_parquet(path)
+    likes_ok = all(table[column].dropna().ge(0).all() and (table[column].dropna() % 1 == 0).all()
+                   for column in ("likes", "views"))
+    report.check(schema.names == REPLAY_COLUMNS and types == expected_types and "tweet_id" not in schema.names
+                 and likes_ok,
+                 f"{REPLAY_FILE}: columns exactly {REPLAY_COLUMNS} with their types (UTC times, a list of tickers, "
+                 "whole likes and views of 0 or more that may be missing), no tweet_id", f"{types}")
+    if schema.names != REPLAY_COLUMNS:
+        return
+    texts = table["text"]
+    recomputed = texts.map(replay_post_id)
+    differ = int((recomputed != table["post_id"]).sum())
+    empty = int((texts.fillna("").str.strip() == "").sum())
+    times = table["created_at"]
+    report.check(table["post_id"].is_unique and differ == 0 and empty == 0 and texts.is_unique
+                 and times.is_monotonic_increasing and texts.notna().all(),
+                 f"{REPLAY_FILE}: post_id unique and equal to stephan: plus the first 8 hex digits of the SHA-256 of "
+                 "the row's text; no empty text, no two texts alike; rows in the order of created_at",
+                 f"{len(table)} rows, {differ} ids differ from the text, {empty} empty, "
+                 f"{len(texts) - texts.nunique()} repeated texts, ordered {times.is_monotonic_increasing}")
+    handles = [handle for text in texts for handle in REPLAY_HANDLE.findall(text) if handle != "@user"]
+    links = int(texts.str.contains(r"https?://|www\.", case=False, regex=True).sum())
+    changed = int((texts.map(replay_mask) != texts).sum())
+    report.check(not handles and links == 0 and changed == 0,
+                 f"{REPLAY_FILE}: every account name found by the masking rule is @user, no http://, https:// or "
+                 "www. is left, and masking again changes no text (the check's own copy of the rules)",
+                 f"other account names {handles[:3]}, texts with a link {links}, texts changed by masking again {changed}")
+    names = table["tickers"].map(lambda value: [str(name) for name in value])
+    per_ticker = {ticker: int(names.map(lambda value: ticker in value).sum()) for ticker in REPLAY_TICKERS}
+    without = int((~names.map(lambda value: any(ticker in value for ticker in REPLAY_TICKERS))).sum())
+    window = replay_window()
+    inside = window is not None and bool(((times >= window[0]) & (times <= window[1])).all())
+    span_ok = window is not None and (window[1] - window[0]) <= pd.Timedelta(days=366)
+    report.check(without == 0 and min(per_ticker.values()) >= 1 and inside and span_ok,
+                 f"{REPLAY_FILE}: every post names NVDA, IBM or SPY, each of them at least once, and every created_at "
+                 "lies within the two ends written in README.md, at most 366 days apart",
+                 f"posts per ticker {per_ticker}, without one {without}; README window {window}, inside {inside}")
+    report.info(f"replay file: {len(table)} posts, {path.stat().st_size:,} bytes; per ticker {per_ticker}; "
+                f"from {times.min().isoformat()} to {times.max().isoformat()}")
+
+
 # ---------------------------------------------------------------- modes
 
 def parse_overrides(pairs):
@@ -3577,6 +3664,7 @@ def main():
     check_levels_review_function(report)
     check_levels_interface_names(report)
     check_crowd_function(report)
+    check_replay_file(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:

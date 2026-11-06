@@ -19,12 +19,14 @@ Earlier, longer versions of this notebook read another dataset and had more chap
 | `docs/brief-format.md` | The brief's format, field by field: type, whether it is always there, whether it may be `null`, what it means; what each section covers; when the format version changes. |
 | `docs/brief.schema.json` | The same rules as a JSON Schema (draft 2020-12). The last chapter carries an identical copy and checks every brief against it before saving. |
 | `samples/tim-financial-tweets-sample.parquet` | 1,271 posts taken unchanged from the dataset, with their row in the full file; the quick check runs on them (see [The sample](#the-sample)). |
+| `samples/replay-tweets.parquet` | 5,179 dated tweets naming NVDA, IBM or SPY from the last twelve months of StephanAkkerman/financial-tweets, authors removed, account names and links masked; the replay chapter reads it (see [The replay sample](#the-replay-sample)). |
 | `samples/levels-prelabel-sample.csv` | Level pre-labels of the first 40 posts of the processing order: ids, levels, votes, model, prompt version and text fingerprints, no text (see [Level pre-labels](#level-pre-labels)). |
 | `labels/levels-prelabel-v2.csv`, `labels/levels-review-template.csv` | The level pre-labels of 8,000 stock tweets (`gemma3:12b`, five samples, three votes, labelled on a Windows machine on 2 and 3 November 2026) and their 200-row review table (see [Level pre-labels](#level-pre-labels)). |
 | `labels/levels-review-second-model.csv` | The same 200 rows judged by a second, larger language model: ids, pre-labels and review labels, no text; not human gold labels (see [The level review table](#the-level-review-table)). |
 | `scripts/check.sh` | The two checks: `quick` and `full`. |
 | `scripts/build_notebook.sh` | Regenerates the `.ipynb` from the source. |
 | `scripts/download_data.sh`, `scripts/download_data.py` | Downloads the dataset at its pinned revision into `data/raw/tim-financial-tweets-bba60269.parquet` (the same file the level script uses). Never overwrites a file that is already there. |
+| `scripts/make_replay_sample.sh`, `scripts/make_replay_sample.py` | Draws the replay file from the local copy of StephanAkkerman/financial-tweets (downloaded at its pinned revision when missing). |
 | `scripts/make_sample.py` | Draws the sample from the downloaded dataset. |
 | `scripts/prelabel_levels.sh`, `scripts/prelabel_levels.py` | Level pre-labels of stock tweets through the local Ollama server: the draw, labelling with several samples per post (resumable), the review table, the review rows with their texts (into `data/` only), and a check of label files. |
 | `scripts/env.sh` | Shared environment for the scripts (caches under `data/`, no token, no telemetry). |
@@ -239,6 +241,29 @@ Chinese text is allowed only in the notebook's explanation cells, after the `***
 **What it must hold** (checked by the quick check, all lower bounds): at least 200 posts per class after the conversion; at least 80 posts of each of the six levels and at least 80 labelled `none` (so the levels chapter can run in the quick check), and every appended row labelled `none`; at least 100 bearish and 100 bullish posts with a ticker (so the run with `TICKER_ONLY = True` and two classes can split); no empty text, no account name, no link.
 
 **Regenerating it.** Download the dataset (`scripts/download_data.sh`), then run `bash -c 'source scripts/env.sh; .venv/bin/python scripts/make_sample.py'`. It prints the counts per class, per level, with a ticker, with emoji and with a negation, and a fingerprint of the list of rows; the same dataset and the same notebook give the same rows.
+
+## The replay sample
+
+`samples/replay-tweets.parquet` holds 5,179 dated stock tweets that name NVDA, IBM or SPY, from the last twelve months of a second public dataset. The notebook's replay chapter reads it to show, week by week, which levels the crowd talking about one ticker stood on, without any key or account.
+
+**Source and license.** [StephanAkkerman/financial-tweets](https://huggingface.co/datasets/StephanAkkerman/financial-tweets) on Hugging Face, revision `ad27fe2d13415186a552a332cbff917530c69a29`, file `data/train.parquet`, released under the MIT License: tweets of finance accounts collected by a bot, with the time and the tickers they name. The local copy is `data/raw/stephan-financial-tweets-ad27fe2d.parquet` (118,702,051 bytes, SHA-256 `d751c3debd04f7d0a7334957d57ad565a69ed4751826b665da09f2a045b80897`, 667,409 rows).
+
+**How it was drawn.** `scripts/make_replay_sample.py`, in order:
+
+1. Only the posts of the last 365 days of the copy: from its latest `created_at` minus 365 days to its latest `created_at`, both included. The window runs from **2025-10-21T15:28:28Z** to **2026-10-21T15:28:28Z**; the first post kept is from 2025-10-21 17:00 UTC, the last from 2026-10-21 14:34 UTC.
+2. Only the posts whose `tickers` name NVDA (a stock many people talk about), IBM (a stock known for its dividend) or SPY (a fund that follows the whole S&P 500): 5,615 posts. A post that names several of them counts for each one.
+3. The authors are removed: only six columns are kept, `post_id`, `created_at` (UTC), `tickers` (the dataset's list, unchanged, other tickers included), `text`, `likes` and `views` (whole numbers, missing for 301 posts). The dataset's tweet id, author name, screen name, picture, link, media, quoted tweet, image text and its own sentiment label and score are not copied. In the text, every link becomes `http` and then every account name becomes `@user`, with exactly these two rules (Python regular expressions; the quick check holds its own copy of both):
+   - link: `(?:https?://|www\.)\S+`, in any case;
+   - account name: `(?<![A-Za-z0-9_])@[A-Za-z0-9_]+`.
+4. Texts that are empty after stripping are left out (there were none), and one post is kept per text (the text after step 3, compared exactly, case and spaces included): the earliest one, and of two posts at the same second the one with the smaller row in the copy. 436 repeats were left out.
+5. Every ticker is capped at 4,000 posts (`--max-per-ticker`); above the cap, a ticker would be drawn down evenly over time, every week in proportion, with seed 42 (`--seed`). No ticker reached the cap: every post was kept.
+6. `post_id` is `stephan:` and the first 8 hexadecimal digits of the SHA-256 of the written text (UTF-8), so the file can be checked on its own. Rows are in the order of `created_at`.
+
+The file holds 5,179 posts: 2,153 name NVDA, 155 IBM and 3,007 SPY (121 name both NVDA and SPY, 9 IBM and NVDA, 7 IBM and SPY). It is about 1 MB.
+
+**Dates.** The notebook picks the posts from `REPLAY_START` at 00:00 UTC up to the end of `REPLAY_END` (the day itself is included, up to but not including 00:00 of the next day). A week runs from Monday to Sunday (UTC) and is named by its Monday; a month is named by its first day. When the dates do not start on a Monday (or on the 1st), the first and last buckets hold only part of their week (or month) but keep the name of its Monday (or 1st). The data has a gap: from December 2025 to early April 2026 there are almost no posts (none at all in January and March 2026), so the replay starts on 2026-04-06 by default.
+
+**Regenerating it.** `scripts/make_replay_sample.sh` (it downloads the copy at the pinned revision without a token when it is missing, and never overwrites a copy that is there; `--output` writes elsewhere). It prints the copy's size and SHA-256, the posts kept after every step, the posts per ticker and the first and last time; the same copy gives the same ids and texts.
 
 ## Level pre-labels
 
