@@ -470,6 +470,49 @@ Chapter 9: the level label file, the posts it labels, the same number from every
 | `levels.groups.confusion_matrices.<model>.counts[]` | array | — | no | One count per predicted group. |
 | `levels.groups.confusion_matrices.<model>.counts[][]` | integer | — | no | Posts with this true and this predicted group. |
 | `levels.groups.confusion_matrices.<model>.n` | integer | yes | no | All cells added up: the posts of `levels.groups.evaluation.rows[].n` for that model. |
+| `levels.review` | object | yes | no | The two reviews of 200 rows of the label file (the six levels in turn): `human` and `second_model`, always both. |
+| `levels.review.human` | object | yes | no | The human review: the column `human_label` of `labels/levels-review-template.csv`, filled in by a person. While nobody has filled it in, `n_reviewed` is 0 and the shares are `null`. |
+| `levels.review.human.source` | string | yes | no | Where it was read from, as given by the switch `LEVEL_REVIEW_SOURCE`; `""` when it was not read (then no row counts). |
+| `levels.review.human.reviewer` | string | yes | no | One sentence on who gave the review labels. |
+| `levels.review.human.n_reviewed` | integer | yes | no | Rows whose review label (`human_label`, stripped, lower case) is filled in; only these count. |
+| `levels.review.human.agreement` | number | yes | yes | Strict agreement: the share of those rows whose review label equals the pre-label (a review label `none` counts as a disagreement); `null` with no row. |
+| `levels.review.human.weighted_agreement` | number | yes | yes | The agreement of each level weighted by that level's share of the label file's rows with one of the six levels; `null` when a level has no reviewed row. |
+| `levels.review.human.by_prelabel` | object | yes | no | Per pre-label, keyed by the six levels. |
+| `levels.review.human.by_prelabel.<level>` | object | — | no | The rows pre-labelled with that level. |
+| `levels.review.human.by_prelabel.<level>.n` | integer | yes | no | Reviewed rows with that pre-label. |
+| `levels.review.human.by_prelabel.<level>.agreement` | number | yes | yes | Their share with the same review label; `null` with no row. |
+| `levels.review.human.by_prelabel.<level>.weight` | number | yes | yes | That level's share of the label file's rows with one of the six levels (the weight of the weighted agreement). |
+| `levels.review.human.confusion` | object | yes | no | Review labels against pre-labels, over the reviewed rows. |
+| `levels.review.human.confusion.row_labels` | array | yes | no | The labels of the rows: always the six levels and `none`. |
+| `levels.review.human.confusion.row_labels[]` | string | — | no | A review label. |
+| `levels.review.human.confusion.column_labels` | array | yes | no | The labels of the columns: always the six levels. |
+| `levels.review.human.confusion.column_labels[]` | string | — | no | A pre-label. |
+| `levels.review.human.confusion.rows` | string | yes | no | `"review label"`. |
+| `levels.review.human.confusion.columns` | string | yes | no | `"pre-label"`. |
+| `levels.review.human.confusion.counts` | array | yes | no | One list per review label. |
+| `levels.review.human.confusion.counts[]` | array | — | no | One count per pre-label. |
+| `levels.review.human.confusion.counts[][]` | integer | — | no | Rows with this review label and this pre-label. |
+| `levels.review.second_model` | object | yes | no | The review by a second, larger language model (`labels/levels-review-second-model.csv`, column `review_label`): not human gold labels. |
+| `levels.review.second_model.source` | string | yes | no | Where it was read from, as given by the switch `LEVEL_SECOND_REVIEW_SOURCE`; `""` when it was not read (then no row counts). |
+| `levels.review.second_model.reviewer` | string | yes | no | One sentence on who gave the review labels. |
+| `levels.review.second_model.n_reviewed` | integer | yes | no | Rows whose review label (`review_label`, stripped, lower case) is filled in; only these count. |
+| `levels.review.second_model.agreement` | number | yes | yes | Strict agreement: the share of those rows whose review label equals the pre-label (a review label `none` counts as a disagreement); `null` with no row. |
+| `levels.review.second_model.weighted_agreement` | number | yes | yes | The agreement of each level weighted by that level's share of the label file's rows with one of the six levels; `null` when a level has no reviewed row. |
+| `levels.review.second_model.by_prelabel` | object | yes | no | Per pre-label, keyed by the six levels. |
+| `levels.review.second_model.by_prelabel.<level>` | object | — | no | The rows pre-labelled with that level. |
+| `levels.review.second_model.by_prelabel.<level>.n` | integer | yes | no | Reviewed rows with that pre-label. |
+| `levels.review.second_model.by_prelabel.<level>.agreement` | number | yes | yes | Their share with the same review label; `null` with no row. |
+| `levels.review.second_model.by_prelabel.<level>.weight` | number | yes | yes | That level's share of the label file's rows with one of the six levels (the weight of the weighted agreement). |
+| `levels.review.second_model.confusion` | object | yes | no | Review labels against pre-labels, over the reviewed rows. |
+| `levels.review.second_model.confusion.row_labels` | array | yes | no | The labels of the rows: always the six levels and `none`. |
+| `levels.review.second_model.confusion.row_labels[]` | string | — | no | A review label. |
+| `levels.review.second_model.confusion.column_labels` | array | yes | no | The labels of the columns: always the six levels. |
+| `levels.review.second_model.confusion.column_labels[]` | string | — | no | A pre-label. |
+| `levels.review.second_model.confusion.rows` | string | yes | no | `"review label"`. |
+| `levels.review.second_model.confusion.columns` | string | yes | no | `"pre-label"`. |
+| `levels.review.second_model.confusion.counts` | array | yes | no | One list per review label. |
+| `levels.review.second_model.confusion.counts[]` | array | — | no | One count per pre-label. |
+| `levels.review.second_model.confusion.counts[][]` | integer | — | no | Rows with this review label and this pre-label. |
 
 ## Versions
 

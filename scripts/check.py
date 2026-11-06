@@ -1154,6 +1154,8 @@ BROKEN_BRIEFS = [
     ("5 NaN or infinity", ("dataset", "n_posts"), lambda old: NAN, "dataset.n_posts", "nan"),
     ("5 NaN or infinity", ("sentiment", "evaluation", "rows", 0, "accuracy"), lambda old: -INFINITY,
      "sentiment.evaluation.rows[0].accuracy", "-inf"),
+    ("5 NaN or infinity", ("levels", "review", "second_model", "agreement"), lambda old: NAN,
+     "levels.review.second_model.agreement", "nan"),
     ("6 null not allowed, or an unknown field", ("dataset", "n_posts"), lambda old: None, "dataset.n_posts", "None"),
     ("6 null not allowed, or an unknown field", ("sentiment", "extra_field"), lambda old: 1, "sentiment", "extra_field"),
     ("6 null not allowed, or an unknown field", ("scope", "extra_field"), lambda old: 1, "scope", "extra_field"),
@@ -2915,6 +2917,7 @@ def check_levels_brief(report, label, brief, switches, full_run):
                  f"{label}: chapter 9's training, validation and test sets add up to the drawn posts, with every one of "
                  "the seven classes in every part", f"{sizes} {class_counts}")
     check_levels_models(report, label, levels_section, switches, sizes, full_run)
+    check_levels_review_section(report, label, levels_section, switches)
 
 
 LEVEL_GROUP_OF = {"assets_dividends": "numbers", "earnings": "numbers", "revenue_business": "numbers",
@@ -3080,6 +3083,132 @@ def check_levels_groups_cell(report):
                  f"{'; '.join(problems)} mapping {mapping}; order {order}; {example} -> {folded}")
 
 
+def own_review_agreement(rows, column, weights):
+    """The documented review agreement, written here apart from the notebook. rows: dicts with prelabel and column."""
+    filled = [(row["prelabel"].strip(), row[column].strip().lower()) for row in rows if row[column].strip()]
+    by_prelabel = {}
+    for level in LEVEL_SIX:
+        pairs = [pair for pair in filled if pair[0] == level]
+        by_prelabel[level] = {"n": len(pairs), "agreement": (sum(a == b for a, b in pairs) / len(pairs)) if pairs else None,
+                              "weight": weights.get(level)}
+    complete = all(part["agreement"] is not None and part["weight"] is not None for part in by_prelabel.values())
+    return {
+        "n_reviewed": len(filled),
+        "agreement": (sum(a == b for a, b in filled) / len(filled)) if filled else None,
+        "weighted_agreement": sum(part["agreement"] * part["weight"] for part in by_prelabel.values()) if complete else None,
+        "by_prelabel": by_prelabel,
+        "confusion": {"row_labels": LEVEL_LABELS, "column_labels": LEVEL_SIX, "rows": "review label",
+                      "columns": "pre-label",
+                      "counts": [[sum(pair == (column_label, row_label) for pair in filled) for column_label in LEVEL_SIX]
+                                 for row_label in LEVEL_LABELS]},
+    }
+
+
+def close(left, right):
+    """Equal, with numbers compared to 1e-9 (inside dicts and lists too)."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return sorted(left) == sorted(right) and all(close(left[key], right[key]) for key in left)
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(close(a, b) for a, b in zip(left, right))
+    if isinstance(left, float) or isinstance(right, float):
+        return isinstance(left, (int, float)) and isinstance(right, (int, float)) and abs(left - right) <= 1e-9
+    return left == right
+
+
+def check_levels_review_section(report, label, levels_section, switches):
+    """Both reviews in the brief, recomputed here from the files the run read."""
+    review = as_dict(levels_section.get("review"))
+    with (REPO_DIR / switches["LEVEL_LABELS_SOURCE"]).open(encoding="utf-8", newline="") as handle:
+        label_rows = list(csv.DictReader(handle))
+    six = Counter(row["level"] for row in label_rows if row["level"] in LEVEL_SIX)
+    weights = {level: six[level] / sum(six.values()) for level in LEVEL_SIX}
+    problems = []
+    for name, switch, column in (("human", "LEVEL_REVIEW_SOURCE", "human_label"),
+                                 ("second_model", "LEVEL_SECOND_REVIEW_SOURCE", "review_label")):
+        part = as_dict(review.get(name))
+        source = switches.get(switch) or ""
+        rows = []
+        if source.strip():
+            with (REPO_DIR / source).open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        expected = own_review_agreement(rows, column, weights)
+        found = {key: part.get(key) for key in expected}
+        if not close(found, expected) or part.get("source") != source:
+            differing = [key for key in expected if not close(found[key], expected[key])]
+            problems.append(f"{name}: differs in {differing} (brief {[found[key] for key in differing][:2]}, "
+                            f"files {[expected[key] for key in differing][:2]}); source {part.get('source')!r}")
+    human, second = as_dict(review.get("human")), as_dict(review.get("second_model"))
+    reviewer = str(second.get("reviewer"))
+    names = [meaning for pattern, meaning in FORBIDDEN_PATTERNS if re.search(pattern, reviewer)]
+    report.check(not problems and "second" in reviewer and "language model" in reviewer and not names
+                 and isinstance(human.get("reviewer"), str),
+                 f"{label}: both reviews (counts, strict and weighted agreement, agreement per level, confusion matrix) "
+                 "are those recomputed here from the files the run read; the second review is described as by a "
+                 "second language model, with no name",
+                 "; ".join(problems) + f"; reviewer {reviewer!r} {names}")
+    report.info(f"{label}: review human {human.get('n_reviewed')} rows (agreement {human.get('agreement')}), second "
+                f"model {second.get('n_reviewed')} rows (agreement {second.get('agreement')}, weighted "
+                f"{second.get('weighted_agreement')})")
+
+
+LEVEL_REVIEW_PROBE = [  # (prelabel, review label as written): only filled labels count, stripped and in lower case
+    ("assets_dividends", " Assets_Dividends "), ("assets_dividends", "earnings"), ("earnings", "EARNINGS"),
+    ("earnings", ""), ("revenue_business", "none"), ("price_chart", "price_chart"), ("story_macro", "   "),
+    ("emotion_only", "emotion_only"),
+]
+LEVEL_REVIEW_WEIGHTS = {"assets_dividends": 0.1, "earnings": 0.2, "revenue_business": 0.1, "price_chart": 0.2,
+                        "story_macro": 0.3, "emotion_only": 0.1}
+
+
+def check_levels_review_function(report):
+    """level_review_agreement (a cell of definitions only), run from the source on hand-written tables whose results
+    are worked out by hand here."""
+    import numpy as np
+    import pandas as pd
+    source = cell_defining("level_review_agreement") or ""
+    tree = ast.parse(source) if source else None
+    only_definitions = bool(tree) and all(isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+                                          for node in tree.body)
+    namespace = {"__name__": "notebook_cells", "pd": pd, "np": np}
+    problems = run_cells(["LEVEL_CLASSES", "level_review_agreement"], namespace)
+    if not report.check(only_definitions and not problems, "chapter 9: level_review_agreement sits in a cell of "
+                        "definitions only and runs from the source", "; ".join(problems)):
+        return
+    function = namespace["level_review_agreement"]
+
+    def table(pairs):
+        return pd.DataFrame({"post_id": [f"tim:{index}" for index in range(len(pairs))],
+                             "prelabel": [pair[0] for pair in pairs], "x": [pair[1] for pair in pairs]})
+
+    one_level_empty = function(table(LEVEL_REVIEW_PROBE), "x", LEVEL_REVIEW_WEIGHTS)
+    complete = function(table(LEVEL_REVIEW_PROBE + [("story_macro", "story_macro")]), "x", LEVEL_REVIEW_WEIGHTS)
+    nothing = function(table([]), "x", LEVEL_REVIEW_WEIGHTS)
+    # Worked out by hand: 6 filled rows, 4 agree; story_macro has no filled row, so no weighted agreement.
+    expected_first = {"n_reviewed": 6, "agreement": 4 / 6, "weighted_agreement": None}
+    expected_agreement = {"assets_dividends": 0.5, "earnings": 1.0, "revenue_business": 0.0, "price_chart": 1.0,
+                          "story_macro": None, "emotion_only": 1.0}
+    # With one story_macro row that agrees: 7 rows, 5 agree; weighted .1*.5 + .2*1 + .1*0 + .2*1 + .3*1 + .1*1 = 0.85.
+    expected_counts = [[0] * 6 for _ in range(7)]
+    for row_label, column_label in [("assets_dividends", "assets_dividends"), ("earnings", "assets_dividends"),
+                                    ("earnings", "earnings"), ("none", "revenue_business"), ("price_chart", "price_chart"),
+                                    ("emotion_only", "emotion_only"), ("story_macro", "story_macro")]:
+        expected_counts[LEVEL_LABELS.index(row_label)][LEVEL_SIX.index(column_label)] += 1
+    found_first = {key: one_level_empty.get(key) for key in expected_first}
+    found_agreement = {level: one_level_empty["by_prelabel"][level]["agreement"] for level in LEVEL_SIX}
+    ok = (close(found_first, expected_first) and close(found_agreement, expected_agreement)
+          and [one_level_empty["by_prelabel"][level]["n"] for level in LEVEL_SIX] == [2, 1, 1, 1, 0, 1]
+          and complete["n_reviewed"] == 7 and close(complete["agreement"], 5 / 7)
+          and close(complete["weighted_agreement"], 0.85) and complete["confusion"]["counts"] == expected_counts
+          and complete["confusion"]["row_labels"] == LEVEL_LABELS and complete["confusion"]["column_labels"] == LEVEL_SIX
+          and nothing["n_reviewed"] == 0 and nothing["agreement"] is None and nothing["weighted_agreement"] is None)
+    report.check(ok, "chapter 9: level_review_agreement on hand-written tables (spaces, upper case, empty and blank "
+                 "labels, a level without reviewed rows, a none review label, no row at all) gives the rows, the strict "
+                 "agreement, the agreement per level, the weighted agreement (null when a level has no row) and the "
+                 "confusion matrix worked out by hand",
+                 f"first {found_first}, per level {found_agreement}; complete {complete['n_reviewed']} rows, "
+                 f"{complete['agreement']}, weighted {complete['weighted_agreement']}; none {nothing['n_reviewed']}")
+
+
 LEVEL_TEXTS_LINE = "level_texts check: "  # the line chapter 9 prints after checking level_texts
 
 
@@ -3152,6 +3281,7 @@ def stable_numbers(brief):
         "levels": {key: levels_section.get(key) for key in ("labels_source", "labels_file", "matching", "dropped",
                                                             "classes", "balance")},
         "levels_split": {key: as_dict(levels_section.get("split")).get(key) for key in ("n_posts", "class_counts")},
+        "levels_review": levels_section.get("review"),
     }
 
 
@@ -3292,6 +3422,7 @@ def main():
     check_levels_switches(report, defaults, others)
     check_levels_reading(report)
     check_levels_groups_cell(report)
+    check_levels_review_function(report)
     unknown = [name for name in overrides if name not in defaults]
     report.check(not unknown, "overrides name existing switches", ", ".join(unknown))
     if defaults and not unknown:

@@ -2409,6 +2409,99 @@ print(f"level_texts check: {len(level_demo_texts)} texts, {len(level_demo)} rows
 level_demo.set_index(pd.Index(level_demo_texts, name="text")).round(3)
 
 # %% [markdown]
+# ### How far can the silver labels be trusted? Two reviews
+#
+# The scores above only say how well the networks imitate the language model's labels. **Without a review, nobody knows how often those labels are right.** So 200 rows of the label file were drawn for review, the six levels in turn (about 33 each; the table `labels/levels-review-template.csv`, made by the labelling script), and judged again:
+#
+# - **The human review**: the column `human_label` of that table, for a person to fill in (switch `LEVEL_REVIEW_SOURCE`). It is still empty: this chapter then says so and reports 0 rows.
+# - **The second-model review**: the same 200 rows judged one by one by a second, larger language model (`labels/levels-review-second-model.csv`, column `review_label`; switch `LEVEL_SECOND_REVIEW_SOURCE`). **It is given by a second, larger language model, not human gold labels**; once the human review is filled in, both are reported side by side.
+#
+# For each review, `level_review_agreement(table, label_column, weights)` counts only the rows whose review label is filled in (after stripping spaces and in lower case) and gives: how many rows; the **strict agreement**, the share of those rows whose review label equals the pre-label; the agreement of every level (by pre-label); the **weighted agreement**; and a confusion matrix (rows: the review label, one of the six levels or `none`; columns: the pre-label). The review draws about the same number of rows from every level, but the levels are not equally common, so the weighted agreement weights each level's agreement by that level's share of the rows of the label file that carry one of the six levels; when a level has no reviewed row, the weighted agreement cannot be computed and is `null`. A review label equal to `none` counts as a disagreement: it says the post is not about stocks at all.
+#
+# Both review files are read like the label file (a web address, a local path, or `""` for not read), and every row must be a row of the label file with the same pre-label; otherwise the notebook stops.
+#
+# ***
+#
+# ### 银标签有多可信？两份复核
+#
+# 上面的分数只说明网络模仿语言模型的标签学得像不像。**不复核，就没人知道这些标签有多少是对的。** 所以从标签文件里按六级轮流抽了 200 行（每级约 33 行；表 `labels/levels-review-template.csv`，由标注脚本生成），重新判一遍：
+#
+# - **人工复核**：这张表的 `human_label` 列，留给人来填（开关 `LEVEL_REVIEW_SOURCE`）。现在还是空的：本章会照实说，记 0 行。
+# - **第二个模型的复核**：同样 200 行，由第二个、更大的语言模型逐条判过（`labels/levels-review-second-model.csv`，`review_label` 列；开关 `LEVEL_SECOND_REVIEW_SOURCE`）。**它由第二个、更大的语言模型给出，不是人工金标签**；人工那份填了以后，两份并排报。
+#
+# 对每一份复核，`level_review_agreement(table, label_column, weights)` 只算复核标签填了的行（去掉首尾空格、转小写后不为空），给出：行数；**严格一致率**，即复核标签和预标完全相同的行占多少；每一级（按预标分）的一致率；**加权一致率**；一张混淆矩阵（行是复核标签，六级之一或 `none`；列是预标）。复核表每级抽的行数差不多，可各级在标签文件里并不一样多，所以加权一致率按每一级在标签文件六级行里的占比，给这一级的一致率加权；某一级一行复核都没有时，加权一致率算不出来，记 `null`。复核标签是 `none` 的算不一致：它说这条帖子根本不谈股票。
+#
+# 两份复核文件都照标签文件的读法读（网址、本地路径，或 `""` 表示不读），每一行都必须是标签文件里的行、预标相同，不然就停下。
+
+# %%
+# The agreement of a review with the pre-labels: definitions only.
+def level_review_agreement(table, label_column, weights):
+    """Agreement of the review labels in label_column with the pre-labels (column prelabel) of a review table.
+
+    Only rows whose review label is filled in (stripped, lower case, not empty) count. weights: level -> share of
+    that level among the label file's rows with one of the six levels. Returns n_reviewed, agreement (strict),
+    weighted_agreement (None when a level has no reviewed row), by_prelabel (n, agreement, weight per level) and
+    confusion (rows: review labels LEVEL_CLASSES, columns: pre-labels LEVEL_LABELS). None wherever a share has no rows.
+    """
+    review = table[label_column].fillna("").astype(str).str.strip().str.lower()
+    prelabel = table["prelabel"].fillna("").astype(str).str.strip()
+    filled = review != ""
+    review, prelabel = review[filled], prelabel[filled]
+    same = review == prelabel
+    by_prelabel = {}
+    for level in LEVEL_LABELS:
+        rows = prelabel == level
+        by_prelabel[level] = {"n": int(rows.sum()), "agreement": float(same[rows].mean()) if rows.any() else None,
+                              "weight": weights.get(level)}
+    complete = all(part["agreement"] is not None and part["weight"] is not None for part in by_prelabel.values())
+    counts = [[int(((review == row_label) & (prelabel == column_label)).sum()) for column_label in LEVEL_LABELS]
+              for row_label in LEVEL_CLASSES]
+    return {
+        "n_reviewed": int(filled.sum()),
+        "agreement": float(same.mean()) if len(same) else None,
+        "weighted_agreement": (float(sum(part["agreement"] * part["weight"] for part in by_prelabel.values()))
+                               if complete else None),
+        "by_prelabel": by_prelabel,
+        "confusion": {"row_labels": list(LEVEL_CLASSES), "column_labels": list(LEVEL_LABELS), "rows": "review label",
+                      "columns": "pre-label", "counts": counts},
+    }
+
+# %%
+# Read both reviews, check them against the label file, and record their agreement.
+level_six_counts = level_label_table["level"].value_counts().reindex(LEVEL_LABELS, fill_value=0)
+level_weights = {level: float(count / level_six_counts.sum()) for level, count in level_six_counts.items()}
+level_prelabel_of = level_label_table.set_index("post_id")["level"]
+LEVEL_REVIEWS = {  # name -> (switch, its value, local copy, review label column, who reviewed)
+    "human": ("LEVEL_REVIEW_SOURCE", LEVEL_REVIEW_SOURCE, "labels/levels-review-template.csv", "human_label",
+              "a person, reading every post"),
+    "second_model": ("LEVEL_SECOND_REVIEW_SOURCE", LEVEL_SECOND_REVIEW_SOURCE, "labels/levels-review-second-model.csv",
+                     "review_label", "a second, larger language model, not a person: not human gold labels"),
+}
+brief["levels"]["review"] = {}
+for name, (switch, source, local, column, reviewer) in LEVEL_REVIEWS.items():
+    if source.strip():
+        table, _ = read_level_table(source, switch, local)
+    else:
+        table = pd.DataFrame(columns=["post_id", "prelabel", column])  # not read: no rows
+    absent = [needed for needed in ("post_id", "prelabel", column) if needed not in table.columns]
+    if absent:
+        raise ValueError(f"{switch}: the review table {source!r} has no column(s) {absent}")
+    other = table.loc[table["prelabel"] != table["post_id"].map(level_prelabel_of), "post_id"]
+    if len(other):
+        raise ValueError(f"{switch}: {len(other)} rows of {source!r} are not rows of the label file with the same "
+                         f"pre-label, for example {other.head(3).tolist()}")
+    agreement = level_review_agreement(table, column, level_weights)
+    brief["levels"]["review"][name] = {"source": source, "reviewer": reviewer, **agreement}
+    if agreement["n_reviewed"] == 0:
+        print(f"{name.replace('_', ' ').capitalize()} review: not filled in yet (0 of {len(table)} rows)")
+    else:
+        print(f"{name} review ({reviewer}): {agreement['n_reviewed']} rows, strict agreement "
+              f"{agreement['agreement']:.3f}, weighted agreement "
+              + ("-" if agreement["weighted_agreement"] is None else f"{agreement['weighted_agreement']:.3f}"))
+pd.DataFrame({name: {level: part["by_prelabel"][level]["agreement"] for level in LEVEL_LABELS}
+              for name, part in brief["levels"]["review"].items()}).map(blank_if_nan)
+
+# %% [markdown]
 # ## 10. The brief: check and save
 #
 # Every chapter has written its results into `brief`. This last chapter turns it into the notebook's real output, the file other programs read, in three steps:
@@ -2866,7 +2959,7 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": false,
       "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split",
                    "vectorizers", "models", "training", "selection", "evaluation", "confusion_matrices", "beats_baselines",
-                   "groups"],
+                   "groups", "review"],
       "properties": {
         "silver_labels": {"type": "string"},
         "labels_source": {"type": "string"},
@@ -3142,6 +3235,12 @@ BRIEF_SCHEMA_TEXT = r"""{
               }
             }
           }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["human", "second_model"],
+          "properties": {"human": {"$ref": "#/$defs/level_review"}, "second_model": {"$ref": "#/$defs/level_review"}}
         }
       }
     }
@@ -3194,6 +3293,45 @@ BRIEF_SCHEMA_TEXT = r"""{
       "additionalProperties": {"$ref": "#/$defs/count"}
     },
     "level_group": {"type": "string", "enum": ["numbers", "chart_story", "emotion"]},
+    "level_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "reviewer", "n_reviewed", "agreement", "weighted_agreement", "by_prelabel", "confusion"],
+      "properties": {
+        "source": {"type": "string"},
+        "reviewer": {"type": "string"},
+        "n_reviewed": {"$ref": "#/$defs/count"},
+        "agreement": {"$ref": "#/$defs/share_or_null"},
+        "weighted_agreement": {"$ref": "#/$defs/share_or_null"},
+        "by_prelabel": {
+          "type": "object",
+          "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+          "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["n", "agreement", "weight"],
+            "properties": {
+              "n": {"$ref": "#/$defs/count"},
+              "agreement": {"$ref": "#/$defs/share_or_null"},
+              "weight": {"$ref": "#/$defs/share_or_null"}
+            }
+          }
+        },
+        "confusion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row_labels", "column_labels", "rows", "columns", "counts"],
+          "properties": {
+            "row_labels": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"], "items": {"$ref": "#/$defs/level_class"}},
+            "column_labels": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"], "items": {"$ref": "#/$defs/level"}},
+            "rows": {"type": "string"},
+            "columns": {"type": "string"},
+            "counts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/count"}}}
+          }
+        }
+      }
+    },
     "class_scores": {
       "type": "object",
       "additionalProperties": false,

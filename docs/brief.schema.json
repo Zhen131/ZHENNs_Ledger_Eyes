@@ -418,7 +418,7 @@
       "additionalProperties": false,
       "required": ["silver_labels", "labels_source", "labels_file", "matching", "dropped", "classes", "balance", "split",
                    "vectorizers", "models", "training", "selection", "evaluation", "confusion_matrices", "beats_baselines",
-                   "groups"],
+                   "groups", "review"],
       "properties": {
         "silver_labels": {"type": "string"},
         "labels_source": {"type": "string"},
@@ -694,6 +694,12 @@
               }
             }
           }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["human", "second_model"],
+          "properties": {"human": {"$ref": "#/$defs/level_review"}, "second_model": {"$ref": "#/$defs/level_review"}}
         }
       }
     }
@@ -746,6 +752,45 @@
       "additionalProperties": {"$ref": "#/$defs/count"}
     },
     "level_group": {"type": "string", "enum": ["numbers", "chart_story", "emotion"]},
+    "level_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "reviewer", "n_reviewed", "agreement", "weighted_agreement", "by_prelabel", "confusion"],
+      "properties": {
+        "source": {"type": "string"},
+        "reviewer": {"type": "string"},
+        "n_reviewed": {"$ref": "#/$defs/count"},
+        "agreement": {"$ref": "#/$defs/share_or_null"},
+        "weighted_agreement": {"$ref": "#/$defs/share_or_null"},
+        "by_prelabel": {
+          "type": "object",
+          "propertyNames": {"title": "level", "$ref": "#/$defs/level"},
+          "required": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["n", "agreement", "weight"],
+            "properties": {
+              "n": {"$ref": "#/$defs/count"},
+              "agreement": {"$ref": "#/$defs/share_or_null"},
+              "weight": {"$ref": "#/$defs/share_or_null"}
+            }
+          }
+        },
+        "confusion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row_labels", "column_labels", "rows", "columns", "counts"],
+          "properties": {
+            "row_labels": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only", "none"], "items": {"$ref": "#/$defs/level_class"}},
+            "column_labels": {"type": "array", "const": ["assets_dividends", "earnings", "revenue_business", "price_chart", "story_macro", "emotion_only"], "items": {"$ref": "#/$defs/level"}},
+            "rows": {"type": "string"},
+            "columns": {"type": "string"},
+            "counts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/count"}}}
+          }
+        }
+      }
+    },
     "class_scores": {
       "type": "object",
       "additionalProperties": false,
