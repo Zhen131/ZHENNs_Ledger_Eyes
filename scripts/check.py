@@ -115,6 +115,7 @@ READING_PROBE_DIR = REPO_DIR / "data" / "checks" / "reading-probe"
 SAMPLE_COLUMNS = ["tweet", "sentiment", "row"]
 SAMPLE_MIN_PER_CLASS = 200
 SAMPLE_MIN_PER_LEVEL = 80
+SAMPLE_MIN_NONE = 80  # posts labelled none (the levels chapter learns none as a seventh class)
 SAMPLE_MIN_TICKER_PER_SIDE = 100  # bearish and bullish posts with a ticker: TICKER_ONLY with two classes must split
 SAMPLE_HANDLE = re.compile(r"@[A-Za-z0-9_]")  # an account name
 SAMPLE_LINK = re.compile(r"https?://|www\.", flags=re.IGNORECASE)  # a web link
@@ -1589,9 +1590,16 @@ def check_sample_file(report):
     columns = pq.ParquetFile(path).schema_arrow.names
     sample = pd.read_parquet(path)
     rows = list(sample["row"]) if "row" in sample.columns else []
-    report.check(columns == SAMPLE_COLUMNS and rows == sorted(set(rows)) and bool(rows),
-                 f"{SAMPLE_SOURCE}: columns exactly {SAMPLE_COLUMNS}, rows unique and in order",
-                 f"columns {columns}, {len(rows)} rows, {len(set(rows))} distinct")
+    # The rows drawn first are in order; the posts labelled none that make_sample.py appends follow them, in order
+    # among themselves. So the rows are unique and fall into at most two parts that are each in order.
+    cut = next((index for index in range(1, len(rows)) if rows[index] < rows[index - 1]), len(rows))
+    first_part, appended = rows[:cut], rows[cut:]
+    report.check(columns == SAMPLE_COLUMNS and len(rows) == len(set(rows)) and bool(rows)
+                 and first_part == sorted(first_part) and appended == sorted(appended),
+                 f"{SAMPLE_SOURCE}: columns exactly {SAMPLE_COLUMNS}, rows unique; the rows drawn first in order, and "
+                 "the rows appended after them (posts labelled none) in order",
+                 f"columns {columns}, {len(rows)} rows, {len(set(rows))} distinct; {len(first_part)} rows in the first "
+                 f"part, {len(appended)} appended")
     if columns != SAMPLE_COLUMNS:
         return
     texts = sample["tweet"].fillna("")
@@ -1625,8 +1633,14 @@ def check_sample_file(report):
     report.check(bool(compared) and not differ,
                  f"{SAMPLE_SOURCE}: every post that is also in {LEVEL_FULL_FILE} has that file's text fingerprint",
                  f"{len(compared)} compared, {len(differ)} differ {differ[:3]}")
-    report.info(f"sample: {len(sample)} posts; per class {per_class}; per level {per_level}; "
-                f"with a ticker (bearish, bullish) {with_ticker}")
+    n_none = sum(level_of.get(post_id) == "none" for post_id in ids)
+    appended_levels = sorted({level_of.get(f"tim:{row}") for row in appended}, key=str)
+    report.check(bool(level_rows) and n_none >= SAMPLE_MIN_NONE and appended_levels in ([], ["none"]),
+                 f"{SAMPLE_SOURCE}: at least {SAMPLE_MIN_NONE} posts labelled none in {LEVEL_FULL_FILE}, and every row "
+                 "appended after the first part is labelled none",
+                 f"{n_none} labelled none; {len(appended)} appended, their labels {appended_levels}")
+    report.info(f"sample: {len(sample)} posts; per class {per_class}; per level {per_level}; labelled none {n_none} "
+                f"({len(appended)} appended); with a ticker (bearish, bullish) {with_ticker}")
 
 
 def check_fingerprints_full(report, source):

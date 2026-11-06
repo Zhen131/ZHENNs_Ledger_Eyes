@@ -6,7 +6,8 @@ with three columns: tweet and sentiment exactly as in the dataset (sentiment in
 the dataset's own coding, 0 neutral, 1 bullish, 2 bearish, not converted), and
 row, the post's row in the full file (from 0), so that the notebook gives every
 sampled post the same id, tim:<row>, as in the full file. The column url is
-not copied. Rows are sorted by row.
+not copied. The rows of steps 1 to 4 below are sorted by row; the rows that
+step 5 appends follow them, sorted by row among themselves.
 
 Only posts that can go into a public repository are drawn: posts whose text is
 empty after stripping, or that contain an account name (@ followed by a letter,
@@ -24,7 +25,14 @@ taken, and only as many as are still missing):
   3. until the bearish and the bullish class each have 150 posts with a ticker,
      so the run with TICKER_ONLY = True and two classes can be split;
   4. until 60 posts contain emoji and 60 contain a negation, so chapter 4 has
-     examples of both.
+     examples of both;
+  5. appended after the rows of steps 1 to 4, which stay unchanged and in
+     their order: posts labelled none in labels/levels-prelabel-v2.csv, drawn
+     only among those not yet taken, until the sample holds 80 of them (the
+     same lower bound as each level), so the levels chapter, which learns none
+     as a seventh class with the same number of posts in every class, can split
+     its posts in the quick check. Nothing is appended when 80 are already
+     there.
 Whether a post has a ticker is decided by the notebook's own cell (chapter 1),
 executed from notebook/ledger_eyes.py, never by a second copy of the rule.
 
@@ -57,6 +65,8 @@ PER_CLASS = 400  # posts per class at least (step 2)
 TICKER_PER_SIDE = 150  # bearish and bullish posts with a ticker at least (step 3)
 EMOJI_POSTS = 60  # posts with emoji at least (step 4)
 NEGATION_POSTS = 60  # posts with a negation at least (step 4)
+NONE_LABEL = "none"  # the label of posts that do not talk about stocks or markets (step 5)
+NONE_POSTS = 80  # posts labelled none at least (step 5), the same lower bound as each level
 LABEL_OF_SENTIMENT = {0: 1, 1: 2, 2: 0}  # the dataset's sentiment -> the notebook's label (0 bearish, 1 neutral, 2 bullish)
 
 HANDLE = re.compile(r"@[A-Za-z0-9_]")  # an account name
@@ -112,7 +122,13 @@ def main() -> int:
         have = int(table.loc[sorted(taken), column].sum())
         take(pool.loc[pool[column], "row"], wanted - have)
 
-    sample = table.loc[sorted(taken)]
+    first_rows = sorted(taken)  # steps 1 to 4, in row order
+    have_none = int((table.loc[first_rows, "level"] == NONE_LABEL).sum())
+    take(pool.loc[pool["level"] == NONE_LABEL, "row"], NONE_POSTS - have_none)  # step 5
+    appended = sorted(taken - set(first_rows))  # after the first rows, in row order among themselves
+    if have_none + len(appended) < NONE_POSTS:
+        raise SystemExit(f"only {have_none + len(appended)} posts labelled {NONE_LABEL} can be drawn; {NONE_POSTS} needed")
+    sample = table.loc[first_rows + appended]
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     sample[["tweet", "sentiment", "row"]].to_parquet(TARGET, index=False)
     print(f"Wrote {TARGET.relative_to(REPO_DIR)}: {len(sample)} posts (seed {SEED})")
@@ -120,6 +136,8 @@ def main() -> int:
     print("  per level:", {level: int((sample["level"] == level).sum()) for level in LEVELS})
     print("  with a ticker per class:", sample[sample["has_ticker"]]["label"].value_counts().sort_index().to_dict())
     print(f"  with emoji: {int(sample['has_emoji'].sum())}, with a negation: {int(sample['has_negation'].sum())}")
+    print(f"  labelled {NONE_LABEL}: {int((sample['level'] == NONE_LABEL).sum())} ({have_none} from steps 1 to 4, "
+          f"{len(appended)} appended by step 5)")
     row_list = ",".join(map(str, sample["row"]))
     print(f"  rows {sample['row'].iloc[0]} to {sample['row'].iloc[-1]}; "
           f"SHA-256 of the comma-separated row list: {hashlib.sha256(row_list.encode()).hexdigest()[:16]}")
